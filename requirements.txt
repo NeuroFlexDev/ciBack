@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+# Если планируешь использовать hugging-chat-api:
+hugchat
+requests
+python-multipart
+sqlalchemy

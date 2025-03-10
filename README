@@ -1,1 +1,8 @@
-No way
+# ciBack
+
+Бэкенд для приложения NeuroLearn. 
+
+## Запуск
+
+```bash
+uvicorn main:app --reload
