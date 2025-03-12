@@ -1,4 +1,3 @@
-# app/models/course.py
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import relationship
 from app.database.db import Base
@@ -12,5 +11,5 @@ class Course(Base):
     level = Column(String, nullable=True)
     language = Column(String, nullable=True)
 
-    # Связь c таблицей modules
+    # Связь с модулями
     modules = relationship("Module", back_populates="course", cascade="all, delete-orphan")
