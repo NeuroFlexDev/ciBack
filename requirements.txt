@@ -1,8 +1,10 @@
 fastapi
 uvicorn
-# Если планируешь использовать hugging-chat-api:
 hugchat
 requests
 python-multipart
 sqlalchemy
 psycopg2-binary
+jinja2
+python-docx 
+PyMuPDF

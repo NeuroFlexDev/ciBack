@@ -1,74 +1,123 @@
-# app/routes/modules.py
+import logging
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from typing import List, Optional
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import List
+
 from app.database.db import get_db
 from app.models.module import Module
-from app.models.lesson import Lesson
-from app.models.task import Task
-from app.models.test import Test
 from app.models.course import Course
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-class LessonIn(BaseModel):
-    lesson: str
-    description: str
+# Pydantic-модель для создания модуля
+class ModuleCreate(BaseModel):
+    title: str = Field(..., min_length=1, description="Название модуля")
 
-class TestIn(BaseModel):
-    test: str
-    description: str
+# Pydantic-модель для обновления модуля (опциональные поля)
+class ModuleUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, description="Новое название модуля")
 
-class TaskIn(BaseModel):
-    name: str
-
-class ModuleIn(BaseModel):
+# Pydantic-модель для ответа
+class ModuleResponse(BaseModel):
+    id: int
     title: str
-    lessons: List[LessonIn] = []
-    tests: List[TestIn] = []
-    tasks: List[TaskIn] = []
+    course_id: int
 
-@router.post("/courses/{course_id}/modules/bulk_save")
-def bulk_save_modules(course_id: int, modules: List[ModuleIn], db: Session = Depends(get_db)):
+    class Config:
+        orm_mode = True
+
+@router.post("/courses/{course_id}/modules/", response_model=ModuleResponse, summary="Создание модуля для курса")
+def add_module(course_id: int, module: ModuleCreate, db: Session = Depends(get_db)):
+    """
+    Создает новый модуль для курса с заданным course_id.
+    """
+    # Проверяем, существует ли курс с данным course_id
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
-        raise HTTPException(404, detail="Course not found")
-    
-    # Очищаем старые модули (по желанию) или обновляем существующие
-    # В данном примере - просто удалим все и перезапишем
-    for mod in course.modules:
-        db.delete(mod)
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    new_module = Module(
+        title=module.title,
+        course_id=course_id
+    )
+    db.add(new_module)
     db.commit()
+    db.refresh(new_module)
+    logger.info("Создан модуль: ID=%s для курса ID=%s", new_module.id, course_id)
+    return ModuleResponse(
+        id=new_module.id,
+        title=new_module.title,
+        course_id=new_module.course_id
+    )
 
-    # Создаем новые
-    for m in modules:
-        new_mod = Module(title=m.title, course_id=course.id)
-        db.add(new_mod)
-        db.commit()
-        db.refresh(new_mod)
+@router.get("/courses/{course_id}/modules/", response_model=List[ModuleResponse], summary="Получение модулей курса")
+def get_modules(course_id: int, db: Session = Depends(get_db)):
+    """
+    Возвращает список всех модулей для курса с указанным course_id.
+    """
+    # Проверяем, существует ли курс с данным course_id
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
 
-        # Уроки
-        for l in m.lessons:
-            new_lesson = Lesson(
-                lesson=l.lesson,
-                description=l.description,
-                module_id=new_mod.id
-            )
-            db.add(new_lesson)
-        # Тесты
-        for t in m.tests:
-            new_test = Test(
-                test=t.test,
-                description=t.description,
-                module_id=new_mod.id
-            )
-            db.add(new_test)
-        # Задачи
-        for tsk in m.tasks:
-            new_task = Task(name=tsk.name, module_id=new_mod.id)
-            db.add(new_task)
+    modules = db.query(Module).filter(Module.course_id == course_id).all()
+    return [
+        ModuleResponse(
+            id=mod.id,
+            title=mod.title,
+            course_id=mod.course_id
+        )
+        for mod in modules
+    ]
 
-        db.commit()
+@router.get("/modules/{module_id}", response_model=ModuleResponse, summary="Получение модуля по ID")
+def get_module(module_id: int, db: Session = Depends(get_db)):
+    """
+    Возвращает данные модуля по его ID.
+    """
+    mod = db.query(Module).filter(Module.id == module_id).first()
+    if not mod:
+        raise HTTPException(status_code=404, detail="Module not found")
+    return ModuleResponse(
+        id=mod.id,
+        title=mod.title,
+        course_id=mod.course_id
+    )
 
-    return {"message": "Modules saved successfully"}
+@router.put("/modules/{module_id}", response_model=ModuleResponse, summary="Обновление модуля")
+def update_module(module_id: int, module_update: ModuleUpdate, db: Session = Depends(get_db)):
+    """
+    Обновляет данные модуля по его ID.
+    """
+    mod = db.query(Module).filter(Module.id == module_id).first()
+    if not mod:
+        raise HTTPException(status_code=404, detail="Module not found")
+
+    update_data = module_update.dict(exclude_unset=True)
+    if "title" in update_data:
+        mod.title = update_data["title"]
+
+    db.commit()
+    db.refresh(mod)
+    logger.info("Обновлен модуль: ID=%s", module_id)
+    return ModuleResponse(
+        id=mod.id,
+        title=mod.title,
+        course_id=mod.course_id
+    )
+
+@router.delete("/modules/{module_id}", summary="Удаление модуля")
+def delete_module(module_id: int, db: Session = Depends(get_db)):
+    """
+    Удаляет модуль по его ID.
+    """
+    mod = db.query(Module).filter(Module.id == module_id).first()
+    if not mod:
+        raise HTTPException(status_code=404, detail="Module not found")
+
+    db.delete(mod)
+    db.commit()
+    logger.info("Удален модуль: ID=%s", module_id)
+    return {"message": f"Module with ID {module_id} successfully deleted."}
