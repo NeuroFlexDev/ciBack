@@ -14,6 +14,7 @@ from app.models.test import Test
 from app.models.task import Task
 from app.models.course_structure import CourseStructure
 from app.services.generation_service import generate_from_prompt
+from app.services.embedding_service import embed_and_add
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -28,6 +29,21 @@ class ModuleLessonGenerationRequest(BaseModel):
     module_id: int
     module_title: str
 
+
+def course_kwargs(course: Course, cs: CourseStructure = None):
+    data = {
+        "course_name": course.name,
+        "course_description": course.description,
+        "course_level": course.level,
+    }
+    if cs:
+        data.update({
+            "module_count": cs.sections,
+            "lessons_per_section": cs.lessons_per_section,
+        })
+    return data
+
+
 @router.get("/courses/{course_id}/generate_modules", summary="Генерация и сохранение модулей курса")
 def generate_and_save_modules(course_id: int, cs_id: int = Query(...), db: Session = Depends(get_db)):
     course = db.query(Course).filter(Course.id == course_id).first()
@@ -38,13 +54,7 @@ def generate_and_save_modules(course_id: int, cs_id: int = Query(...), db: Sessi
     if not cs:
         raise HTTPException(404, "❌ Структура курса не найдена")
 
-    modules_data = generate_from_prompt(
-        "module_prompt.j2",
-        course_name=course.name,
-        course_level=course.level,
-        course_description=course.description,
-        module_count=cs.sections
-    )
+    modules_data = generate_from_prompt("module_prompt.j2", **course_kwargs(course, cs))
 
     db.query(Module).filter(Module.course_id == course.id).delete()
 
@@ -76,6 +86,7 @@ def generate_and_save_modules(course_id: int, cs_id: int = Query(...), db: Sessi
         db.rollback()
         raise HTTPException(500, f"❌ Ошибка сохранения модулей: {str(e)}")
 
+
 @router.post("/courses/{course_id}/generate_module_lessons", summary="Генерация уроков модуля с сохранением")
 def generate_and_save_module_lessons(course_id: int, cs_id: int = Query(...), payload: ModuleLessonGenerationRequest = Depends(), db: Session = Depends(get_db)):
     course = db.query(Course).filter(Course.id == course_id).first()
@@ -86,12 +97,7 @@ def generate_and_save_module_lessons(course_id: int, cs_id: int = Query(...), pa
     if not cs:
         raise HTTPException(404, "❌ Структура курса не найдена")
 
-    lessons_data = generate_from_prompt(
-        "module_lessons_prompt.j2",
-        course_name=course.name,
-        module_title=payload.module_title,
-        lessons_per_section=cs.lessons_per_section
-    )
+    lessons_data = generate_from_prompt("module_lessons_prompt.j2", **course_kwargs(course, cs), module_title=payload.module_title)
 
     if "lessons" not in lessons_data:
         raise HTTPException(500, "❌ LLM не вернул ключ 'lessons'")
@@ -109,6 +115,7 @@ def generate_and_save_module_lessons(course_id: int, cs_id: int = Query(...), pa
     db.commit()
     return {"message": "✅ Уроки успешно сгенерированы и сохранены"}
 
+
 @router.post("/courses/{course_id}/generate_lesson_content", summary="Генерация контента урока")
 def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db: Session = Depends(get_db)):
     course = db.query(Course).filter(Course.id == course_id).first()
@@ -121,11 +128,10 @@ def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db:
 
     content_data = generate_from_prompt(
         "lesson_content_prompt.j2",
-        course_name=course.name,
-        course_description=course.description,
+        **course_kwargs(course),
         lesson_title=lesson.title
     )
-    # Сохраняем теорию
+
     existing = db.query(Theory).filter(Theory.lesson_id == lesson.id).first()
     if existing:
         existing.content = content_data.get("theory", "")
@@ -133,11 +139,9 @@ def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db:
         theory = Theory(lesson_id=lesson.id, content=content_data.get("theory", ""))
         db.add(theory)
 
-    # Удалим старые задачи и тесты, если нужно (можно адаптировать под soft-update)
     db.query(Task).filter(Task.module_id == lesson.module_id).delete()
     db.query(Test).filter(Test.module_id == lesson.module_id).delete()
 
-    # Сохраняем задачи
     for task in content_data.get("tasks", []):
         db.add(Task(
             module_id=lesson.module_id,
@@ -145,7 +149,6 @@ def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db:
             description=task.get("description", "")
         ))
 
-    # Сохраняем тесты
     for q in content_data.get("questions", []):
         db.add(Test(
             module_id=lesson.module_id,
@@ -155,6 +158,16 @@ def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db:
         ))
 
     db.commit()
+
+    # ✅ Векторизация всего контента
+    embed_and_add(lesson.id, "lesson", lesson.title)
+    embed_and_add(lesson.id, "theory", content_data.get("theory", ""))
+
+    for task in content_data.get("tasks", []):
+        embed_and_add(lesson.id, "task", task.get("description", ""))
+
+    for q in content_data.get("questions", []):
+        embed_and_add(lesson.id, "test", q.get("question", ""))
 
     return {
         "message": "✅ Контент сгенерирован и сохранён (теория, задачи, тесты)",

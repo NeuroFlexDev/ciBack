@@ -5,6 +5,7 @@ from app.routes import courses, lessons, modules, tasks, tests, upload
 from app.routes import course_generator  # Генерация курса
 from app.routes import course_structure
 from app.routes import theories
+from app.routes import versioning
 
 
 Base.metadata.create_all(bind=engine)
@@ -30,6 +31,7 @@ app.include_router(tests.router, prefix="/api", tags=["Tests"])
 app.include_router(upload.router, prefix="/api", tags=["Files"])
 app.include_router(course_structure.router, prefix="/api", tags=["Course Structure"])
 app.include_router(course_generator.router, prefix="/api", tags=["Course Generation"])
+app.include_router(versioning.router, prefix="/api", tags=["Course Versions"])
 
 
 @app.get("/")

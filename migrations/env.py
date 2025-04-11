@@ -10,6 +10,10 @@ from app.models.task import Task  # Убедись, что импортиров�
 from app.models.test import Test  # Убедись, что импортировал модель
 from app.models.generate_request import GenerateRequest  # Убедись, что импортировал модель
 from app.models.course_structure import CourseStructure  # Убедись, что импортировал модель
+from app.models.feedback import Feedback  # Убедись, что импортировал модель
+from app.models.course_version import CourseVersion  # Убедись, что импортировал модель
+from app.models.lesson_version import LessonVersion  # Убедись, что импортировал модель
+from app.models.module_version import ModuleVersion  # Убедись, что импортировал модель
 
 
 from alembic import context
@@ -66,7 +70,7 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    DATABASE_URL = ""
+    DATABASE_URL = "postgresql://nosignalx2k:Accessors231@localhost:5432/neurolearn"
     connectable = create_engine(DATABASE_URL, echo=True)
 
 

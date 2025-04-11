@@ -22,3 +22,8 @@
     }
   ]
 }
+
+{% if feedback_context %}
+Учитывай следующие отзывы студентов о подобном уроке:
+{{ feedback_context }}
+{% endif %}

@@ -1,0 +1,20 @@
+Ты — эксперт по улучшению учебных курсов.
+
+Курс: {{ course_title }}
+Описание курса: {{ course_description }}
+Урок: {{ lesson_title }}
+
+Задача: {{ goal }}
+
+Исходная теория:
+{{ original_theory }}
+
+{% if external_context %}
+Дополнительный контекст:
+{{ external_context }}
+{% endif %}
+
+Ответь ЧИСТЫМ JSON:
+{
+  "improved_theory": "..."
+}

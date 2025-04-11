@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database.db import Base
 
@@ -13,3 +13,5 @@ class Course(Base):
 
     # Связь с модулями
     modules = relationship("Module", back_populates="course", cascade="all, delete-orphan")
+    current_version_id = Column(Integer, ForeignKey("course_versions.id"), nullable=True)
+    current_version = relationship("CourseVersion", foreign_keys=[current_version_id])
