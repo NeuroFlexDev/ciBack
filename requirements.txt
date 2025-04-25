@@ -10,3 +10,4 @@ python-docx
 PyMuPDF
 faiss-cpu
 feedparser
+sentence-transformers
