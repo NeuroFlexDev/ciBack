@@ -7,4 +7,4 @@ on:
 
 jobs:
   include-from-org:
-    uses: NeuroFlexDev/org-configs/workflows/ci.yml@main
+    uses: NeuroFlexDev/org-configs/.github/workflows/ci.yml@main
