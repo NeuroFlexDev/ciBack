@@ -11,3 +11,6 @@ PyMuPDF
 faiss-cpu
 feedparser
 sentence-transformers
+
+# FOR DEV TEST
+# SO...
