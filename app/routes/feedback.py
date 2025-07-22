@@ -3,17 +3,20 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from app.database.db import get_db
 from app.models.feedback import Feedback
 from app.models.lesson import Lesson
 
 router = APIRouter()
 
+
 class FeedbackInput(BaseModel):
     lesson_id: int
     type: str = "general"
     comment: str = ""
     rating: int = 5
+
 
 @router.post("/feedback/", summary="Оставить отзыв на урок")
 def leave_feedback(payload: FeedbackInput, db: Session = Depends(get_db)):

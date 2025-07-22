@@ -1,0 +1,50 @@
+{# =========================
+   chat_prompt.j2
+   Входные переменные:
+     system_prompt: str          — инструкции для модели
+     history: List[{"role": "user"|"assistant"|"tool", "content": str}]
+     user_input: str             — текущее сообщение пользователя
+     external_context: str       — факты / RAG / веб (опц.)
+     expect_json: bool           — просим ли JSON
+     lang: str                   — язык ответа, например "ru"
+   ========================= #}
+
+{% set sys_block %}
+Ты — полезный ассистент. Отвечай кратко и по делу. Язык ответа: {{ lang|default("ru") }}.
+Если информации недостаточно — уточни вопрос.
+{% endset %}
+
+{% set system_rules = (system_prompt or sys_block).strip() %}
+
+### System
+{{ system_rules }}
+
+{% if external_context %}
+### External context
+{{ external_context }}
+{% endif %}
+
+### Conversation
+{# Выводим историю сообщений. #}
+{% for m in history or [] %}
+{{ "[USER]"    if m.role == "user" else
+   "[ASSISTANT]" if m.role == "assistant" else
+   "[TOOL]" }}: {{ m.content | replace("\n", " ") }}
+{% endfor %}
+
+[USER]: {{ user_input | replace("\n", " ") }}
+
+{% if expect_json %}
+### Instruction
+Верни ответ строго в формате JSON без комментариев и объяснений:
+{
+  "text": "<основной ответ пользователю>",
+  "meta": {
+    "lang": "{{ lang|default('ru') }}",
+    "source": "chat"
+  }
+}
+Никаких лишних символов до или после JSON.
+{% else %}
+[ASSISTANT]:
+{% endif %}

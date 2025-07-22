@@ -1,16 +1,16 @@
-"""add theory table
+"""add owner_id and current_version_id to courses
 
-Revision ID: 3cdc28e805a5
-Revises: 4aa8750105b9
-Create Date: 2025-03-28 17:24:27.259730
+Revision ID: 1b4264d70bcb
+Revises: fb808c2c30c8
+Create Date: 2025-07-22 16:34:27.252541
 
 """
 
 from collections.abc import Sequence
 
 # revision identifiers, used by Alembic.
-revision: str = "3cdc28e805a5"
-down_revision: str | None = "4aa8750105b9"
+revision: str = "1b4264d70bcb"
+down_revision: str | None = "fb808c2c30c8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

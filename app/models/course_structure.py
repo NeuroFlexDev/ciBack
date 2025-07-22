@@ -1,5 +1,7 @@
-from sqlalchemy import Column, Integer, Boolean, String
+from sqlalchemy import Boolean, Column, Integer, String
+
 from app.database.db import Base
+
 
 class CourseStructure(Base):
     __tablename__ = "course_structure"

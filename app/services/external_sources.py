@@ -1,5 +1,6 @@
-import requests
 import feedparser
+import requests
+
 
 # === arXiv ===
 def search_arxiv(query: str, lang: str = "en", limit: int = 5) -> list[str]:
@@ -11,13 +12,11 @@ def search_arxiv(query: str, lang: str = "en", limit: int = 5) -> list[str]:
     except Exception as e:
         raise RuntimeError(f"Ошибка поиска в arXiv: {e}")
 
+
 # === CrossRef ===
 def search_crossref(query: str, lang: str = "en", limit: int = 5) -> list[str]:
     url = "https://api.crossref.org/works"
-    params = {
-        "query": query,
-        "rows": limit
-    }
+    params = {"query": query, "rows": limit}
 
     # if lang:
     #     params["filter"] = f"language:{lang}"
@@ -28,18 +27,17 @@ def search_crossref(query: str, lang: str = "en", limit: int = 5) -> list[str]:
         items = resp.json().get("message", {}).get("items", [])
         return [
             f"{item.get('title', [''])[0]}\n{item.get('abstract', '')}"
-            for item in items if item.get('title')
+            for item in items
+            if item.get("title")
         ]
     except Exception as e:
         raise RuntimeError(f"Ошибка поиска в CrossRef: {e}")
 
+
 # === OpenAlex ===
 def search_openalex(query: str, limit: int = 5) -> list[str]:
     url = "https://api.openalex.org/works"
-    params = {
-        "search": query,
-        "per-page": limit
-    }
+    params = {"search": query, "per-page": limit}
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
@@ -51,12 +49,16 @@ def search_openalex(query: str, limit: int = 5) -> list[str]:
             abstract = ""
             if abstract_dict:
                 # Распаковываем inverted_index
-                tokens = sorted(((pos, word) for word, positions in abstract_dict.items() for pos in positions), key=lambda x: x[0])
+                tokens = sorted(
+                    ((pos, word) for word, positions in abstract_dict.items() for pos in positions),
+                    key=lambda x: x[0],
+                )
                 abstract = " ".join(word for _, word in tokens)
             result.append(f"{title}\n{abstract}")
         return result
     except Exception as e:
         raise RuntimeError(f"Ошибка поиска в OpenAlex: {e}")
+
 
 # === Aggregator ===
 def aggregated_search(query: str, source: str = "all", lang: str = "en") -> list[str]:

@@ -1,16 +1,20 @@
 # app/models/feedback.py
-
-from sqlalchemy import Column, Integer, String, Text, ForeignKey
+from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
+
 from app.database.db import Base
+
 
 class Feedback(Base):
     __tablename__ = "feedback"
 
     id = Column(Integer, primary_key=True, index=True)
     lesson_id = Column(Integer, ForeignKey("lessons.id"), nullable=False)
-    type = Column(String(50), default="general")  # например: theory, task, test
+    type = Column(String(50), default="general")
     comment = Column(Text, nullable=True)
-    rating = Column(Integer, nullable=True)  # от 1 до 5
+    rating = Column(Integer, nullable=True)
+
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    author = relationship("User", back_populates="feedback")
 
     lesson = relationship("Lesson", back_populates="feedback")

@@ -1,12 +1,21 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database.db import Base, engine
-from app.routes import courses, lessons, modules, tasks, tests, upload
-from app.routes import course_generator  # Генерация курса
-from app.routes import course_structure
-from app.routes import theories
-from app.routes import versioning
 
+from app.database.db import Base, engine
+from app.routes import course_generator  # Генерация курса
+from app.routes import (
+    auth,
+    chat,
+    course_structure,
+    courses,
+    lessons,
+    modules,
+    tasks,
+    tests,
+    theories,
+    upload,
+    versioning,
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -32,6 +41,8 @@ app.include_router(upload.router, prefix="/api", tags=["Files"])
 app.include_router(course_structure.router, prefix="/api", tags=["Course Structure"])
 app.include_router(course_generator.router, prefix="/api", tags=["Course Generation"])
 app.include_router(versioning.router, prefix="/api", tags=["Course Versions"])
+app.include_router(auth.router, prefix="/api", tags=["Auth"])
+app.include_router(chat.router, prefix="/api")
 
 
 @app.get("/")

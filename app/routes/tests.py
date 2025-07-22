@@ -1,22 +1,27 @@
 # app/routes/tests.py
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from app.database.db import get_db
-from app.models.test import Test
-from app.models.module import Module
 import json
 
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.database.db import get_db
+from app.models.module import Module
+from app.models.test import Test
+
 router = APIRouter()
+
 
 class TestCreate(BaseModel):
     test: str
     description: str
 
+
 class TestUpdate(BaseModel):
     question: str
     answers: list[str]
     correct: str
+
 
 @router.post("/modules/{module_id}/tests/", summary="Добавить тест к модулю")
 def add_test(module_id: int, payload: TestCreate, db: Session = Depends(get_db)):
@@ -36,12 +41,13 @@ def add_test(module_id: int, payload: TestCreate, db: Session = Depends(get_db))
         module_id=module.id,
         question=payload.test,
         answers=json.dumps(answers),
-        correct_answer=correct
+        correct_answer=correct,
     )
     db.add(new_test)
     db.commit()
     db.refresh(new_test)
     return {"message": "Test added", "test": new_test}
+
 
 @router.get("/modules/{module_id}/tests/", summary="Получить тесты модуля")
 def get_tests(module_id: int, db: Session = Depends(get_db)):
@@ -49,6 +55,7 @@ def get_tests(module_id: int, db: Session = Depends(get_db)):
     if not module:
         raise HTTPException(404, detail="Module not found")
     return module.tests
+
 
 @router.get("/tests/{test_id}", summary="Получить тест по ID")
 def get_test(test_id: int, db: Session = Depends(get_db)):
@@ -59,8 +66,9 @@ def get_test(test_id: int, db: Session = Depends(get_db)):
         "id": test.id,
         "question": test.question,
         "answers": json.loads(test.answers),
-        "correct": test.correct_answer
+        "correct": test.correct_answer,
     }
+
 
 @router.put("/tests/{test_id}", summary="Обновить тест")
 def update_test(test_id: int, payload: TestUpdate, db: Session = Depends(get_db)):
@@ -73,6 +81,7 @@ def update_test(test_id: int, payload: TestUpdate, db: Session = Depends(get_db)
     test.correct_answer = payload.correct
     db.commit()
     return {"message": "Test updated", "test": test}
+
 
 @router.delete("/tests/{test_id}", summary="Удалить тест")
 def delete_test(test_id: int, db: Session = Depends(get_db)):

@@ -1,9 +1,10 @@
 # app/services/graph_service.py
+
 import networkx as nx
-import json
-from app.models.module import Module
-from app.models.lesson import Lesson
 from sqlalchemy.orm import Session
+
+from app.models.module import Module
+
 
 def build_course_graph(course_id: int, db: Session):
     G = nx.Graph()

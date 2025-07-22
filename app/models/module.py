@@ -1,11 +1,10 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
+
 from app.database.db import Base
 
 # Импорты зависимых моделей
-from app.models.lesson import Lesson
-from app.models.test import Test
-from app.models.task import Task
+
 
 class Module(Base):
     __tablename__ = "modules"

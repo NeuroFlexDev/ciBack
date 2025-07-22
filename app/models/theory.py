@@ -1,7 +1,9 @@
 # app/models/theory.py
-from sqlalchemy import Column, Integer, Text, ForeignKey
+from sqlalchemy import Column, ForeignKey, Integer, Text
 from sqlalchemy.orm import relationship
+
 from app.database.db import Base
+
 
 class Theory(Base):
     __tablename__ = "theories"

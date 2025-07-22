@@ -1,7 +1,7 @@
 # app/services/embedding_service.py
-from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -9,16 +9,14 @@ model = SentenceTransformer("all-MiniLM-L6-v2")
 index = faiss.IndexFlatL2(384)
 metadata = []
 
+
 def embed_and_add(lesson_id: int, obj_type: str, text: str):
     if not text.strip():
         return
     embedding = model.encode([text])[0]
     index.add(np.array([embedding], dtype=np.float32))
-    metadata.append({
-        "lesson_id": lesson_id,
-        "type": obj_type,
-        "text": text
-    })
+    metadata.append({"lesson_id": lesson_id, "type": obj_type, "text": text})
+
 
 def search(query: str, k: int = 5):
     query_vec = model.encode([query])[0]

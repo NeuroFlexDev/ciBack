@@ -1,6 +1,8 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
+
 from app.database.db import Base
+
 
 class Lesson(Base):
     __tablename__ = "lessons"
@@ -12,5 +14,7 @@ class Lesson(Base):
 
     # Обратная связь с Module
     module = relationship("Module", back_populates="lessons")
-    theory = relationship("Theory", uselist=False, back_populates="lesson", cascade="all, delete-orphan")
+    theory = relationship(
+        "Theory", uselist=False, back_populates="lesson", cascade="all, delete-orphan"
+    )
     feedback = relationship("Feedback", back_populates="lesson", cascade="all, delete-orphan")

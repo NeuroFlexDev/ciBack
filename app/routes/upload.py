@@ -1,26 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from app.database.db import get_db
-from app.models.course import Course
-from app.models.lesson import Lesson
-from app.models.theory import Theory
-from app.models.test import Test
-from app.models.task import Task
-from app.services.generation_service import generate_from_prompt
 import json
 import os
 import tempfile
+
 import fitz  # PyMuPDF
 from docx import Document
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.database.db import get_db
+from app.models.course import Course
+from app.models.lesson import Lesson
+from app.models.task import Task
+from app.models.test import Test
+from app.models.theory import Theory
+from app.services.generation_service import generate_from_prompt
 
 router = APIRouter()
+
 
 class LessonRequest(BaseModel):
     lesson_id: int
 
+
 @router.post("/courses/{course_id}/generate_lesson_content", summary="Генерация контента урока")
-def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db: Session = Depends(get_db)):
+def generate_and_save_lesson_content(
+    course_id: int, payload: LessonRequest, db: Session = Depends(get_db)
+):
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(404, "❌ Курс не найден")
@@ -33,7 +39,7 @@ def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db:
         "lesson_content_prompt.j2",
         course_name=course.name,
         course_description=course.description,
-        lesson_title=lesson.title
+        lesson_title=lesson.title,
     )
 
     # Сохраняем теорию
@@ -50,32 +56,41 @@ def generate_and_save_lesson_content(course_id: int, payload: LessonRequest, db:
 
     # Сохраняем задачи
     for task in content_data.get("tasks", []):
-        db.add(Task(
-            module_id=lesson.module_id,
-            name=task.get("name", "Задание"),
-            description=task.get("description", "")
-        ))
+        db.add(
+            Task(
+                module_id=lesson.module_id,
+                name=task.get("name", "Задание"),
+                description=task.get("description", ""),
+            )
+        )
 
     # Сохраняем тесты
     for q in content_data.get("questions", []):
-        db.add(Test(
-            module_id=lesson.module_id,
-            question=q.get("question", ""),
-            answers=json.dumps(q.get("answers", [])),
-            correct_answer=q.get("correct", "")
-        ))
+        db.add(
+            Test(
+                module_id=lesson.module_id,
+                question=q.get("question", ""),
+                answers=json.dumps(q.get("answers", [])),
+                correct_answer=q.get("correct", ""),
+            )
+        )
 
     db.commit()
 
     return {
         "message": "✅ Контент сгенерирован и сохранён (теория, задачи, тесты)",
         "questions": content_data.get("questions", []),
-        "tasks": content_data.get("tasks", [])
+        "tasks": content_data.get("tasks", []),
     }
 
 
-@router.post("/courses/{course_id}/upload-description", summary="RAG: загрузка файла и обновление описания курса")
-def upload_and_update_description(course_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+@router.post(
+    "/courses/{course_id}/upload-description",
+    summary="RAG: загрузка файла и обновление описания курса",
+)
+def upload_and_update_description(
+    course_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)
+):
     # Проверка курса
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
@@ -93,9 +108,7 @@ def upload_and_update_description(course_id: int, file: UploadFile = File(...), 
 
         # Суммаризация через LLM
         result = generate_from_prompt(
-            "rag_summary_prompt.j2",
-            course_title=course.name,
-            original_text=extracted
+            "rag_summary_prompt.j2", course_title=course.name, original_text=extracted
         )
 
         summary = result.get("summary")
@@ -108,11 +121,12 @@ def upload_and_update_description(course_id: int, file: UploadFile = File(...), 
 
         return {
             "message": "✅ Описание курса обновлено на основе загруженного документа",
-            "summary": summary
+            "summary": summary,
         }
 
     finally:
         os.remove(temp_path)
+
 
 def extract_text(file_path: str, content_type: str) -> str:
     if content_type == "application/pdf":
@@ -127,7 +141,7 @@ def extract_text(file_path: str, content_type: str) -> str:
         return "\n".join(p.text for p in doc.paragraphs)
 
     elif content_type == "text/plain":
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return f.read()
 
     raise HTTPException(400, detail="❌ Неподдерживаемый тип файла")
