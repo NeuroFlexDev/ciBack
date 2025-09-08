@@ -2,3 +2,6 @@
 
 mlcourse
 cookies
+mlcourse/
+**/__pycache__/
+*.pyc

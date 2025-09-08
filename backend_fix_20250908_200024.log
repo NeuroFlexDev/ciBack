@@ -1,0 +1,32 @@
+==[1/9] Проверка, что мы в корне бэка (main.py/reqs/pyproject) ==
+alembic.ini
+app
+backend_fix_20250908_200024.log
+cert
+cookies
+database.db
+docker-compose.yml
+Dockerfile
+main.py
+Makefile
+migrations
+mlcourse
+__pycache__
+pyproject.toml
+README.md
+requirements.txt
+tests
+==[2/9] .gitignore ==
+==[3/9] .env.example ==
+==[4/9] docker-compose.yml ==
+==[5/9] /api/healthz и подключение роута ==
+health-роут уже подключён
+==[6/9] Дымовые тесты ==
+==[7/9] Makefile ==
+==[8/9] Git подготовка, коммит и пуш ==
+fatal: sha1 file '/home/nosignalx2k/Рабочий стол/work/NeuroFLex/NeuroLearn/NeuroLearn/.git/modules/ciBack/objects/pack/tmp_pack_SN1859' write error. Out of diskspace
+fatal: unable to write loose object file: На устройстве не осталось свободного места
+fatal: unable to write loose object file: На устройстве не осталось свободного места
+Everything up-to-date
+==[9/9] Готово. Лог: backend_fix_20250908_200024.log ==
+]0;nosignalx2k@archcraft:~/Рабочий стол/work/NeuroFLex/NeuroLearn/NeuroLearn/ciBack[?2004h[nosignalx2k@archcraft ciBack]$ echo "==[9/9] Готово. Лог: $LOG =="[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K

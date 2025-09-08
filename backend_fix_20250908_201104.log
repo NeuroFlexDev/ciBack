@@ -1,0 +1,3 @@
+❌ Не нашёл папку бэка (main.py + requirements/pyproject). Я НИЧЕГО НЕ МЕНЯЛ.
+Проверь, что ты в корне. Исключал: mlcource, .venv, venv, env, node_modules, dist, build, .git
+exit

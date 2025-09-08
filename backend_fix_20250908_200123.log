@@ -1,0 +1,20 @@
+==[1/9] Проверка, что мы в корне бэка (main.py/reqs/pyproject) ==
+alembic.ini
+app
+backend_fix_20250908_200024.log
+backend_fix_20250908_200123.log
+cert
+cookies
+database.db
+docker-compose.yml
+Dockerfile
+main.py
+Makefile
+migrations
+mlcourse
+__pycache__
+pyproject.toml
+README.md
+requirements.txt
+tests
+[?2004h> 

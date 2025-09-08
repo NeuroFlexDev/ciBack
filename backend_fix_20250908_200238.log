@@ -1,0 +1,67 @@
+==[1/9] Проверка, что мы в корне бэка (main.py/reqs/pyproject) ==
+alembic.ini
+app
+backend_fix_20250908_200024.log
+backend_fix_20250908_200123.log
+backend_fix_20250908_200127.log
+backend_fix_20250908_200238.log
+cert
+cookies
+database.db
+docker-compose.yml
+Dockerfile
+main.py
+Makefile
+migrations
+mlcourse
+__pycache__
+pyproject.toml
+README.md
+requirements.txt
+tests
+==[2/9] .gitignore ==
+==[3/9] .env.example ==
+==[4/9] docker-compose.yml ==
+==[5/9] /api/healthz и подключение роута ==
+health-роут уже подключён
+==[6/9] Дымовые тесты ==
+==[7/9] Makefile ==
+==[8/9] Git подготовка, коммит и пуш ==
+ruff.....................................................................Passed
+ruff-format..............................................................Failed
+- hook id: ruff-format
+- files were modified by this hook
+
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+1 file reformatted, 1 file left unchanged
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+warning: No Python files found under the given path(s)
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+warning: No Python files found under the given path(s)
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+warning: No Python files found under the given path(s)
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+warning: No Python files found under the given path(s)
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+warning: No Python files found under the given path(s)
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+warning: No Python files found under the given path(s)
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+warning: No Python files found under the given path(s)
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `pyproject.toml`:
+  - 'ignore' -> 'lint.ignore'
+1 file reformatted, 8 files left unchanged
+
+black....................................................................
+
+==[9/9] Готово. Лог: backend_fix_20250908_200238.log ==
+]0;nosignalx2k@archcraft:~/Рабочий стол/work/NeuroFLex/NeuroLearn/NeuroLearn/ciBack[?2004h[nosignalx2k@archcraft ciBack]$ Interrupted (^C): KeyboardInterrupt: 
+Check the log at /home/nosignalx2k/.cache/pre-commit/pre-commit.log
