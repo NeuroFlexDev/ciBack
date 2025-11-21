@@ -1,93 +1,72 @@
 # app/routes/tests.py
 import json
-
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-
 from app.database.db import get_db
-from app.models.module import Module
-from app.models.test import Test
+from app.schemas.test import TestCreate, TestUpdate, TestResponse
+from app.repositories.test import TestRepository
 
 router = APIRouter()
 
-
-class TestCreate(BaseModel):
-    test: str
-    description: str
-
-
-class TestUpdate(BaseModel):
-    question: str
-    answers: list[str]
-    correct: str
-
-
-@router.post("/modules/{module_id}/tests/", summary="Добавить тест к модулю")
+@router.post("/modules/{module_id}/tests/", summary="Добавить тест к модулю", response_model=TestResponse)
 def add_test(module_id: int, payload: TestCreate, db: Session = Depends(get_db)):
-    module = db.query(Module).filter(Module.id == module_id).first()
-    if not module:
-        raise HTTPException(404, detail="Module not found")
+    try:
+        new_test = TestRepository.add_test(db, module_id, payload)
+        return TestResponse(
+            id=new_test.id,
+            question=new_test.question,
+            answers=json.loads(new_test.answers),
+            correct=new_test.correct_answer,
+            module_id=new_test.module_id
+        )
+    except ValueError as e:
+        raise HTTPException(400 if "формат" in str(e) else 404, detail=str(e))
 
-    desc = payload.description
-    if "Варианты:" in desc and "(Правильный:" in desc:
-        parts = desc.split("Варианты:")[1].split("(Правильный:")
-        answers = parts[0].strip().split(", ")
-        correct = parts[1].replace(")", "").strip()
-    else:
-        raise HTTPException(400, detail="Неверный формат описания теста")
-
-    new_test = Test(
-        module_id=module.id,
-        question=payload.test,
-        answers=json.dumps(answers),
-        correct_answer=correct,
-    )
-    db.add(new_test)
-    db.commit()
-    db.refresh(new_test)
-    return {"message": "Test added", "test": new_test}
-
-
-@router.get("/modules/{module_id}/tests/", summary="Получить тесты модуля")
+@router.get("/modules/{module_id}/tests/", summary="Получить тесты модуля", response_model=list[TestResponse])
 def get_tests(module_id: int, db: Session = Depends(get_db)):
-    module = db.query(Module).filter(Module.id == module_id).first()
-    if not module:
-        raise HTTPException(404, detail="Module not found")
-    return module.tests
+    try:
+        tests = TestRepository.get_tests(db, module_id)
+        return [TestResponse(
+            id=t.id,
+            question=t.question,
+            answers=json.loads(t.answers),
+            correct=t.correct_answer,
+            module_id=t.module_id
+        ) for t in tests]
+    except ValueError as e:
+        raise HTTPException(404, detail=str(e))
 
-
-@router.get("/tests/{test_id}", summary="Получить тест по ID")
+@router.get("/tests/{test_id}", summary="Получить тест по ID", response_model=TestResponse)
 def get_test(test_id: int, db: Session = Depends(get_db)):
-    test = db.query(Test).filter(Test.id == test_id).first()
+    test = TestRepository.get_test(db, test_id)
     if not test:
         raise HTTPException(404, detail="Test not found")
-    return {
-        "id": test.id,
-        "question": test.question,
-        "answers": json.loads(test.answers),
-        "correct": test.correct_answer,
-    }
+    return TestResponse(
+        id=test.id,
+        question=test.question,
+        answers=json.loads(test.answers),
+        correct=test.correct_answer,
+        module_id=test.module_id
+    )
 
-
-@router.put("/tests/{test_id}", summary="Обновить тест")
+@router.put("/tests/{test_id}", summary="Обновить тест", response_model=TestResponse)
 def update_test(test_id: int, payload: TestUpdate, db: Session = Depends(get_db)):
-    test = db.query(Test).filter(Test.id == test_id).first()
+    test = TestRepository.get_test(db, test_id)
     if not test:
         raise HTTPException(404, detail="Test not found")
-
-    test.question = payload.question
-    test.answers = json.dumps(payload.answers)
-    test.correct_answer = payload.correct
-    db.commit()
-    return {"message": "Test updated", "test": test}
-
+    test = TestRepository.update_test(db, test, payload)
+    return TestResponse(
+        id=test.id,
+        question=test.question,
+        answers=json.loads(test.answers),
+        correct=test.correct_answer,
+        module_id=test.module_id
+    )
 
 @router.delete("/tests/{test_id}", summary="Удалить тест")
 def delete_test(test_id: int, db: Session = Depends(get_db)):
-    test = db.query(Test).filter(Test.id == test_id).first()
+    test = TestRepository.get_test(db, test_id)
     if not test:
         raise HTTPException(404, detail="Test not found")
-    db.delete(test)
-    db.commit()
+    TestRepository.delete_test(db, test)
     return {"message": "Test deleted"}

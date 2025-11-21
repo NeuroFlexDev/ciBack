@@ -11,4 +11,4 @@ target-version = ["py310"]
 profile = "black"
 line_length = 100
 
-extend-exclude = "^(mlcourse|\.venv|venv|env|node_modules)/"
+extend-exclude = "^(mlcourse|\\.venv|venv|env|node_modules)/"

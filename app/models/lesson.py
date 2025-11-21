@@ -1,13 +1,12 @@
 from sqlalchemy import Column, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
-
+from app.models.base import BaseModelMixin
 from app.database.db import Base
 
 
-class Lesson(Base):
+class Lesson(Base, BaseModelMixin):
     __tablename__ = "lessons"
 
-    id = Column(Integer, primary_key=True, index=True)
     module_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"))
     title = Column(String, nullable=False)
     description = Column(String, nullable=True)

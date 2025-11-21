@@ -1,13 +1,12 @@
 from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
-
+from app.models.base import BaseModelMixin
 from app.database.db import Base
 
 
-class CourseModule(Base):
+class CourseModule(Base, BaseModelMixin):
     __tablename__ = "course_modules"
 
-    id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"))
     title = Column(String, index=True)
     lessons = Column(Text, default="[]")

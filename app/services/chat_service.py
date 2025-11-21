@@ -1,10 +1,37 @@
 # app/services/chat_service.py
 from __future__ import annotations
-
-from typing import Any
+from typing import Any, List
+import logging
 
 from app.chat_engine import get_chat_engine
 from app.routes.chat_storage import get_history, store_bot_msg, store_user_msg
+from app.services.llm_registry import list_models
+from app.schemas.chat import MessageOut
+
+# Вывел допом код из app/routes/chat.py сюда
+
+logger = logging.getLogger(__name__)
+
+_fallback_id = iter(range(10_000_000, 10_100_000))  # генератор уникальных ID
+
+def list_available_models() -> List[str]:
+    """Возвращает список доступных моделей для чата."""
+    models = list_models()
+    logger.debug(f"Available models count={len(models)}")
+    return models
+
+# Функция преобразует сырые сообщения из хранилища в список Pydantic-схем
+
+def convert_messages(raw: List[dict[str, Any]]) -> List[MessageOut]:
+    out: List[MessageOut] = []
+    for m in raw:
+        mid = m.get("id")
+        if mid is None:
+            mid = next(_fallback_id)  # гарантированно уникальный int
+        role = m.get("role", "user")
+        author = "bot" if role == "assistant" else "user"
+        out.append(MessageOut(id=int(mid), author=author, text=m.get("content", "")))
+    return out
 
 
 def chat_generate(

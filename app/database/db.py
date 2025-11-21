@@ -1,10 +1,11 @@
 # app/database/db.py
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from app.core.config import settings
 
-DATABASE_URL = "postgresql+psycopg2://nosignalx2k:Accessosrs231@localhost/neurolearn"
+# DATABASE_URL = "postgresql+psycopg2://nosignalx2k:Accessosrs231@localhost/neurolearn"
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
