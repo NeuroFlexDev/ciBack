@@ -3,7 +3,7 @@ from app.models.course import Course
 from app.models.course_structure import CourseStructure
 from app.models.lesson import Lesson
 from app.models.module import Module
-
+import json
 
 def make_course(db, **kwargs):
     c = Course(
@@ -20,13 +20,13 @@ def make_course(db, **kwargs):
 
 def make_cs(db, **kwargs):
     cs = CourseStructure(
-        course_id=kwargs["course_id"],
+        id=kwargs["course_id"],
         sections=kwargs.get("sections", 1),
         lessons_per_section=kwargs.get("lessons_per_section", 2),
         tests_per_section=kwargs.get("tests_per_section", 1),
         questions_per_test=kwargs.get("questions_per_test", 2),
         final_test=kwargs.get("final_test", True),
-        content_types=kwargs.get("content_types", ["theory"]),
+        content_types=json.dumps(kwargs.get("content_types", ["theory"])),
     )
     db.add(cs)
     db.commit()

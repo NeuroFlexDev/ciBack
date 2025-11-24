@@ -34,6 +34,11 @@ def test_generate_modules_ok(client, db_session, patch_llm_modules):
     assert r.status_code == 200
     # модули реально записались
     mods = client.get(f"/api/courses/{c.id}/modules/").json()
+
+    print("modules endpoint response:", mods)
+    assert isinstance(mods, list), f"API did not return a list: {mods}"
+    assert len(mods) == 1, f"modules returned: {mods}"
+
     assert len(mods) == 1
     assert mods[0]["title"] == "Module A"
 

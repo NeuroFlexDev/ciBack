@@ -36,7 +36,7 @@ def get_modules(course_id: int, db: Session = Depends(get_db)):
     """
     try:
         modules = ModuleRepository.list_modules(db, course_id)
-        return [ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id) for mod in modules]
+        return [ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id, is_deleted=mod.is_deleted) for mod in modules]
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

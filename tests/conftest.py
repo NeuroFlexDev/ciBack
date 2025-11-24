@@ -4,6 +4,9 @@ import os
 import tempfile
 from typing import Generator
 
+import sys
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

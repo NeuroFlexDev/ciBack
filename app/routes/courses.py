@@ -24,6 +24,7 @@ def create_course(course: CourseCreate, db: Session = Depends(get_db)):
             description=new_course.description,
             level=new_course.level,
             language=new_course.language,
+            is_deleted=new_course.is_deleted,
         )
     except Exception as e:
         db.rollback()
@@ -44,6 +45,7 @@ def get_all_courses(db: Session = Depends(get_db)):
                 description=course.description,
                 level=course.level,
                 language=course.language,
+                is_deleted=course.is_deleted,
             )
             for course in courses
         ]
@@ -73,6 +75,7 @@ def update_course(course_id: int, course_update: CourseUpdate, db: Session = Dep
             description=course.description,
             level=course.level,
             language=course.language,
+            is_deleted=course.is_deleted,
         )
     except HTTPException:
         raise
