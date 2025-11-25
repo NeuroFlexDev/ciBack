@@ -18,6 +18,41 @@ from app.services.gigachat_service import get_available_giga_models, get_gigacha
 from app.services.hf_infer_service import get_available_hf_models, get_hf_client
 from app.services.llm_types import LLMClient
 
+# перенесено из app/routes/generation.py
+
+def course_kwargs(course, cs=None):
+    data = {
+        "course_name": course.name,
+        "course_description": course.description,
+        "course_level": course.level,
+    }
+    if cs:
+        data.update({
+            "module_count": cs.sections,
+            "lessons_per_section": cs.lessons_per_section,
+        })
+    return data
+
+
+def llm_json(template: str, *, engine: str, model: str | None, **kwargs) -> dict[str, Any]:
+    """
+    Унифицированный обёртка: отдаёт результат LLM с парсингом и обработкой ошибок,
+    проводит логи по ошибкам и хендлит HTTP-exception.
+    """
+    try:
+        return generate_from_prompt(
+            template_name=template,
+            engine=engine,
+            model_name=model,
+            expect_json=True,
+            include_external_context=False,
+            use_feedback=False,
+            **kwargs,
+        )
+    except Exception as e:
+        logger.error("LLM error in llm_json: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(500, f"Ошибка генерации LLM: {e}")
+
 # -------------------- Setup --------------------
 env = Environment(loader=FileSystemLoader("app/prompts"))
 logger = logging.getLogger(__name__)
@@ -37,6 +72,7 @@ ENGINE_ALIASES: dict[str, str] = {
 
 DEFAULT_ENGINE = "gigachat"
 DEFAULT_MAX_TOKENS = 1024
+DEFAULT_MODEL: str | None = None
 
 # -------------------- Utils --------------------
 JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)

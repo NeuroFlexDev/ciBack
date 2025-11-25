@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from app.core.config import settings
 from app.database.db import Base, engine
-from app.routes import course_generator  # Генерация курса
+from app.routes import generation  # Генерация курса
 from app.routes import (
     auth,
     chat,
@@ -19,12 +19,13 @@ from app.routes import (
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="NeuroLearn Course API (with HuggingChat)")
+app = FastAPI(title="NeuroLearn Course API (with HuggingChat)", debug=settings.DEBUG)
 
+origins = [s.strip() for s in settings.CORS_ORIGINS.split(",")]
 # ✅ Добавляем CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Разрешаем фронтенду доступ
+    allow_origins=origins,  # Разрешаем фронтенду доступ
     allow_credentials=True,
     allow_methods=["*"],  # Разрешаем все HTTP-методы
     allow_headers=["*"],  # Разрешаем все заголовки
@@ -39,7 +40,7 @@ app.include_router(tasks.router, prefix="/api", tags=["Tasks"])
 app.include_router(tests.router, prefix="/api", tags=["Tests"])
 app.include_router(upload.router, prefix="/api", tags=["Files"])
 app.include_router(course_structure.router, prefix="/api", tags=["Course Structure"])
-app.include_router(course_generator.router, prefix="/api", tags=["Course Generation"])
+app.include_router(generation.router, prefix="/api", tags=["Course Generation"])
 app.include_router(versioning.router, prefix="/api", tags=["Course Versions"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 app.include_router(chat.router, prefix="/api")

@@ -1,13 +1,12 @@
 from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
-
+from app.models.base import BaseModelMixin
 from app.database.db import Base
 
 
-class Test(Base):
+class Test(Base, BaseModelMixin):
     __tablename__ = "tests"
 
-    id = Column(Integer, primary_key=True, index=True)
     question = Column(Text, nullable=False)
     answers = Column(Text, nullable=True)  # Храним JSON-список ответов
     correct_answer = Column(String, nullable=False)

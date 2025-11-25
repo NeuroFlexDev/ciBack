@@ -34,7 +34,8 @@ cd NeuroLearn/ciBack
 
 # Создаём виртуальное окружение (вне папки mlcourse!)
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate # Linux / Mac
+.\venv\Scripts\activate.ps1 # Windows
 
 # Устанавливаем зависимости
 pip install -r requirements.txt
@@ -81,6 +82,7 @@ uvicorn main:app --reload
 ```bash
 # поднять API и PostgreSQL
 docker compose up -d --build
+docker compose up -d
 ```
 
 > В конфиге уже прописан healthcheck для PostgreSQL и автоподключение API.
@@ -114,9 +116,13 @@ GET http://localhost:8000/api/healthz
 ```
 ciBack/
 ├── app/
+│   ├── core/
+│   │   └── config.py    # pydantic-settings, все переменные из .env, профили
+│   ├── repositories/    # доступ к данным, soft-delete фильтрация
 │   ├── routes/          # API-роутеры
 │   │   └── health.py    # health-check endpoint
-│   ├── models/          # SQLAlchemy модели
+│   ├── schemas/         # Pydantic Out/Create/Update
+│   ├── models/          # SQLAlchemy модели (soft-delete)
 │   ├── database/        # Подключение БД
 │   ├── services/        # LLM, HuggingFace, генерация
 │   └── prompts/         # Jinja2 шаблоны
@@ -124,6 +130,7 @@ ciBack/
 ├── main.py              # Точка входа FastAPI
 ├── requirements.txt
 ├── docker-compose.yml
+├── .env.dev(stage/prod) # Переменные окружения
 └── .env.example
 ```
 
@@ -180,6 +187,6 @@ GET /api/healthz
 
 ---
 
-*Последнее обновление: 2025-09-08*
+*Последнее обновление: 2025-21-11*
 
 ---

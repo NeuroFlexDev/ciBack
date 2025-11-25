@@ -1,15 +1,14 @@
 from sqlalchemy import Column, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
-
+from app.models.base import BaseModelMixin
 from app.database.db import Base
 
 # Импорты зависимых моделей
 
 
-class Module(Base):
+class Module(Base, BaseModelMixin):
     __tablename__ = "modules"
 
-    id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"))
 

@@ -11,6 +11,7 @@ PyMuPDF
 faiss-cpu
 feedparser
 sentence-transformers
+pydantic-settings
 
 # FOR DEV TEST
 # SO...
