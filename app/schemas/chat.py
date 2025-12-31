@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # ---------- Schemas ----------
 class ChatCreate(BaseModel):
@@ -10,9 +10,7 @@ class ChatOut(BaseModel):
     model: str | None = None
     engine: str | None = None
     is_deleted: bool
-    class Config:
-        from_attributes = True
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class MessageOut(BaseModel):
     id: int

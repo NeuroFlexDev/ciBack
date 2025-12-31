@@ -8,7 +8,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.database.db import Base
-
+from app.core.config import settings
 # <<< импортируй ВСЕ модели, чтобы autogenerate их видел >>>
 
 config = context.config
@@ -21,6 +21,8 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
+    if settings.DATABASE_URL:
+        return settings.DATABASE_URL
     # приоритет: ENV -> alembic.ini
     env_url = os.getenv("DATABASE_URL")
     if env_url:

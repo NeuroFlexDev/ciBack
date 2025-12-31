@@ -14,3 +14,12 @@ def test_healthz():
     r = client.get("/api/healthz")
     assert r.status_code == 200
     assert r.json().get("ok") is True
+
+
+def test_readiness(client):
+    r = client.get("/api/readiness")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("ok") is True
+    assert body.get("db") == "up"
+    

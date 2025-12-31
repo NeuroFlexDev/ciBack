@@ -15,7 +15,7 @@ def create_course(course: CourseCreate, db: Session = Depends(get_db)):
     Создает курс в базе данных.
     """
     try:
-        logger.info("Получен запрос на создание курса: %s", course.json())
+        logger.info("Получен запрос на создание курса: %s", course.model_dump_json())
         new_course = CourseRepository.create(db, course)
         logger.info("Курс успешно создан: ID=%s, Название=%s", new_course.id, new_course.name)
         return CourseResponse(
@@ -63,7 +63,7 @@ def update_course(course_id: int, course_update: CourseUpdate, db: Session = Dep
         if not course:
             raise HTTPException(status_code=404, detail="Курс не найден")
 
-        update_data = course_update.dict(exclude_unset=True)
+        update_data = course_update.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="Нет данных для обновления")
 

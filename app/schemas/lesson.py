@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 
 # Pydantic-модель для создания урока
@@ -18,5 +18,4 @@ class LessonResponse(BaseModel):
     description: str
     module_id: int
     is_deleted: bool
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

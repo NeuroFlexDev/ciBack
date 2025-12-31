@@ -33,6 +33,7 @@ def add_lesson(course_id: int, module_id: int, lesson: LessonCreate, db: Session
             title=new_lesson.title,
             description=new_lesson.description,
             module_id=new_lesson.module_id,
+            is_deleted=new_lesson.is_deleted,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -54,6 +55,7 @@ def get_lessons(course_id: int, module_id: int, db: Session = Depends(get_db)):
                 title=lesson.title,
                 description=lesson.description,
                 module_id=lesson.module_id,
+                is_deleted=lesson.is_deleted,
             )
             for lesson in lessons
         ]
@@ -77,6 +79,7 @@ def get_lesson(lesson_id: int, db: Session = Depends(get_db)):
         title=lesson.title,
         description=lesson.description,
         module_id=lesson.module_id,
+        is_deleted=lesson.is_deleted,
     )
 
 @router.put("/lessons/{lesson_id}", response_model=LessonResponse, summary="Обновление урока")
@@ -87,7 +90,7 @@ def update_lesson(lesson_id: int, lesson_update: LessonUpdate, db: Session = Dep
     lesson = LessonRepository.get_lesson(db, lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
-    update_data = lesson_update.dict(exclude_unset=True)
+    update_data = lesson_update.model_dump(exclude_unset=True)
     lesson = LessonRepository.update_lesson(db, lesson, update_data)
     logger.info("Обновлен урок: ID=%s", lesson.id)
     return LessonResponse(
@@ -95,6 +98,7 @@ def update_lesson(lesson_id: int, lesson_update: LessonUpdate, db: Session = Dep
         title=lesson.title,
         description=lesson.description,
         module_id=lesson.module_id,
+        is_deleted=lesson.is_deleted,
     )
 
 @router.delete("/lessons/{lesson_id}", summary="Удаление урока")

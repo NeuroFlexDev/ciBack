@@ -12,7 +12,7 @@ from app.services.embedding_service import embed_and_add
 from app.database.db import get_db
 import json, logging, traceback
 
-router = APIRouter(prefix="/courses", tags=["Generation"])
+router = APIRouter(prefix="/courses",)
 logger = logging.getLogger(__name__)
 
 @router.get("/{course_id}/generate_modules", summary="Генерация и сохранение модулей курса")
