@@ -1,37 +1,53 @@
-from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import List, Optional
+from typing import List
 
-# Pydantic-модель для создания структуры курса
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def normalize_content_types(value: List[str] | str | None) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        candidates = value.split(",")
+    else:
+        candidates = value
+
+    normalized = [str(item).strip() for item in candidates]
+    cleaned = [item for item in normalized if item]
+    if len(cleaned) != len(normalized):
+        raise ValueError("content_types must not contain empty values")
+    return cleaned
+
+
 class CourseStructureCreate(BaseModel):
-    sections: int = Field(..., gt=0, description="Количество секций курса")
-    tests_per_section: int = Field(..., ge=0, description="Количество тестов на секцию")
-    lessons_per_section: int = Field(..., gt=0, description="Количество уроков на секцию")
-    questions_per_test: int = Field(..., ge=0, description="Количество вопросов в тесте")
-    final_test: bool = Field(..., description="Наличие финального теста")
-    content_types: List[str] = Field(default_factory=list, description="Список типов контента")
+    sections: int = Field(..., gt=0)
+    tests_per_section: int = Field(..., ge=0)
+    lessons_per_section: int = Field(..., gt=0)
+    questions_per_test: int = Field(..., ge=0)
+    final_test: bool
+    content_types: List[str] = Field(default_factory=list)
 
     @field_validator("content_types", mode="before")
-    def non_empty_content_types(cls, v):
-        if not v.strip():
-            raise ValueError("Элементы content_types не должны быть пустыми")
-        return v.strip()
+    @classmethod
+    def validate_content_types(cls, value: List[str] | str | None) -> List[str]:
+        return normalize_content_types(value)
 
-# Pydantic-модель для обновления структуры курса (все поля опциональны)
+
 class CourseStructureUpdate(BaseModel):
-    sections: Optional[int] = Field(None, gt=0, description="Количество секций курса")
-    tests_per_section: Optional[int] = Field(None, ge=0, description="Количество тестов на секцию")
-    lessons_per_section: Optional[int] = Field(None, gt=0, description="Количество уроков на секцию")
-    questions_per_test: Optional[int] = Field(None, ge=0, description="Количество вопросов в тесте")
-    final_test: Optional[bool] = Field(None, description="Наличие финального теста")
-    content_types: Optional[List[str]] = Field(None, description="Список типов контента")
+    sections: int | None = Field(None, gt=0)
+    tests_per_section: int | None = Field(None, ge=0)
+    lessons_per_section: int | None = Field(None, gt=0)
+    questions_per_test: int | None = Field(None, ge=0)
+    final_test: bool | None = None
+    content_types: List[str] | None = None
 
     @field_validator("content_types", mode="before")
-    def non_empty_content_types(cls, v):
-        if v is not None and not v.strip():
-            raise ValueError("Элементы content_types не должны быть пустыми")
-        return v.strip() if v else v
+    @classmethod
+    def validate_content_types(cls, value: List[str] | str | None) -> List[str] | None:
+        if value is None:
+            return None
+        return normalize_content_types(value)
 
-# Pydantic-модель для ответа
+
 class CourseStructureResponse(BaseModel):
     id: int
     sections: int
@@ -41,4 +57,5 @@ class CourseStructureResponse(BaseModel):
     final_test: bool
     content_types: List[str]
     is_deleted: bool
+
     model_config = ConfigDict(from_attributes=True)

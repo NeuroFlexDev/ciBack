@@ -1,11 +1,14 @@
+from typing import List, Optional
+
 from sqlalchemy.orm import Session
+
 from app.models.course_structure import CourseStructure
-from typing import Optional, List
+from app.schemas.course_structure import CourseStructureCreate
+
 
 class CourseStructureRepository:
     @staticmethod
-    def create(db: Session, struct) -> CourseStructure:
-        # Создает новую структуру курса.
+    def create(db: Session, struct: CourseStructureCreate) -> CourseStructure:
         new_struct = CourseStructure(
             sections=struct.sections,
             tests_per_section=struct.tests_per_section,
@@ -21,28 +24,34 @@ class CourseStructureRepository:
 
     @staticmethod
     def list_all(db: Session) -> List[CourseStructure]:
-        # Возвращает список всех структур курсов.
-        return db.query(CourseStructure).all()
+        return (
+            db.query(CourseStructure)
+            .filter(CourseStructure.is_deleted == False)
+            .order_by(CourseStructure.id.asc())
+            .all()
+        )
 
     @staticmethod
     def get_by_id(db: Session, cs_id: int) -> Optional[CourseStructure]:
-        # Возвращает структуру курса по указанному ID.
-        return db.query(CourseStructure).filter(CourseStructure.id == cs_id).first()
+        return (
+            db.query(CourseStructure)
+            .filter(CourseStructure.id == cs_id, CourseStructure.is_deleted == False)
+            .first()
+        )
 
     @staticmethod
     def update(db: Session, cs: CourseStructure, data: dict) -> CourseStructure:
-        # Обновляет структуру курса по указанному ID.
         if "content_types" in data and data["content_types"] is not None:
             data["content_types"] = ",".join(data["content_types"])
+
         for field, value in data.items():
             setattr(cs, field, value)
+
         db.commit()
         db.refresh(cs)
         return cs
 
     @staticmethod
-    def delete(db: Session, cs: CourseStructure):
-        # Удаляет структуру курса по указанному ID.
+    def delete(db: Session, cs: CourseStructure) -> None:
         cs.is_deleted = True
-        # db.delete(cs)
         db.commit()
