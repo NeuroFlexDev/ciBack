@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import List, Optional
 
 # Pydantic-модель для создания структуры курса
@@ -10,7 +10,7 @@ class CourseStructureCreate(BaseModel):
     final_test: bool = Field(..., description="Наличие финального теста")
     content_types: List[str] = Field(default_factory=list, description="Список типов контента")
 
-    @validator("content_types", each_item=True)
+    @field_validator("content_types", mode="before")
     def non_empty_content_types(cls, v):
         if not v.strip():
             raise ValueError("Элементы content_types не должны быть пустыми")
@@ -25,7 +25,7 @@ class CourseStructureUpdate(BaseModel):
     final_test: Optional[bool] = Field(None, description="Наличие финального теста")
     content_types: Optional[List[str]] = Field(None, description="Список типов контента")
 
-    @validator("content_types", each_item=True)
+    @field_validator("content_types", mode="before")
     def non_empty_content_types(cls, v):
         if v is not None and not v.strip():
             raise ValueError("Элементы content_types не должны быть пустыми")
@@ -41,5 +41,4 @@ class CourseStructureResponse(BaseModel):
     final_test: bool
     content_types: List[str]
     is_deleted: bool
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

@@ -12,6 +12,6 @@ faiss-cpu
 feedparser
 sentence-transformers
 pydantic-settings
-
+alembic==1.17.2
 # FOR DEV TEST
 # SO...

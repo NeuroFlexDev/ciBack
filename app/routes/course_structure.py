@@ -103,7 +103,7 @@ def update_course_structure(cs_id: int, struct_update: CourseStructureUpdate, db
         cs = CourseStructureRepository.get_by_id(db, cs_id)
         if not cs:
             raise HTTPException(status_code=404, detail="Структура курса не найдена")
-        update_data = struct_update.dict(exclude_unset=True)
+        update_data = struct_update.model_dump(exclude_unset=True)
         cs = CourseStructureRepository.update(db, cs, update_data)
         logger.info(f"Обновлена структура курса с ID: {cs.id}")
         return CourseStructureResponse(

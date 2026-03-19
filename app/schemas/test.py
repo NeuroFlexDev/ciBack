@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List
 
 class TestCreate(BaseModel):
@@ -17,5 +17,4 @@ class TestResponse(BaseModel):
     correct: str
     module_id: int
     is_deleted: bool
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

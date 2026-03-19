@@ -4,10 +4,10 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from app.core.config import settings
 
 # DATABASE_URL = "postgresql+psycopg2://nosignalx2k:Accessosrs231@localhost/neurolearn"
+Base = declarative_base()
 
 engine = create_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
 
 
 def get_db():

@@ -21,7 +21,7 @@ def add_module(course_id: int, module: ModuleCreate, db: Session = Depends(get_d
     try:
         new_module = ModuleRepository.add_module(db, course_id, module)
         logger.info("Создан модуль: ID=%s для курса ID=%s", new_module.id, course_id)
-        return ModuleResponse(id=new_module.id, title=new_module.title, course_id=new_module.course_id)
+        return ModuleResponse(id=new_module.id, title=new_module.title, course_id=new_module.course_id, is_deleted=new_module.is_deleted)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -52,7 +52,7 @@ def get_module(module_id: int, db: Session = Depends(get_db)):
     mod = ModuleRepository.get_by_id(db, module_id)
     if not mod:
         raise HTTPException(status_code=404, detail="Module not found")
-    return ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id)
+    return ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id, is_deleted=mod.is_deleted)
 
 @router.put("/modules/{module_id}", response_model=ModuleResponse, summary="Обновление модуля")
 def update_module(module_id: int, module_update: ModuleUpdate, db: Session = Depends(get_db)):
@@ -62,10 +62,10 @@ def update_module(module_id: int, module_update: ModuleUpdate, db: Session = Dep
     mod = ModuleRepository.get_by_id(db, module_id)
     if not mod:
         raise HTTPException(status_code=404, detail="Module not found")
-    update_data = module_update.dict(exclude_unset=True)
+    update_data = module_update.model_dump(exclude_unset=True)
     mod = ModuleRepository.update_module(db, mod, update_data)
     logger.info("Обновлен модуль: ID=%s", module_id)
-    return ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id)
+    return ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id, is_deleted=mod.is_deleted)
 
 @router.delete("/modules/{module_id}", summary="Удаление модуля")
 def delete_module(module_id: int, db: Session = Depends(get_db)):

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.database.db import Base, engine
@@ -15,7 +15,11 @@ from app.routes import (
     theories,
     upload,
     versioning,
+    healthz,
 )
+from log import get_logger, set_request_id
+
+logger = get_logger()
 
 Base.metadata.create_all(bind=engine)
 
@@ -31,6 +35,24 @@ app.add_middleware(
     allow_headers=["*"],  # Разрешаем все заголовки
 )
 
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+
+    rid = request.headers.get("X-Request-ID")
+    set_request_id(rid)
+
+    logger.info(f"Incoming {request.method} {request.url.path}")
+
+    response = await call_next(request)
+
+    logger.info(
+        f"Completed {request.method} {request.url.path} "
+        f"with status {response.status_code}"
+    )
+
+    response.headers["X-Request-ID"] = rid or ""
+    return response
+
 # ✅ Подключаем маршруты с префиксом /api
 app.include_router(courses.router, prefix="/api", tags=["Courses"])
 app.include_router(modules.router, prefix="/api", tags=["Modules"])
@@ -45,7 +67,7 @@ app.include_router(versioning.router, prefix="/api", tags=["Course Versions"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 app.include_router(chat.router, prefix="/api")
 
-
+app.include_router(healthz.router, prefix="/api", tags=["Healthz"])
 @app.get("/")
 def root():
     return {"message": "Welcome to NeuroLearn Course API (DB + LLM Generation)"}
