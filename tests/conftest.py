@@ -1,11 +1,23 @@
 # tests/conftest.py
-import json
 import os
-import tempfile
+from pathlib import Path
 from typing import Generator
 
 import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
+
+TESTS_ROOT = Path(__file__).resolve().parent
+TEST_TMP_ROOT = TESTS_ROOT / "_tmp"
+TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+TEST_RUNTIME_DB = TEST_TMP_ROOT / "runtime.db"
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("ENV", "dev")
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{TEST_RUNTIME_DB.as_posix()}")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+os.environ.setdefault("JWT_ALG", "HS256")
+os.environ.setdefault("LOG_LEVEL", "INFO")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,9 +29,9 @@ from main import app
 
 
 @pytest.fixture(scope="session")
-def tmpdir():
-    with tempfile.TemporaryDirectory() as d:
-        yield d
+def repo_tmp_dir() -> Path:
+    TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    return TEST_TMP_ROOT
 
 
 @pytest.fixture(scope="session")

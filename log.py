@@ -1,11 +1,9 @@
-from app.core.config import settings
-
-print(settings.DATABASE_URL)
-
 import logging
 import sys
 import uuid
 from contextvars import ContextVar
+
+from app.core.config import settings
 
 
 request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
@@ -22,10 +20,11 @@ def get_logger(name: str = "app") -> logging.Logger:
     if logger.handlers:
         return logger
 
-    logger.setLevel(logging.DEBUG if settings.DEBUG else logging.INFO)
+    log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+    logger.setLevel(log_level)
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logging.DEBUG if settings.DEBUG else logging.INFO)
+    handler.setLevel(log_level)
     formatter = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(name)s | %(request_id)s | %(message)s"
     )

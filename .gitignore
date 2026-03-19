@@ -5,3 +5,4 @@ cookies
 mlcourse/
 **/__pycache__/
 *.pyc
+tests/_tmp/

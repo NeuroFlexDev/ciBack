@@ -1,14 +1,35 @@
 import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ENV_PROFILE = os.getenv("ENV", "dev")
+APP_ROOT = Path(__file__).resolve().parents[2]
+VALID_ENV_PROFILES = {"dev", "stage", "prod"}
+
+
+def resolve_env_profile(raw_value: str | None = None) -> str:
+    profile = (raw_value or "dev").strip().lower()
+    if profile not in VALID_ENV_PROFILES:
+        allowed = ", ".join(sorted(VALID_ENV_PROFILES))
+        raise ValueError(f"Unsupported ENV profile '{profile}'. Expected one of: {allowed}.")
+    return profile
+
+
+def resolve_env_file(profile: str, *, base_dir: Path | None = None) -> Path:
+    env_file = (base_dir or APP_ROOT) / f".env.{profile}"
+    return env_file
+
 
 class Settings(BaseSettings):
-    # Основные секции конфига
-    ENV: str = "dev" # dev/stage/prod
+    ENV: Literal["dev", "stage", "prod"] = "dev"
     DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
+
     DATABASE_URL: str
+
     JWT_SECRET: str
     JWT_ALG: str = "HS256"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
@@ -24,12 +45,32 @@ class Settings(BaseSettings):
     SMTP_PASS: str = ""
 
     HUGGINGCHAT_PROXY_URL: str = "http://ml-proxy:8001"
+
     HF_TOKEN: str = ""
     HF_MODEL: str = ""
-    # Откуда брать .env
+    HF_API_URL: str = ""
+    HF_MODEL_CANDIDATES: str = ""
+
+    GIGA_CLIENT_ID: str = ""
+    GIGA_CLIENT_SECRET: str = ""
+    GIGA_SCOPE: str = "GIGACHAT_API_PERS"
+
     model_config = SettingsConfigDict(
-        env_file=f".env.{ENV_PROFILE}",  # выбирает нужный файл профиля
-        env_file_encoding='utf-8'
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
-settings = Settings()
+    @field_validator("LOG_LEVEL", mode="before")
+    @classmethod
+    def normalize_log_level(cls, value: str) -> str:
+        return (value or "INFO").strip().upper()
+
+
+@lru_cache(maxsize=8)
+def get_settings(env_profile: str | None = None, *, env_file: str | Path | None = None) -> Settings:
+    profile = resolve_env_profile(env_profile or os.getenv("ENV"))
+    selected_env_file = env_file or resolve_env_file(profile)
+    return Settings(_env_file=selected_env_file)
+
+
+settings = get_settings()

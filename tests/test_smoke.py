@@ -1,5 +1,9 @@
+import os
 from fastapi.testclient import TestClient
 import importlib
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 app_mod = importlib.import_module("main")
 client = TestClient(app_mod.app)

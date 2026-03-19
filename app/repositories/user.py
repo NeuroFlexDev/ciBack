@@ -10,7 +10,10 @@ class UserRepository:
 
     @staticmethod
     def get_by_id(db: Session, user_id: int) -> User | None:
-        return db.query(User).get(user_id)
+        user = db.get(User, user_id)
+        if user is None or user.is_deleted:
+            return None
+        return user
 
     @staticmethod
     def create(db: Session, user_in: UserCreate, hashed_password: str) -> User:
@@ -26,9 +29,9 @@ class UserRepository:
 
     @staticmethod
     def update(db: Session, user: User, payload: UserUpdate) -> User:
-        if payload.email:
+        if payload.email is not None:
             user.email = payload.email
-        if payload.full_name:
+        if payload.full_name is not None:
             user.full_name = payload.full_name
         db.commit()
         db.refresh(user)
