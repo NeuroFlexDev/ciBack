@@ -2,90 +2,97 @@ import feedparser
 import requests
 
 
-# === arXiv ===
 def search_arxiv(query: str, lang: str = "en", limit: int = 5) -> list[str]:
     query_encoded = requests.utils.quote(query)
     url = f"http://export.arxiv.org/api/query?search_query=all:{query_encoded}&start=0&max_results={limit}"
     try:
         feed = feedparser.parse(url)
         return [f"{entry.title.strip()}\n{entry.summary.strip()}" for entry in feed.entries]
-    except Exception as e:
-        raise RuntimeError(f"Ошибка поиска в arXiv: {e}")
-# вызов функции под тест
+    except Exception as exc:
+        raise RuntimeError(f"Error searching arXiv: {exc}") from exc
+
+
 def arxiv_search(*args, **kwargs):
     return search_arxiv(*args, **kwargs)
 
-# === CrossRef ===
+
 def search_crossref(query: str, lang: str = "en", limit: int = 5) -> list[str]:
     url = "https://api.crossref.org/works"
     params = {"query": query, "rows": limit}
 
-    # if lang:
-    #     params["filter"] = f"language:{lang}"
-
     try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        items = resp.json().get("message", {}).get("items", [])
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        items = response.json().get("message", {}).get("items", [])
         return [
             f"{item.get('title', [''])[0]}\n{item.get('abstract', '')}"
             for item in items
             if item.get("title")
         ]
-    except Exception as e:
-        raise RuntimeError(f"Ошибка поиска в CrossRef: {e}")
+    except Exception as exc:
+        raise RuntimeError(f"Error searching CrossRef: {exc}") from exc
 
 
-# === OpenAlex ===
+def crossref_search(*args, **kwargs):
+    return search_crossref(*args, **kwargs)
+
+
 def search_openalex(query: str, limit: int = 5) -> list[str]:
     url = "https://api.openalex.org/works"
     params = {"search": query, "per-page": limit}
     try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        items = resp.json().get("results", [])
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        items = response.json().get("results", [])
         result = []
         for item in items:
             title = item.get("display_name", "")
             abstract_dict = item.get("abstract_inverted_index")
             abstract = ""
             if abstract_dict:
-                # Распаковываем inverted_index
                 tokens = sorted(
-                    ((pos, word) for word, positions in abstract_dict.items() for pos in positions),
-                    key=lambda x: x[0],
+                    ((position, word) for word, positions in abstract_dict.items() for position in positions),
+                    key=lambda token: token[0],
                 )
                 abstract = " ".join(word for _, word in tokens)
             result.append(f"{title}\n{abstract}")
         return result
-    except Exception as e:
-        raise RuntimeError(f"Ошибка поиска в OpenAlex: {e}")
+    except Exception as exc:
+        raise RuntimeError(f"Error searching OpenAlex: {exc}") from exc
 
-# вызов функции под тест
-def crossref_search(*args, **kwargs):
-    return search_crossref(*args, **kwargs)
 
-# === Aggregator ===
+def openalex_search(*args, **kwargs):
+    return search_openalex(*args, **kwargs)
+
+
+def _call_optional_lang(search_fn, query: str, lang: str) -> list[str]:
+    try:
+        return search_fn(query, lang=lang)
+    except TypeError as exc:
+        if "unexpected keyword argument 'lang'" not in str(exc):
+            raise
+        return search_fn(query)
+
+
 def aggregated_search(query: str, source: str = "all", lang: str = "en") -> list[str]:
-    """
-    Выполняет агрегированный поиск по внешним источникам.
-    Аргументы:
-        - query: строка запроса
-        - source: arxiv | crossref | all
-        - lang: язык (по умолчанию 'en')
-    """
-    results = []
+    results: list[str] = []
 
     if source in ("arxiv", "all"):
         try:
-            results += search_arxiv(query, lang=lang)
-        except Exception as e:
-            print(f"⚠️ Ошибка поиска в arXiv: {str(e)}")
+            results += _call_optional_lang(arxiv_search, query, lang)
+        except Exception as exc:
+            print(f"Search error in arXiv: {exc}")
 
     if source in ("crossref", "all"):
         try:
-            results += search_crossref(query, lang=lang)
-        except Exception as e:
-            print(f"⚠️ Ошибка поиска в Crossref: {str(e)}")
+            results += _call_optional_lang(crossref_search, query, lang)
+        except Exception as exc:
+            print(f"Search error in CrossRef: {exc}")
+
+    if source in ("openalex", "all"):
+        try:
+            results += openalex_search(query)
+        except Exception as exc:
+            print(f"Search error in OpenAlex: {exc}")
 
     return results

@@ -11,6 +11,7 @@ from app.routes import (
     modules,
     tasks,
     tests,
+    search,
     theories,
     upload,
     versioning,
@@ -59,6 +60,7 @@ app.include_router(theories.router, prefix="/api", tags=["Theory"])
 app.include_router(tasks.router, prefix="/api", tags=["Tasks"])
 app.include_router(tests.router, prefix="/api", tags=["Tests"])
 app.include_router(upload.router, prefix="/api", tags=["Files"])
+app.include_router(search.router, prefix="/api", tags=["Search"])
 app.include_router(course_structure.router, prefix="/api", tags=["Course Structure"])
 app.include_router(generation.router, prefix="/api", tags=["Course Generation"])
 app.include_router(versioning.router, prefix="/api", tags=["Course Versions"])
