@@ -23,6 +23,15 @@ def resolve_env_file(profile: str, *, base_dir: Path | None = None) -> Path:
     return env_file
 
 
+def normalize_database_url(raw_url: str) -> str:
+    url = raw_url.strip()
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql+asyncpg://"):
+        return url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    return url
+
+
 class Settings(BaseSettings):
     ENV: Literal["dev", "stage", "prod"] = "dev"
     DEBUG: bool = True
@@ -64,6 +73,10 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
         return (value or "INFO").strip().upper()
+
+    @property
+    def sync_database_url(self) -> str:
+        return normalize_database_url(self.DATABASE_URL)
 
 
 @lru_cache(maxsize=8)

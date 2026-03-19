@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.database.db import Base, engine
 from app.routes import generation  # Генерация курса
 from app.routes import (
     auth,
@@ -21,7 +20,6 @@ from log import get_logger, set_request_id
 
 logger = get_logger()
 
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="NeuroLearn Course API (with HuggingChat)", debug=settings.DEBUG)
 
