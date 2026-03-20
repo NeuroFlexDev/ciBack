@@ -1,33 +1,67 @@
-import logging
-import os
+from __future__ import annotations
+
 from functools import lru_cache
 
 import requests
-from fastapi import HTTPException
 from huggingface_hub import InferenceClient
 
-from app.services.llm_types import LLMClient
+from app.core.config import settings
+from app.services.llm_types import LLMClient, LLMError, LLMInvocationMeta
+from log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 HF_MODELS_API = "https://huggingface.co/api/models"
-DISCOVERY_LIMIT = 60
-DISCOVERY_TIMEOUT = 6
 PING_PROMPT = "ping"
 
 
-# -------------------- Wrappers --------------------
 class HFClientWrapper(LLMClient):
-    def __init__(self, inner: InferenceClient):
+    def __init__(self, inner: InferenceClient, *, model: str):
         self.inner = inner
+        self.model = model
+        self.last_invocation = LLMInvocationMeta(provider="hf_api", model=model)
 
     def generate(self, prompt: str, max_tokens: int = 1024) -> str:
-        return self.inner.text_generation(
-            prompt, max_new_tokens=max_tokens, timeout=DISCOVERY_TIMEOUT + 4
-        )
+        try:
+            result = self.inner.text_generation(
+                prompt,
+                max_new_tokens=max_tokens,
+                timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.Timeout as exc:
+            raise LLMError(
+                code="timeout",
+                message="Hugging Face request timed out",
+                provider="hf_api",
+                model=self.model,
+                status_code=504,
+                retryable=True,
+            ) from exc
+        except Exception as exc:
+            error_text = f"{exc.__class__.__name__}: {exc}".lower()
+            if "timeout" in error_text:
+                raise LLMError(
+                    code="timeout",
+                    message="Hugging Face request timed out",
+                    provider="hf_api",
+                    model=self.model,
+                    status_code=504,
+                    retryable=True,
+                ) from exc
+            raise LLMError(
+                code="provider_error",
+                message="Hugging Face request failed",
+                provider="hf_api",
+                model=self.model,
+                status_code=503,
+                retryable=False,
+                details={"error_type": exc.__class__.__name__},
+            ) from exc
+
+        self.last_invocation = LLMInvocationMeta(provider="hf_api", model=self.model)
+        return str(result)
 
 
-# -------------------- Helpers --------------------
 def _build_client(model: str, token: str, api_url: str | None) -> InferenceClient:
     if api_url:
         return InferenceClient(api_url=api_url, token=token)
@@ -43,78 +77,104 @@ def _hf_list_text_gen_models(token: str, limit: int) -> list[str]:
     }
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        r = requests.get(HF_MODELS_API, params=params, headers=headers, timeout=10)
-        r.raise_for_status()
-        models = r.json()
-    except Exception as e:
-        logger.warning("HF list models failed: %s", e)
+        response = requests.get(
+            HF_MODELS_API,
+            params=params,
+            headers=headers,
+            timeout=settings.HF_DISCOVERY_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        models = response.json()
+    except Exception as exc:
+        logger.warning("hf model discovery failed error=%s", exc.__class__.__name__)
         return []
+
     result = []
-    for m in models:
-        if m.get("disabled") or m.get("private"):
+    for model in models:
+        if model.get("disabled") or model.get("private"):
             continue
-        mid = m.get("modelId") or m.get("id")
-        if mid:
-            result.append(mid)
+        model_id = model.get("modelId") or model.get("id")
+        if model_id:
+            result.append(model_id)
     return result
 
 
-def _probe_model(model: str, token: str, api_url_env: str | None) -> bool:
+def _probe_model(model: str, token: str, api_url: str | None) -> bool:
     try:
-        client = _build_client(model, token, api_url_env)
-        client.text_generation(PING_PROMPT, max_new_tokens=4, timeout=DISCOVERY_TIMEOUT)
+        client = _build_client(model, token, api_url)
+        client.text_generation(
+            PING_PROMPT,
+            max_new_tokens=4,
+            timeout=settings.HF_DISCOVERY_TIMEOUT_SECONDS,
+        )
         return True
-    except Exception as e:
-        logger.debug("Probe fail %s: %s", model, e)
+    except Exception as exc:
+        logger.debug("hf model probe failed model=%s error=%s", model, exc.__class__.__name__)
         return False
 
 
-@lru_cache(maxsize=1)
-def _discover_available_models(token: str, api_url_env: str | None) -> list[str]:
-    env_model = os.getenv("HF_MODEL")
-    env_list = os.getenv("HF_MODEL_CANDIDATES", "")
-    from_env = [m.strip() for m in env_list.split(",") if m.strip()]
+@lru_cache(maxsize=8)
+def _discover_available_models(token: str, api_url: str, env_model: str, env_candidates: str) -> list[str]:
+    from_env = [value.strip() for value in env_candidates.split(",") if value.strip()]
 
-    candidates = []
+    candidates: list[str] = []
     if env_model:
         candidates.append(env_model)
     candidates.extend(from_env)
 
-    fetched = _hf_list_text_gen_models(token, DISCOVERY_LIMIT)
-    for m in fetched:
-        if m not in candidates:
-            candidates.append(m)
+    fetched = _hf_list_text_gen_models(token, settings.HF_DISCOVERY_LIMIT)
+    for model in fetched:
+        if model not in candidates:
+            candidates.append(model)
 
-    logger.info("HF discovery candidates: %d", len(candidates))
-    available: list[str] = []
-    for m in candidates:
-        if _probe_model(m, token, api_url_env):
-            available.append(m)
-
-    logger.info("HF available: %d", len(available))
+    logger.info("hf discovery candidates=%s", len(candidates))
+    available = [model for model in candidates if _probe_model(model, token, api_url or None)]
+    logger.info("hf discovery available=%s", len(available))
     return available
 
 
-# -------------------- Public API --------------------
 def get_hf_client(preferred_model: str | None = None) -> tuple[LLMClient, str]:
-    token = os.getenv("HF_TOKEN")
-    if not token:
-        raise HTTPException(500, "HF_TOKEN не настроен")
+    if not settings.HF_TOKEN:
+        raise LLMError(
+            code="configuration_error",
+            message="HF_TOKEN is not configured",
+            provider="hf_api",
+            model=preferred_model,
+            status_code=503,
+            retryable=False,
+        )
 
-    api_url_env = os.getenv("HF_API_URL")
-
-    available = _discover_available_models(token, api_url_env)
+    available = _discover_available_models(
+        settings.HF_TOKEN,
+        settings.HF_API_URL,
+        settings.HF_MODEL,
+        settings.HF_MODEL_CANDIDATES,
+    )
     if not available:
-        raise HTTPException(500, "Нет доступных моделей на HuggingFace Inference")
+        raise LLMError(
+            code="configuration_error",
+            message="No available Hugging Face inference models found",
+            provider="hf_api",
+            model=preferred_model,
+            status_code=503,
+            retryable=False,
+        )
 
-    used = preferred_model if preferred_model in available else available[0]
-    client = _build_client(used, token, api_url_env)
-    return HFClientWrapper(client), used
+    used_model = preferred_model if preferred_model in available else available[0]
+    client = _build_client(used_model, settings.HF_TOKEN, settings.HF_API_URL or None)
+    return HFClientWrapper(client, model=used_model), used_model
 
 
 def get_available_hf_models() -> list[str]:
-    token = os.getenv("HF_TOKEN")
-    if not token:
+    if not settings.HF_TOKEN:
         return []
-    api_url_env = os.getenv("HF_API_URL")
-    return _discover_available_models(token, api_url_env)
+    try:
+        return _discover_available_models(
+            settings.HF_TOKEN,
+            settings.HF_API_URL,
+            settings.HF_MODEL,
+            settings.HF_MODEL_CANDIDATES,
+        )
+    except Exception as exc:
+        logger.warning("hf available models failed error=%s", exc.__class__.__name__)
+        return []

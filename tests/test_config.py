@@ -77,3 +77,33 @@ def test_get_settings_normalizes_log_level(repo_tmp_dir, monkeypatch):
     assert loaded.LOG_LEVEL == "DEBUG"
 
     config.get_settings.cache_clear()
+
+
+def test_get_settings_reads_llm_runtime_options(repo_tmp_dir, monkeypatch):
+    clear_runtime_overrides(monkeypatch)
+    env_file = repo_tmp_dir / "config" / ".env.dev"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text(
+        "\n".join(
+            [
+                "ENV=dev",
+                "DATABASE_URL=sqlite:///./dev.db",
+                "JWT_SECRET=dev-secret",
+                "LLM_REQUEST_TIMEOUT_SECONDS=12",
+                "LLM_RETRY_ATTEMPTS=3",
+                "LLM_RETRY_BACKOFF_SECONDS=0.2",
+                "HF_DISCOVERY_TIMEOUT_SECONDS=4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config.get_settings.cache_clear()
+    loaded = config.get_settings("dev", env_file=env_file)
+
+    assert loaded.LLM_REQUEST_TIMEOUT_SECONDS == 12
+    assert loaded.LLM_RETRY_ATTEMPTS == 3
+    assert loaded.LLM_RETRY_BACKOFF_SECONDS == 0.2
+    assert loaded.HF_DISCOVERY_TIMEOUT_SECONDS == 4
+
+    config.get_settings.cache_clear()

@@ -59,10 +59,18 @@ class Settings(BaseSettings):
     HF_MODEL: str = ""
     HF_API_URL: str = ""
     HF_MODEL_CANDIDATES: str = ""
+    HF_DISCOVERY_LIMIT: int = 60
+    HF_DISCOVERY_TIMEOUT_SECONDS: float = 6.0
 
     GIGA_CLIENT_ID: str = ""
     GIGA_CLIENT_SECRET: str = ""
     GIGA_SCOPE: str = "GIGACHAT_API_PERS"
+    GIGA_OAUTH_TIMEOUT_SECONDS: float = 15.0
+    GIGA_MODELS_TIMEOUT_SECONDS: float = 15.0
+
+    LLM_REQUEST_TIMEOUT_SECONDS: float = 40.0
+    LLM_RETRY_ATTEMPTS: int = 2
+    LLM_RETRY_BACKOFF_SECONDS: float = 0.5
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
@@ -73,6 +81,33 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
         return (value or "INFO").strip().upper()
+
+    @field_validator(
+        "HF_DISCOVERY_LIMIT",
+        "LLM_RETRY_ATTEMPTS",
+        mode="before",
+    )
+    @classmethod
+    def normalize_int_settings(cls, value: int) -> int:
+        normalized = int(value)
+        if normalized < 0:
+            raise ValueError("Integer settings must be non-negative.")
+        return normalized
+
+    @field_validator(
+        "HF_DISCOVERY_TIMEOUT_SECONDS",
+        "GIGA_OAUTH_TIMEOUT_SECONDS",
+        "GIGA_MODELS_TIMEOUT_SECONDS",
+        "LLM_REQUEST_TIMEOUT_SECONDS",
+        "LLM_RETRY_BACKOFF_SECONDS",
+        mode="before",
+    )
+    @classmethod
+    def normalize_float_settings(cls, value: float) -> float:
+        normalized = float(value)
+        if normalized < 0:
+            raise ValueError("Timeout and backoff settings must be non-negative.")
+        return normalized
 
     @property
     def sync_database_url(self) -> str:

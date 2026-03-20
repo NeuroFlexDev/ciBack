@@ -1,15 +1,16 @@
+from __future__ import annotations
+
 import base64
-import logging
-import os
 import time
 import uuid
 
 import requests
-from fastapi import HTTPException
 
-from app.services.llm_types import LLMClient
+from app.core.config import settings
+from app.services.llm_types import LLMClient, LLMError, LLMInvocationMeta
+from log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 GIGA_OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 GIGA_API_BASE = "https://gigachat.devices.sberbank.ru/api/v1"
@@ -21,6 +22,7 @@ class GigaChatClient(LLMClient):
     def __init__(self, model: str, scope: str = "GIGACHAT_API_PERS"):
         self.model = model
         self.scope = scope
+        self.last_invocation = LLMInvocationMeta(provider="gigachat", model=model)
 
     def generate(self, prompt: str, max_tokens: int = 1024) -> str:
         token = _get_access_token(self.scope)
@@ -38,33 +40,80 @@ class GigaChatClient(LLMClient):
             "Authorization": f"Bearer {token}",
         }
         try:
-            r = requests.post(
+            response = requests.post(
                 f"{GIGA_API_BASE}/chat/completions",
                 json=payload,
                 headers=headers,
-                timeout=40,
+                timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
                 verify=True,
             )
-            r.raise_for_status()
-        except Exception as e:
-            raise HTTPException(500, f"GigaChat request failed: {e}")
-        js = r.json()
-        return js["choices"][0]["message"]["content"]
+            response.raise_for_status()
+        except requests.Timeout as exc:
+            raise LLMError(
+                code="timeout",
+                message="GigaChat request timed out",
+                provider="gigachat",
+                model=self.model,
+                status_code=504,
+                retryable=True,
+            ) from exc
+        except requests.HTTPError as exc:
+            raise LLMError(
+                code="provider_http_error",
+                message="GigaChat request failed",
+                provider="gigachat",
+                model=self.model,
+                status_code=503,
+                retryable=False,
+                details={"response_status": exc.response.status_code if exc.response else None},
+            ) from exc
+        except Exception as exc:
+            error_text = f"{exc.__class__.__name__}: {exc}".lower()
+            if "timeout" in error_text:
+                raise LLMError(
+                    code="timeout",
+                    message="GigaChat request timed out",
+                    provider="gigachat",
+                    model=self.model,
+                    status_code=504,
+                    retryable=True,
+                ) from exc
+            raise LLMError(
+                code="provider_error",
+                message="GigaChat request failed",
+                provider="gigachat",
+                model=self.model,
+                status_code=503,
+                retryable=False,
+                details={"error_type": exc.__class__.__name__},
+            ) from exc
+
+        payload_json = response.json()
+        choice = payload_json["choices"][0]["message"]["content"]
+        usage = payload_json.get("usage")
+        finish_reason = None
+        if payload_json.get("choices"):
+            finish_reason = payload_json["choices"][0].get("finish_reason")
+        self.last_invocation = LLMInvocationMeta(
+            provider="gigachat",
+            model=self.model,
+            token_usage=usage,
+            finish_reason=finish_reason,
+        )
+        return choice
 
 
-# -------------------- helpers --------------------
 def _basic_header() -> str:
-    cid = os.getenv("GIGA_CLIENT_ID")
-    csec = os.getenv("GIGA_CLIENT_SECRET")
-    if not cid or not csec:
-        raise HTTPException(500, "GIGA_CLIENT_ID/GIGA_CLIENT_SECRET не заданы")
-    # секрет должен быть НЕ base64; если ты сохранил уже b64, сначала декодни
-    if ":" in csec:
-        cred = f"{cid}:{csec}"
-    else:
-        # предполагаем что GIGA_CLIENT_SECRET — чистый секрет без id
-        cred = f"{cid}:{csec}"
-    return base64.b64encode(cred.encode()).decode()
+    if not settings.GIGA_CLIENT_ID or not settings.GIGA_CLIENT_SECRET:
+        raise LLMError(
+            code="configuration_error",
+            message="GigaChat credentials are not configured",
+            provider="gigachat",
+            status_code=503,
+            retryable=False,
+        )
+    credentials = f"{settings.GIGA_CLIENT_ID}:{settings.GIGA_CLIENT_SECRET}"
+    return base64.b64encode(credentials.encode()).decode()
 
 
 def _get_access_token(scope: str) -> str:
@@ -80,56 +129,107 @@ def _get_access_token(scope: str) -> str:
     }
     data = {"scope": scope}
     try:
-        r = requests.post(GIGA_OAUTH_URL, headers=headers, data=data, timeout=15, verify=True)
-        r.raise_for_status()
-    except requests.HTTPError as e:
-        raise HTTPException(
-            500,
-            f"GigaChat token HTTP error: {e.response.status_code} {e.response.text}",
+        response = requests.post(
+            GIGA_OAUTH_URL,
+            headers=headers,
+            data=data,
+            timeout=settings.GIGA_OAUTH_TIMEOUT_SECONDS,
+            verify=True,
         )
-    except Exception as e:
-        raise HTTPException(500, f"GigaChat token request failed: {e}")
+        response.raise_for_status()
+    except requests.Timeout as exc:
+        raise LLMError(
+            code="timeout",
+            message="GigaChat token request timed out",
+            provider="gigachat",
+            status_code=504,
+            retryable=True,
+        ) from exc
+    except requests.HTTPError as exc:
+        raise LLMError(
+            code="provider_http_error",
+            message="GigaChat token request failed",
+            provider="gigachat",
+            status_code=503,
+            retryable=False,
+            details={"response_status": exc.response.status_code if exc.response else None},
+        ) from exc
+    except Exception as exc:
+        error_text = f"{exc.__class__.__name__}: {exc}".lower()
+        if "timeout" in error_text:
+            raise LLMError(
+                code="timeout",
+                message="GigaChat token request timed out",
+                provider="gigachat",
+                status_code=504,
+                retryable=True,
+            ) from exc
+        raise LLMError(
+            code="provider_error",
+            message="GigaChat token request failed",
+            provider="gigachat",
+            status_code=503,
+            retryable=False,
+            details={"error_type": exc.__class__.__name__},
+        ) from exc
 
-    js = r.json()
-    token = js["access_token"]
-    exp_ms = js.get("expires_at", int((now + 1700) * 1000))
+    payload_json = response.json()
+    token = payload_json["access_token"]
+    expires_at_ms = payload_json.get("expires_at", int((now + 1700) * 1000))
     _token_cache["val"] = token
-    _token_cache["exp"] = exp_ms / 1000
+    _token_cache["exp"] = expires_at_ms / 1000
     return token
 
 
 def list_gigachat_models(scope: str | None = None) -> list[str]:
-    token = _get_access_token(scope or os.getenv("GIGA_SCOPE", "GIGACHAT_API_PERS"))
+    token = _get_access_token(scope or settings.GIGA_SCOPE)
     headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
     try:
-        r = requests.get(f"{GIGA_API_BASE}/models", headers=headers, timeout=15, verify=True)
-        r.raise_for_status()
-    except Exception as e:
-        raise HTTPException(500, f"Ошибка получения списка моделей GigaChat: {e}")
-    js = r.json()
-    # Ответ может быть {"data": [...]} или просто list
-    if isinstance(js, dict) and "data" in js:
-        models = js["data"]
-    else:
-        models = js
-    ids = []
-    for m in models:
-        mid = m.get("id") or m.get("model")
-        if mid:
-            ids.append(mid)
+        response = requests.get(
+            f"{GIGA_API_BASE}/models",
+            headers=headers,
+            timeout=settings.GIGA_MODELS_TIMEOUT_SECONDS,
+            verify=True,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        raise LLMError(
+            code="provider_error",
+            message="Unable to fetch GigaChat models",
+            provider="gigachat",
+            status_code=503,
+            retryable=False,
+            details={"error_type": exc.__class__.__name__},
+        ) from exc
+
+    payload_json = response.json()
+    models = payload_json["data"] if isinstance(payload_json, dict) and "data" in payload_json else payload_json
+    ids: list[str] = []
+    for model in models:
+        model_id = model.get("id") or model.get("model")
+        if model_id:
+            ids.append(model_id)
     return ids
 
 
 def get_gigachat_client(preferred_model: str | None = None) -> tuple[LLMClient, str]:
     models = list_gigachat_models()
     if not models:
-        raise HTTPException(500, "Нет доступных GigaChat моделей")
-    used = preferred_model if preferred_model in models else models[0]
-    return GigaChatClient(used, scope=os.getenv("GIGA_SCOPE", "GIGACHAT_API_PERS")), used
+        raise LLMError(
+            code="configuration_error",
+            message="No available GigaChat models found",
+            provider="gigachat",
+            model=preferred_model,
+            status_code=503,
+            retryable=False,
+        )
+    used_model = preferred_model if preferred_model in models else models[0]
+    return GigaChatClient(used_model, scope=settings.GIGA_SCOPE), used_model
 
 
 def get_available_giga_models() -> list[str]:
     try:
         return list_gigachat_models()
-    except Exception:
+    except Exception as exc:
+        logger.warning("gigachat available models failed error=%s", exc.__class__.__name__)
         return []
