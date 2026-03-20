@@ -5,12 +5,24 @@ from typing import Optional, List
 
 class LessonRepository:
     @staticmethod
+    def get_module(db: Session, course_id: int, module_id: int) -> Optional[Module]:
+        return (
+            db.query(Module)
+            .filter(
+                Module.id == module_id,
+                Module.course_id == course_id,
+                Module.is_deleted == False,
+            )
+            .first()
+        )
+
+    @staticmethod
     def add_lesson(db: Session, course_id: int, module_id: int, lesson_create) -> Lesson:
         """
         Добавляет новый урок к модулю конкретного курса.
         Проверяет, что модуль существует и принадлежит указанному курсу.
         """
-        module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id, Module.is_deleted == False).first()
+        module = LessonRepository.get_module(db, course_id, module_id)
         if not module:
             raise ValueError("Module not found for given course")
 
@@ -29,10 +41,10 @@ class LessonRepository:
         """
         Возвращает список всех уроков для модуля конкретного курса.
         """
-        module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id, Module.is_deleted == False).first()
+        module = LessonRepository.get_module(db, course_id, module_id)
         if not module:
             raise ValueError("Module not found for given course")
-        return module.lessons
+        return [lesson for lesson in module.lessons if not lesson.is_deleted]
 
     @staticmethod
     def get_lesson(db: Session, lesson_id: int) -> Optional[Lesson]:

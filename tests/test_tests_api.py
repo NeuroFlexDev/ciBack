@@ -1,8 +1,16 @@
+from tests.auth_utils import auth_headers, register_and_login
 from tests.factories import make_course, make_module
 
 
 def test_test_crud(client, db_session):
-    course = make_course(db_session)
+    user, token = register_and_login(
+        client,
+        db_session,
+        email="tests@example.com",
+        password="secret123",
+        full_name="Test Owner",
+    )
+    course = make_course(db_session, owner_id=user.id)
     module = make_module(db_session, course_id=course.id)
     db_session.commit()
 
@@ -13,6 +21,7 @@ def test_test_crud(client, db_session):
             "answers": ["A contract", "A database"],
             "correct": "A contract",
         },
+        headers=auth_headers(token),
     )
     assert create_response.status_code == 200
     test_id = create_response.json()["id"]
@@ -34,12 +43,13 @@ def test_test_crud(client, db_session):
             "answers": ["A framework", "A queue"],
             "correct": "A framework",
         },
+        headers=auth_headers(token),
     )
     assert update_response.status_code == 200
     assert update_response.json()["question"] == "What is FastAPI?"
     assert update_response.json()["answers"] == ["A framework", "A queue"]
 
-    delete_response = client.delete(f"/api/tests/{test_id}")
+    delete_response = client.delete(f"/api/tests/{test_id}", headers=auth_headers(token))
     assert delete_response.status_code == 200
     assert delete_response.json() == {"message": "Test deleted"}
 

@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from tests.auth_utils import auth_headers, register_and_login
 from tests.factories import make_course, make_cs
 
 
@@ -28,9 +29,20 @@ def patch_llm_modules(monkeypatch):
 
 
 def test_generate_modules_ok(client, db_session, patch_llm_modules):
-    c = make_course(db_session)
+    user, token = register_and_login(
+        client,
+        db_session,
+        email="generator@example.com",
+        password="secret123",
+        full_name="Generator Owner",
+    )
+    c = make_course(db_session, owner_id=user.id)
     cs = make_cs(db_session, course_id=c.id)
-    r = client.get(f"/api/courses/{c.id}/generate_modules", params={"cs_id": cs.id})
+    r = client.get(
+        f"/api/courses/{c.id}/generate_modules",
+        params={"cs_id": cs.id},
+        headers=auth_headers(token),
+    )
     assert r.status_code == 200
     # модули реально записались
     mods = client.get(f"/api/courses/{c.id}/modules/").json()
@@ -44,6 +56,17 @@ def test_generate_modules_ok(client, db_session, patch_llm_modules):
 
 
 def test_generate_modules_bad_cs(client, db_session):
-    c = make_course(db_session)
-    r = client.get(f"/api/courses/{c.id}/generate_modules", params={"cs_id": 999})
+    user, token = register_and_login(
+        client,
+        db_session,
+        email="generator2@example.com",
+        password="secret123",
+        full_name="Generator Owner 2",
+    )
+    c = make_course(db_session, owner_id=user.id)
+    r = client.get(
+        f"/api/courses/{c.id}/generate_modules",
+        params={"cs_id": 999},
+        headers=auth_headers(token),
+    )
     assert r.status_code == 404

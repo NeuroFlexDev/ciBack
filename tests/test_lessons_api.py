@@ -1,8 +1,16 @@
+from tests.auth_utils import auth_headers, register_and_login
 from tests.factories import make_course, make_module
 
 
 def test_lesson_crud(client, db_session):
-    course = make_course(db_session)
+    user, token = register_and_login(
+        client,
+        db_session,
+        email="lessons@example.com",
+        password="secret123",
+        full_name="Lesson Owner",
+    )
+    course = make_course(db_session, owner_id=user.id)
     module = make_module(db_session, course_id=course.id)
     db_session.commit()
 
@@ -12,7 +20,11 @@ def test_lesson_crud(client, db_session):
         "title": "Lesson 1",
         "description": "some content",
     }
-    r = client.post(f"/api/courses/{course.id}/modules/{module.id}/lessons/", json=payload)
+    r = client.post(
+        f"/api/courses/{course.id}/modules/{module.id}/lessons/",
+        json=payload,
+        headers=auth_headers(token),
+    )
     assert r.status_code == 200
     lid = r.json()["id"]
 
@@ -22,12 +34,12 @@ def test_lesson_crud(client, db_session):
     assert any(l["id"] == lid for l in r.json())
 
     # update
-    r = client.put(f"/api/lessons/{lid}", json={"title": "Lesson 2"})
+    r = client.put(f"/api/lessons/{lid}", json={"title": "Lesson 2"}, headers=auth_headers(token))
     assert r.status_code == 200
     assert r.json()["title"] == "Lesson 2"
 
     # delete
-    r = client.delete(f"/api/lessons/{lid}")
+    r = client.delete(f"/api/lessons/{lid}", headers=auth_headers(token))
     assert r.status_code == 200
 
     r = client.get(f"/api/lessons/{lid}")

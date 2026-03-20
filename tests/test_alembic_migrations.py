@@ -58,8 +58,11 @@ def test_alembic_upgrade_head_creates_expected_schema(repo_tmp_dir):
 
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     try:
-        tables = set(inspect(engine).get_table_names())
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        user_columns = {column["name"] for column in inspector.get_columns("users")}
     finally:
         engine.dispose()
 
     assert EXPECTED_TABLES.issubset(tables)
+    assert "role" in user_columns

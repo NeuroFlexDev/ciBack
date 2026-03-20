@@ -13,6 +13,7 @@ class UserCreate(UserBase):
 
 class UserRead(UserBase):
     id: int
+    role: str
     model_config = ConfigDict(from_attributes=True)
 
 

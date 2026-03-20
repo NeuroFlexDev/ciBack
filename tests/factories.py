@@ -3,6 +3,8 @@ from app.models.course import Course
 from app.models.course_structure import CourseStructure
 from app.models.lesson import Lesson
 from app.models.module import Module
+from app.models.user import User
+from app.services.security import hash_password
 import json
 
 def make_course(db, **kwargs):
@@ -11,6 +13,7 @@ def make_course(db, **kwargs):
         description=kwargs.get("description", "desc"),
         level=kwargs.get("level", "1"),
         language=kwargs.get("language", "ru"),
+        owner_id=kwargs.get("owner_id"),
     )
     db.add(c)
     db.commit()
@@ -48,3 +51,16 @@ def make_lesson(db, **kwargs):
     db.commit()
     db.refresh(l)
     return l
+
+
+def make_user(db, **kwargs):
+    user = User(
+        email=kwargs.get("email", "user@example.com"),
+        full_name=kwargs.get("full_name", "Test User"),
+        hashed_password=kwargs.get("hashed_password", hash_password(kwargs.get("password", "secret123"))),
+        role=kwargs.get("role", "student"),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user

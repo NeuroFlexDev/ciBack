@@ -20,7 +20,8 @@ class UserRepository:
         user = User(
             email=user_in.email,
             full_name=user_in.full_name,
-            hashed_password=hashed_password
+            hashed_password=hashed_password,
+            role="student",
         )
         db.add(user)
         db.commit()

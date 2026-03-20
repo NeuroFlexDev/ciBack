@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
+from app.models.user import User
 from app.repositories.course_structure import CourseStructureRepository
 from app.schemas.common import MessageResponse
 from app.schemas.course_structure import (
@@ -12,6 +13,8 @@ from app.schemas.course_structure import (
     CourseStructureResponse,
     CourseStructureUpdate,
 )
+from app.services.access_control import ensure_can_manage_templates
+from app.services.auth import get_current_user_dep
 
 router = APIRouter(tags=["Course Structure"])
 logger = logging.getLogger(__name__)
@@ -47,15 +50,20 @@ def build_course_structure_response(structure) -> CourseStructureResponse:
     summary="Создание структуры курса",
     response_model=CourseStructureResponse,
 )
-def create_course_structure(struct: CourseStructureCreate, db: Session = Depends(get_db)):
+def create_course_structure(
+    struct: CourseStructureCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user_dep),
+):
     try:
+        ensure_can_manage_templates(user)
         return build_course_structure_response(CourseStructureRepository.create(db, struct))
     except HTTPException:
         raise
     except Exception as exc:
         db.rollback()
         logger.error("Failed to create course structure: %s", str(exc), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to create course structure")
+        raise HTTPException(status_code=500, detail="Failed to create course structure") from exc
 
 
 @router.get(
@@ -70,7 +78,7 @@ def get_all_course_structures(db: Session = Depends(get_db)):
         raise
     except Exception as exc:
         logger.error("Failed to list course structures: %s", str(exc), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to list course structures")
+        raise HTTPException(status_code=500, detail="Failed to list course structures") from exc
 
 
 @router.get(
@@ -88,7 +96,7 @@ def get_course_structure(cs_id: int, db: Session = Depends(get_db)):
         raise
     except Exception as exc:
         logger.error("Failed to get course structure: %s", str(exc), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get course structure")
+        raise HTTPException(status_code=500, detail="Failed to get course structure") from exc
 
 
 @router.put(
@@ -96,8 +104,14 @@ def get_course_structure(cs_id: int, db: Session = Depends(get_db)):
     summary="Обновление структуры курса",
     response_model=CourseStructureResponse,
 )
-def update_course_structure(cs_id: int, struct_update: CourseStructureUpdate, db: Session = Depends(get_db)):
+def update_course_structure(
+    cs_id: int,
+    struct_update: CourseStructureUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user_dep),
+):
     try:
+        ensure_can_manage_templates(user)
         cs = CourseStructureRepository.get_by_id(db, cs_id)
         if not cs:
             raise HTTPException(status_code=404, detail="Course structure not found")
@@ -109,7 +123,7 @@ def update_course_structure(cs_id: int, struct_update: CourseStructureUpdate, db
     except Exception as exc:
         db.rollback()
         logger.error("Failed to update course structure: %s", str(exc), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to update course structure")
+        raise HTTPException(status_code=500, detail="Failed to update course structure") from exc
 
 
 @router.delete(
@@ -117,8 +131,13 @@ def update_course_structure(cs_id: int, struct_update: CourseStructureUpdate, db
     summary="Удаление структуры курса",
     response_model=MessageResponse,
 )
-def delete_course_structure(cs_id: int, db: Session = Depends(get_db)):
+def delete_course_structure(
+    cs_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user_dep),
+):
     try:
+        ensure_can_manage_templates(user)
         cs = CourseStructureRepository.get_by_id(db, cs_id)
         if not cs:
             raise HTTPException(status_code=404, detail="Course structure not found")
@@ -129,4 +148,4 @@ def delete_course_structure(cs_id: int, db: Session = Depends(get_db)):
     except Exception as exc:
         db.rollback()
         logger.error("Failed to delete course structure: %s", str(exc), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to delete course structure")
+        raise HTTPException(status_code=500, detail="Failed to delete course structure") from exc

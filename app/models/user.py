@@ -11,6 +11,7 @@ class User(Base, BaseModelMixin):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
+    role = Column(String, nullable=False, default="student", server_default="student")
 
     courses = relationship("Course", back_populates="owner")
     feedback = relationship("Feedback", back_populates="author")

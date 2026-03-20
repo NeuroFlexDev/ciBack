@@ -4,7 +4,7 @@ from typing import Optional, List
 
 class CourseRepository:
     @staticmethod
-    def create(db: Session, course_create):
+    def create(db: Session, course_create, *, owner_id: int | None = None):
         """
         Создает курс в базе данных.
         """
@@ -13,6 +13,7 @@ class CourseRepository:
             description=course_create.description,
             level=course_create.level,
             language=course_create.language,
+            owner_id=owner_id,
         )
         db.add(new_course)
         db.commit()
@@ -24,11 +25,11 @@ class CourseRepository:
         """
         Возвращает список всех курсов, сохраненных в базе данных.
         """
-        return db.query(Course).all()
+        return db.query(Course).filter(Course.is_deleted == False).all()
 
     @staticmethod
     def get_by_id(db: Session, course_id: int) -> Optional[Course]:
-        return db.query(Course).filter(Course.id == course_id).first()
+        return db.query(Course).filter(Course.id == course_id, Course.is_deleted == False).first()
 
     @staticmethod
     def update(db: Session, course: Course, update_data: dict):

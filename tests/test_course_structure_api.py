@@ -1,4 +1,15 @@
-def test_course_structure_crud(client):
+from tests.auth_utils import auth_headers, register_and_login
+
+
+def test_course_structure_crud(client, db_session):
+    _, token = register_and_login(
+        client,
+        db_session,
+        email="editor@example.com",
+        password="secret123",
+        full_name="Editor User",
+        role="editor",
+    )
     create_response = client.post(
         "/api/course-structure/",
         json={
@@ -9,6 +20,7 @@ def test_course_structure_crud(client):
             "final_test": True,
             "content_types": ["theory", "quiz"],
         },
+        headers=auth_headers(token),
     )
     assert create_response.status_code == 200
     structure_id = create_response.json()["id"]
@@ -26,12 +38,13 @@ def test_course_structure_crud(client):
     update_response = client.put(
         f"/api/course-structure/{structure_id}",
         json={"content_types": ["video"], "final_test": False},
+        headers=auth_headers(token),
     )
     assert update_response.status_code == 200
     assert update_response.json()["content_types"] == ["video"]
     assert update_response.json()["final_test"] is False
 
-    delete_response = client.delete(f"/api/course-structure/{structure_id}")
+    delete_response = client.delete(f"/api/course-structure/{structure_id}", headers=auth_headers(token))
     assert delete_response.status_code == 200
     assert delete_response.json() == {"message": "Course structure deleted"}
 
