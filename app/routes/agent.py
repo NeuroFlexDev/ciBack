@@ -1,28 +1,24 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
-from app.models.lesson import Lesson
-from app.models.theory import Theory
-from app.services.agents.course_agent import get_course_agent
+from app.models.user import User
+from app.schemas.agent import ImproveTheoryRequest, ImproveTheoryResponse
+from app.services.agent_service import improve_theory_for_lesson
+from app.services.auth import get_current_user_dep
 
-router = APIRouter()
+router = APIRouter(prefix="/agent", tags=["Agent"])
 
 
-@router.get("/agent/improve-theory", summary="Агент: улучшение теории по lesson_id и цели")
+@router.post("/improve-theory", summary="Improve lesson theory", response_model=ImproveTheoryResponse)
 def improve_theory(
-    lesson_id: int = Query(...), goal: str = Query(...), db: Session = Depends(get_db)
+    payload: ImproveTheoryRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user_dep),
 ):
-    # Проверяем существование урока и теории
-    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
-    if not lesson:
-        raise HTTPException(404, detail="❌ Урок не найден")
-
-    theory = db.query(Theory).filter(Theory.lesson_id == lesson_id).first()
-    if not theory:
-        raise HTTPException(404, detail="❌ Теория для урока не найдена")
-
-    agent = get_course_agent()
-    result = agent.invoke({"lesson_id": lesson_id, "theory": theory.content, "goal": goal})
-
-    return {"original": theory.content, "improved": result}
+    return improve_theory_for_lesson(
+        db,
+        user=user,
+        lesson_id=payload.lesson_id,
+        goal=payload.goal,
+    )

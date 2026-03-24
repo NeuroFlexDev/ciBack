@@ -25,6 +25,12 @@ def clear_index() -> None:
     metadata = []
 
 
+def get_index_status() -> dict[str, Any]:
+    if index is None:
+        return {"status": "cold", "items": len(metadata)}
+    return {"status": "ready", "items": len(metadata)}
+
+
 def split_text(text: str, chunk_size: int = 160, overlap: int = 30) -> list[str]:
     words = text.split()
     if not words:

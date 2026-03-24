@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, inspect
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TABLES = {
     "alembic_version",
+    "chat_messages",
+    "chat_sessions",
     "course_structure",
     "course_versions",
     "courses",

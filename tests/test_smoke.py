@@ -17,7 +17,12 @@ def test_root():
 def test_healthz():
     r = client.get("/api/healthz")
     assert r.status_code == 200
-    assert r.json().get("ok") is True
+    body = r.json()
+    assert body.get("ok") is True
+    assert body.get("db") == "up"
+    assert body.get("vector_index", {}).get("status") in {"cold", "ready"}
+    assert body.get("file_storage", {}).get("status") == "up"
+    assert body.get("queue", {}).get("status") == "not_configured"
 
 
 def test_readiness(client):
@@ -26,4 +31,4 @@ def test_readiness(client):
     body = r.json()
     assert body.get("ok") is True
     assert body.get("db") == "up"
-    
+    assert body.get("file_storage", {}).get("status") == "up"

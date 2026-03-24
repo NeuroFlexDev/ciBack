@@ -36,5 +36,11 @@ def get_logger(name: str = "app") -> logging.Logger:
     return logger
 
 
-def set_request_id(value: str | None) -> None:
-    request_id_ctx.set(value or str(uuid.uuid4()))
+def set_request_id(value: str | None) -> str:
+    request_id = value or str(uuid.uuid4())
+    request_id_ctx.set(request_id)
+    return request_id
+
+
+def clear_request_id() -> None:
+    request_id_ctx.set(None)

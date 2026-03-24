@@ -12,6 +12,7 @@ class CourseVersion(Base, BaseModelMixin):
     description = Column(Text)
     level = Column(Integer)
     language = Column(Integer)
+    snapshot_data = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     modules = relationship("ModuleVersion", back_populates="course_version")

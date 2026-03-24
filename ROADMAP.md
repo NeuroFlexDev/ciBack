@@ -1,32 +1,25 @@
 # Roadmap
 
-## Milestone 0: Stabilize To Pilot
+## Milestone 0: Pilot Ready
 
-- Привести конфигурацию окружений к одному рабочему контракту.
-- Убрать конфликт `create_all()` и Alembic.
-- Починить theory/task/test/course-structure/versioning endpoints.
-- Закрыть write-endpoints JWT-авторизацией.
-- Довести до рабочего состояния минимальный RAG-flow `upload -> index -> search`.
-- Расширить тесты до pilot-minimum и вернуть suite в зелёное состояние.
+- Keep the core scope stable: auth, course CRUD, module/lesson CRUD, theory/tasks/tests CRUD, RAG upload/search, course graph, feedback, agent-assisted theory improvement, and version snapshot/restore.
+- Run database changes only through Alembic and keep `alembic upgrade head` green on a clean database.
+- Keep `docker-compose` startup migration-aware and make `/api/healthz` and `/api/readiness` reflect DB, vector index, temp storage, and queue status.
+- Keep the public API covered by request/response schemas and regression tests.
+- Keep `pytest -q` green before release.
 
 ## Milestone 1: Harden Pilot
 
-- Нормализовать LLM service layer, retries, timeouts и redaction.
-- Перевести чат на persistent storage и добавить course-aware context.
-- Ввести owner-based access или минимальные роли.
-- Добавить реальные health/readiness сигналы и базовые метрики.
-- Синхронизировать README и OpenAPI с фактическим API.
+- Add persistent/vector storage lifecycle beyond in-memory FAISS.
+- Add refresh-token flow, token rotation, and rate limiting for LLM endpoints.
+- Improve request logging into a more structured operational format.
+- Expand OpenAPI examples and field descriptions for the pilot surface.
+- Decide whether chat needs a dedicated course-QA endpoint separate from generic chat send.
 
 ## Milestone 2: Post-Pilot Expansion
 
-- Очередь фоновых задач.
-- Storage abstraction для S3/MinIO.
-- Rate limiting и anti-abuse для LLM.
+- Background jobs for long-running generation and indexing.
+- Storage abstraction for local disk vs. S3/MinIO.
+- Metrics and tracing (Prometheus/OpenTelemetry).
 - Compliance/PII processing.
-- SCORM/xAPI экспорт.
-- Полный observability stack.
-
-## Reference
-
-- Детальная разбивка по приоритетам: `PILOT_READINESS_PLAN.md`
-- Детальный аудит и риски: `PILOT_GAP_ANALYSIS.md`
+- SCORM/xAPI export.

@@ -20,44 +20,51 @@ class UploadService:
     def generate_and_save_lesson_content(db: Session, course_id: int, lesson_id: int):
         course = UploadRepository.get_course(db, course_id)
         if not course:
-            raise HTTPException(404, "❌ Курс не найден")
+            raise HTTPException(404, "Course not found")
         lesson = UploadRepository.get_lesson(db, lesson_id)
         if not lesson:
-            raise HTTPException(404, "❌ Урок не найден")
+            raise HTTPException(404, "Lesson not found")
+
         content_data = generate_from_prompt(
             "lesson_content_prompt.j2",
             course_name=course.name,
             course_description=course.description,
             lesson_title=lesson.title,
         )
-        existing = UploadRepository.get_theory(db, lesson.id)
-        if existing:
-            existing.content = content_data.get("theory", "")
+
+        existing_theory = UploadRepository.get_theory(db, lesson.id)
+        if existing_theory:
+            existing_theory.content = content_data.get("theory", "")
         else:
-            theory = Theory(lesson_id=lesson.id, content=content_data.get("theory", ""))
-            db.add(theory)
-        db.query(Task).filter(Task.module_id == lesson.module_id).delete()
-        db.query(Test).filter(Test.module_id == lesson.module_id).delete()
+            db.add(Theory(lesson_id=lesson.id, content=content_data.get("theory", "")))
+
+        db.query(Task).filter(Task.lesson_id == lesson.id).delete()
+        db.query(Test).filter(Test.lesson_id == lesson.id).delete()
+
         for task in content_data.get("tasks", []):
             db.add(
                 Task(
                     module_id=lesson.module_id,
-                    name=task.get("name", "Задание"),
+                    lesson_id=lesson.id,
+                    name=task.get("name", "Task"),
                     description=task.get("description", ""),
                 )
             )
+
         for question in content_data.get("questions", []):
             db.add(
                 Test(
                     module_id=lesson.module_id,
+                    lesson_id=lesson.id,
                     question=question.get("question", ""),
                     answers=json.dumps(question.get("answers", [])),
                     correct_answer=question.get("correct", ""),
                 )
             )
+
         db.commit()
         return {
-            "message": "Контент сгенерирован и сохранен",
+            "message": "Lesson content generated and saved",
             "questions": content_data.get("questions", []),
             "tasks": content_data.get("tasks", []),
         }

@@ -15,3 +15,4 @@ class User(Base, BaseModelMixin):
 
     courses = relationship("Course", back_populates="owner")
     feedback = relationship("Feedback", back_populates="author")
+    chat_sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")

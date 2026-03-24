@@ -51,6 +51,11 @@ class LangChainEngine:
         model: str | None = None,
         expect_json: bool = False,
     ) -> dict[str, Any]:
-        question = history[-1]["content"] if history else ""
-        text = self.chain.invoke({"question": question})
+        if history:
+            transcript = "\n".join(
+                f"{item.get('role', 'user')}: {item.get('content', '')}" for item in history
+            )
+        else:
+            transcript = ""
+        text = self.chain.invoke({"question": transcript})
         return {"text": text}

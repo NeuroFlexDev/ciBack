@@ -37,6 +37,7 @@ class TestResponse(BaseModel):
     answers: List[str]
     correct: str
     module_id: int
+    lesson_id: int | None = None
     is_deleted: bool
 
     model_config = ConfigDict(from_attributes=True)

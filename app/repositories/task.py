@@ -14,7 +14,12 @@ class TaskRepository:
         if not module:
             raise ValueError("Module not found")
 
-        task = Task(name=payload.name, description=payload.description, module_id=module.id)
+        task = Task(
+            name=payload.name,
+            description=payload.description,
+            module_id=module.id,
+            lesson_id=None,
+        )
         db.add(task)
         db.commit()
         db.refresh(task)

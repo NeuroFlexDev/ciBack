@@ -4,7 +4,11 @@ from app.models.feedback import Feedback
 
 
 def get_feedback_summary(lesson_id: int, db) -> str:
-    feedbacks = db.query(Feedback).filter(Feedback.lesson_id == lesson_id).all()
+    feedbacks = (
+        db.query(Feedback)
+        .filter(Feedback.lesson_id == lesson_id, Feedback.is_deleted == False)
+        .all()
+    )
     if not feedbacks:
         return ""
 

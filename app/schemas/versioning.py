@@ -35,3 +35,9 @@ class LessonVersionResponse(BaseModel):
     is_deleted: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RestoreCourseVersionResponse(BaseModel):
+    ok: bool
+    course_id: int
+    course_version_id: int

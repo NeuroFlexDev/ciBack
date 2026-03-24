@@ -6,12 +6,19 @@ python-multipart
 sqlalchemy
 psycopg2-binary
 jinja2
-python-docx 
+python-docx
 PyMuPDF
 faiss-cpu
 feedparser
 sentence-transformers
 pydantic-settings
+huggingface-hub
+python-jose
+passlib
+email-validator
+langchain-core
+networkx
+pytest
 alembic==1.17.2
 # FOR DEV TEST
 # SO...

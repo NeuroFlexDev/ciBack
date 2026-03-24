@@ -23,6 +23,7 @@ def build_test_response(test: Test) -> TestResponse:
         answers=json.loads(test.answers or "[]"),
         correct=test.correct_answer,
         module_id=test.module_id,
+        lesson_id=test.lesson_id,
         is_deleted=test.is_deleted,
     )
 

@@ -17,6 +17,7 @@ class TestRepository:
 
         new_test = Test(
             module_id=module.id,
+            lesson_id=None,
             question=payload.question,
             answers=json.dumps(payload.answers),
             correct_answer=payload.correct,

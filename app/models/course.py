@@ -19,6 +19,7 @@ class Course(Base, BaseModelMixin):
     # связи
     owner = relationship("User", back_populates="courses")
     modules = relationship("Module", back_populates="course", cascade="all, delete-orphan")
+    chat_sessions = relationship("ChatSession", back_populates="course")
 
     current_version_id = Column(Integer, ForeignKey("course_versions.id"), nullable=True)
     current_version = relationship("CourseVersion", foreign_keys=[current_version_id])
