@@ -2,16 +2,14 @@ fastapi
 uvicorn
 hugchat
 requests
+feedparser
 python-multipart
 sqlalchemy
 psycopg2-binary
 jinja2
-python-docx 
+python-docx
 PyMuPDF
 faiss-cpu
-feedparser
 sentence-transformers
 pydantic-settings
 alembic==1.17.2
-# FOR DEV TEST
-# SO...

@@ -1,38 +1,74 @@
-# app/routes/auth.py
-from fastapi import APIRouter, Depends
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from app.schemas.user import UserCreate, UserRead, UserUpdate, PasswordChange
-from app.services.auth import AuthService
+
 from app.database.db import get_db
+from app.models.user import User
+from app.security import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    normalize_email,
+    verify_password,
+)
 
 router = APIRouter()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
-@router.post("/register", response_model=UserRead)
-def register(user_in: UserCreate, db: Session = Depends(get_db)):
-    user = AuthService.register(db, user_in)
-    return user
 
-@router.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = AuthService.authenticate(db, form_data.username, form_data.password)
-    token = AuthService.create_token(user.id)
-    return {"access_token": token, "token_type": "bearer"}
+class AuthCredentials(BaseModel):
+    email: str = Field(..., min_length=5, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
 
-@router.get("/me", response_model=UserRead)
-def read_me(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    user = AuthService.get_current_user(db, token)
-    return user
 
-@router.patch("/me", response_model=UserRead)
-def update_me(payload: UserUpdate, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    user = AuthService.get_current_user(db, token)
-    updated = AuthService.update_user(db, user, payload)  # реализовать метод update_user в сервисе
-    return updated
+class UserResponse(BaseModel):
+    id: int
+    email: str
 
-@router.post("/change-password")
-def change_password(data: PasswordChange, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    user = AuthService.get_current_user(db, token)
-    AuthService.change_password(db, user, data)
-    return {"ok": True}
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+@router.post("/auth/register", response_model=AuthResponse, summary="Регистрация пользователя")
+def register(payload: AuthCredentials, db: Session = Depends(get_db)):
+    email = normalize_email(payload.email)
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Пользователь с таким email уже существует",
+        )
+
+    user = User(email=email, password_hash=hash_password(payload.password))
+    db.add(user)
+    db.flush()
+
+    token = create_access_token(user)
+    return AuthResponse(
+        access_token=token,
+        user=UserResponse(id=user.id, email=user.email),
+    )
+
+
+@router.post("/auth/login", response_model=AuthResponse, summary="Вход пользователя")
+def login(payload: AuthCredentials, db: Session = Depends(get_db)):
+    email = normalize_email(payload.email)
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный email или пароль",
+        )
+
+    token = create_access_token(user)
+    return AuthResponse(
+        access_token=token,
+        user=UserResponse(id=user.id, email=user.email),
+    )
+
+
+@router.get("/auth/me", response_model=UserResponse, summary="Текущий пользователь")
+def me(current_user: User = Depends(get_current_user)):
+    return UserResponse(id=current_user.id, email=current_user.email)

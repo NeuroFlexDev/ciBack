@@ -1,16 +1,16 @@
-# app/models/user.py
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, DateTime, Integer, String, func
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModelMixin
+
 from app.database.db import Base
 
 
-class User(Base, BaseModelMixin):
+class User(Base):
     __tablename__ = "users"
 
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
-    full_name = Column(String, nullable=True)
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, nullable=False, index=True)
+    password_hash = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     courses = relationship("Course", back_populates="owner")
-    feedback = relationship("Feedback", back_populates="author")
+    course_structures = relationship("CourseStructure", back_populates="owner")

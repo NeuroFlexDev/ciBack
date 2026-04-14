@@ -1,8 +1,11 @@
 # Используем легкий Python образ
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Указываем рабочую директорию в контейнере
 WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Скопируем файл зависимостей
 COPY requirements.txt .

@@ -1,80 +1,163 @@
-# app/routes/modules.py
 import logging
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Optional
 from sqlalchemy.orm import Session
+
 from app.database.db import get_db
-from app.schemas.module import ModuleCreate, ModuleUpdate, ModuleResponse
-from app.repositories.module import ModuleRepository
+from app.models.module import Module
+from app.models.course import Course
+from app.models.user import User
+from app.security import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post(
-    "/courses/{course_id}/modules/",
-    response_model=ModuleResponse,
-    summary="Создание модуля для курса",
-)
-def add_module(course_id: int, module: ModuleCreate, db: Session = Depends(get_db)):
+# Pydantic-модель для создания модуля
+class ModuleCreate(BaseModel):
+    title: str = Field(..., min_length=1, description="Название модуля")
+
+# Pydantic-модель для обновления модуля (опциональные поля)
+class ModuleUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, description="Новое название модуля")
+
+# Pydantic-модель для ответа
+class ModuleResponse(BaseModel):
+    id: int
+    title: str
+    course_id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+def get_owned_course(db: Session, course_id: int, user_id: int) -> Course | None:
+    return (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.owner_id == user_id)
+        .first()
+    )
+
+
+def get_owned_module(db: Session, module_id: int, user_id: int) -> Module | None:
+    return (
+        db.query(Module)
+        .join(Course, Module.course_id == Course.id)
+        .filter(Module.id == module_id, Course.owner_id == user_id)
+        .first()
+    )
+
+
+@router.post("/courses/{course_id}/modules/", response_model=ModuleResponse, summary="Создание модуля для курса")
+def add_module(
+    course_id: int,
+    module: ModuleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Создает новый модуль для курса с заданным course_id.
     """
-    try:
-        new_module = ModuleRepository.add_module(db, course_id, module)
-        logger.info("Создан модуль: ID=%s для курса ID=%s", new_module.id, course_id)
-        return ModuleResponse(id=new_module.id, title=new_module.title, course_id=new_module.course_id, is_deleted=new_module.is_deleted)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    # Проверяем, существует ли курс с данным course_id
+    course = get_owned_course(db, course_id, current_user.id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
 
-@router.get(
-    "/courses/{course_id}/modules/",
-    response_model=list[ModuleResponse],
-    summary="Получение модулей курса",
-)
-def get_modules(course_id: int, db: Session = Depends(get_db)):
+    new_module = Module(
+        title=module.title,
+        course_id=course_id
+    )
+    db.add(new_module)
+    db.commit()
+    db.refresh(new_module)
+    logger.info("Создан модуль: ID=%s для курса ID=%s", new_module.id, course_id)
+    return ModuleResponse(
+        id=new_module.id,
+        title=new_module.title,
+        course_id=new_module.course_id
+    )
+
+@router.get("/courses/{course_id}/modules/", response_model=List[ModuleResponse], summary="Получение модулей курса")
+def get_modules(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Возвращает список всех модулей для курса с указанным course_id.
     """
-    try:
-        modules = ModuleRepository.list_modules(db, course_id)
-        return [ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id, is_deleted=mod.is_deleted) for mod in modules]
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    # Проверяем, существует ли курс с данным course_id
+    course = get_owned_course(db, course_id, current_user.id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
 
-@router.get(
-    "/modules/{module_id}",
-    response_model=ModuleResponse,
-    summary="Получение модуля по ID",
-)
-def get_module(module_id: int, db: Session = Depends(get_db)):
+    modules = db.query(Module).filter(Module.course_id == course_id).all()
+    return [
+        ModuleResponse(
+            id=mod.id,
+            title=mod.title,
+            course_id=mod.course_id
+        )
+        for mod in modules
+    ]
+
+@router.get("/modules/{module_id}", response_model=ModuleResponse, summary="Получение модуля по ID")
+def get_module(
+    module_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Возвращает данные модуля по его ID.
     """
-    mod = ModuleRepository.get_by_id(db, module_id)
+    mod = get_owned_module(db, module_id, current_user.id)
     if not mod:
         raise HTTPException(status_code=404, detail="Module not found")
-    return ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id, is_deleted=mod.is_deleted)
+    return ModuleResponse(
+        id=mod.id,
+        title=mod.title,
+        course_id=mod.course_id
+    )
 
 @router.put("/modules/{module_id}", response_model=ModuleResponse, summary="Обновление модуля")
-def update_module(module_id: int, module_update: ModuleUpdate, db: Session = Depends(get_db)):
+def update_module(
+    module_id: int,
+    module_update: ModuleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Обновляет данные модуля по его ID.
     """
-    mod = ModuleRepository.get_by_id(db, module_id)
+    mod = get_owned_module(db, module_id, current_user.id)
     if not mod:
         raise HTTPException(status_code=404, detail="Module not found")
-    update_data = module_update.model_dump(exclude_unset=True)
-    mod = ModuleRepository.update_module(db, mod, update_data)
+
+    update_data = module_update.dict(exclude_unset=True)
+    if "title" in update_data:
+        mod.title = update_data["title"]
+
+    db.commit()
+    db.refresh(mod)
     logger.info("Обновлен модуль: ID=%s", module_id)
-    return ModuleResponse(id=mod.id, title=mod.title, course_id=mod.course_id, is_deleted=mod.is_deleted)
+    return ModuleResponse(
+        id=mod.id,
+        title=mod.title,
+        course_id=mod.course_id
+    )
 
 @router.delete("/modules/{module_id}", summary="Удаление модуля")
-def delete_module(module_id: int, db: Session = Depends(get_db)):
+def delete_module(
+    module_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Удаляет модуль по его ID.
     """
-    mod = ModuleRepository.get_by_id(db, module_id)
+    mod = get_owned_module(db, module_id, current_user.id)
     if not mod:
         raise HTTPException(status_code=404, detail="Module not found")
-    ModuleRepository.delete_module(db, mod)
+
+    db.delete(mod)
+    db.commit()
     logger.info("Удален модуль: ID=%s", module_id)
     return {"message": f"Module with ID {module_id} successfully deleted."}
