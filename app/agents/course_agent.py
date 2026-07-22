@@ -2,7 +2,6 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.database.db import get_db_session
 from app.models.course import Course
 from app.models.lesson import Lesson
 from app.models.theory import Theory
@@ -12,13 +11,11 @@ from app.services.generation_service import generate_from_prompt
 logger = logging.getLogger(__name__)
 
 
-def get_course_agent():
+def get_course_agent(db: Session):
     def improve_theory(lesson_id: int, goal: str) -> str:
-        session: Session = get_db_session()
-
-        theory = session.query(Theory).filter(Theory.lesson_id == lesson_id).first()
-        lesson = session.query(Lesson).filter(Lesson.id == lesson_id).first()
-        course = session.query(Course).filter(Course.id == lesson.module.course_id).first()
+        theory = db.query(Theory).filter(Theory.lesson_id == lesson_id).first()
+        lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+        course = db.query(Course).filter(Course.id == lesson.module.course_id).first()
 
         if not theory or not lesson or not course:
             raise ValueError("Невозможно найти необходимые данные по lesson_id")

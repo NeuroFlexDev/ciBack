@@ -25,13 +25,24 @@ def create_chat(user_id: int, name: str = "Новый чат") -> dict:
         "user_id": user_id,
         "model": None,
         "engine": None,
+        "is_deleted": False,
     }
     MESSAGES[chat_id] = []
-    return {"id": chat_id, "name": name}
+    return {
+        "id": chat_id,
+        "name": name,
+        "model": None,
+        "engine": None,
+        "is_deleted": False,
+    }
 
 
 def list_chats(user_id: int) -> list[dict]:
-    return [{"id": c["id"], "name": c["name"]} for c in CHATS.values() if c["user_id"] == user_id]
+    return [
+        {key: c[key] for key in ("id", "name", "model", "engine", "is_deleted")}
+        for c in CHATS.values()
+        if c["user_id"] == user_id
+    ]
 
 
 def get_history(chat_id: int, user_id: int) -> list[dict]:

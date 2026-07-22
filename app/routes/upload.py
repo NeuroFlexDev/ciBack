@@ -1,92 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from app.database.db import get_db
 from app.models.course import Course
-from app.models.lesson import Lesson
-from app.models.module import Module
-from app.models.theory import Theory
-from app.models.test import Test
-from app.models.task import Task
 from app.models.user import User
 from app.services.generation_service import generate_from_prompt
 from app.services.auth_service import get_current_user
-import json
 import os
 import tempfile
 import fitz  # PyMuPDF
 from docx import Document
 
 router = APIRouter()
-
-class LessonRequest(BaseModel):
-    lesson_id: int
-
-@router.post("/courses/{course_id}/generate_lesson_content", summary="Генерация контента урока")
-def generate_and_save_lesson_content(
-    course_id: int,
-    payload: LessonRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    course = db.query(Course).filter(Course.id == course_id, Course.owner_id == current_user.id).first()
-    if not course:
-        raise HTTPException(404, "❌ Курс не найден")
-
-    lesson = (
-        db.query(Lesson)
-        .join(Module, Lesson.module_id == Module.id)
-        .join(Course, Module.course_id == Course.id)
-        .filter(Lesson.id == payload.lesson_id, Course.owner_id == current_user.id)
-        .first()
-    )
-    if not lesson:
-        raise HTTPException(404, "❌ Урок не найден")
-
-    content_data = generate_from_prompt(
-        "lesson_content_prompt.j2",
-        course_name=course.name,
-        course_description=course.description,
-        lesson_title=lesson.title
-    )
-
-    # Сохраняем теорию
-    existing = db.query(Theory).filter(Theory.lesson_id == lesson.id).first()
-    if existing:
-        existing.content = content_data.get("theory", "")
-    else:
-        theory = Theory(lesson_id=lesson.id, content=content_data.get("theory", ""))
-        db.add(theory)
-
-    # Удалим старые задачи и тесты, если нужно (можно адаптировать под soft-update)
-    db.query(Task).filter(Task.module_id == lesson.module_id).delete()
-    db.query(Test).filter(Test.module_id == lesson.module_id).delete()
-
-    # Сохраняем задачи
-    for task in content_data.get("tasks", []):
-        db.add(Task(
-            module_id=lesson.module_id,
-            name=task.get("name", "Задание"),
-            description=task.get("description", "")
-        ))
-
-    # Сохраняем тесты
-    for q in content_data.get("questions", []):
-        db.add(Test(
-            module_id=lesson.module_id,
-            question=q.get("question", ""),
-            answers=json.dumps(q.get("answers", [])),
-            correct_answer=q.get("correct", "")
-        ))
-
-    db.commit()
-
-    return {
-        "message": "✅ Контент сгенерирован и сохранён (теория, задачи, тесты)",
-        "questions": content_data.get("questions", []),
-        "tasks": content_data.get("tasks", [])
-    }
-
 
 @router.post("/courses/{course_id}/upload-description", summary="RAG: загрузка файла и обновление описания курса")
 def upload_and_update_description(

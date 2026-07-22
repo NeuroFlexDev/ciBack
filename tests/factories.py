@@ -11,6 +11,7 @@ def make_course(db, **kwargs):
         description=kwargs.get("description", "desc"),
         level=kwargs.get("level", "1"),
         language=kwargs.get("language", "ru"),
+        owner_id=kwargs.get("owner_id"),
     )
     db.add(c)
     db.commit()
@@ -27,6 +28,7 @@ def make_cs(db, **kwargs):
         questions_per_test=kwargs.get("questions_per_test", 2),
         final_test=kwargs.get("final_test", True),
         content_types=json.dumps(kwargs.get("content_types", ["theory"])),
+        owner_id=kwargs.get("owner_id"),
     )
     db.add(cs)
     db.commit()

@@ -38,11 +38,25 @@ def embed_and_add(lesson_id: int, obj_type: str, text: str):
         "text": text
     })
 
-def search(query: str, k: int = 5):
+def search(query: str, k: int = 5, allowed_lesson_ids: set[int] | None = None):
     active_model = get_model()
-    if active_model is None or not metadata:
+    if active_model is None or not metadata or allowed_lesson_ids == set():
         return []
 
     query_vec = active_model.encode([query])[0]
-    D, I = index.search(np.array([query_vec], dtype=np.float32), k)
-    return [metadata[i] for i in I[0] if i < len(metadata)]
+    candidate_count = len(metadata) if allowed_lesson_ids is not None else k
+    _, indices = index.search(
+        np.array([query_vec], dtype=np.float32),
+        min(candidate_count, len(metadata)),
+    )
+    results = []
+    for item_index in indices[0]:
+        if item_index < 0 or item_index >= len(metadata):
+            continue
+        item = metadata[item_index]
+        if allowed_lesson_ids is not None and item["lesson_id"] not in allowed_lesson_ids:
+            continue
+        results.append(item)
+        if len(results) == k:
+            break
+    return results

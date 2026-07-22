@@ -20,6 +20,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database.db import Base, get_db
+from app.core.security import create_access_token, hash_password
+from app.models.user import User
 from main import app
 
 
@@ -49,6 +51,23 @@ def db_session(engine) -> Generator:
         session.close()
         trans.rollback()
         connection.close()
+
+
+@pytest.fixture(scope="function")
+def auth_user(db_session):
+    user = User(
+        email="api-user@example.com",
+        password_hash=hash_password("password123"),
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture(scope="function")
+def auth_headers(auth_user):
+    return {"Authorization": f"Bearer {create_access_token(auth_user.id)}"}
 
 
 @pytest.fixture(scope="function")

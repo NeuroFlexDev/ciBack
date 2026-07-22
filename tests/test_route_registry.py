@@ -1,11 +1,14 @@
 from collections import Counter
 
-import pytest
-
 from main import app
 
-
-KNOWN_DUPLICATE = ("POST", "/api/courses/{course_id}/generate_lesson_content")
+REQUIRED_ROUTES = {
+    ("GET", "/api/chat/models"),
+    ("GET", "/api/graph"),
+    ("GET", "/api/search"),
+    ("GET", "/api/agent/improve-theory"),
+    ("POST", "/api/feedback/"),
+}
 
 
 def _registered_method_paths():
@@ -30,13 +33,18 @@ def _registered_method_paths():
 def test_route_registry_has_no_unexpected_duplicates():
     counts = Counter(_registered_method_paths())
     duplicates = {key for key, count in counts.items() if count > 1}
-    assert duplicates - {KNOWN_DUPLICATE} == set()
+    assert duplicates == set()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known duplicate handler in course_generator.py and upload.py",
-)
-def test_known_generate_lesson_route_is_unique():
-    counts = Counter(_registered_method_paths())
-    assert counts[KNOWN_DUPLICATE] == 1
+def test_required_routes_are_registered():
+    assert REQUIRED_ROUTES <= set(_registered_method_paths())
+
+
+def test_openapi_operation_ids_are_unique():
+    operation_ids = [
+        operation["operationId"]
+        for path_item in app.openapi()["paths"].values()
+        for operation in path_item.values()
+        if isinstance(operation, dict) and "operationId" in operation
+    ]
+    assert len(operation_ids) == len(set(operation_ids))

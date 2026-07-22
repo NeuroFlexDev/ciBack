@@ -2,7 +2,7 @@
 from tests.factories import make_course
 
 
-def test_course_crud(client, db_session):
+def test_course_crud(client, db_session, auth_headers):
     # create
     payload = {
         "title": "C1",
@@ -10,19 +10,19 @@ def test_course_crud(client, db_session):
         "level": 1,
         "language": 1,
     }
-    r = client.post("/api/courses/", json=payload)
+    r = client.post("/api/courses/", json=payload, headers=auth_headers)
     assert r.status_code == 200
     cid = r.json()["id"]
 
     # get all
-    r = client.get("/api/courses/")
+    r = client.get("/api/courses/", headers=auth_headers)
     assert any(c["id"] == cid for c in r.json())
 
     # update
-    r = client.put(f"/api/courses/{cid}", json={"title": "C2"})
+    r = client.put(f"/api/courses/{cid}", json={"title": "C2"}, headers=auth_headers)
     assert r.status_code == 200
     assert r.json()["title"] == "C2"
 
     # delete
-    r = client.delete(f"/api/courses/{cid}")
+    r = client.delete(f"/api/courses/{cid}", headers=auth_headers)
     assert r.status_code == 200
