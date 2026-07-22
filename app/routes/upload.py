@@ -10,7 +10,7 @@ from app.models.test import Test
 from app.models.task import Task
 from app.models.user import User
 from app.services.generation_service import generate_from_prompt
-from app.security import get_current_user
+from app.services.auth_service import get_current_user
 import json
 import os
 import tempfile

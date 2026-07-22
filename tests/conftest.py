@@ -7,6 +7,13 @@ from typing import Generator
 import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
 
+# Tests must never connect to a developer or deployment database. These values
+# are set before importing application modules because the engine is created at
+# import time.
+os.environ["ENV"] = "test"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["JWT_SECRET"] = "test-only-jwt-secret-at-least-32-bytes"
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

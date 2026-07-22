@@ -9,7 +9,7 @@ from app.routes import course_structure
 from app.routes import healthz
 from app.routes import theories
 from app.routes import versioning
-from app.security import get_current_user
+from app.services.auth_service import get_current_user
 
 initialize_database()
 

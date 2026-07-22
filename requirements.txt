@@ -11,5 +11,7 @@ python-docx
 PyMuPDF
 faiss-cpu
 sentence-transformers
+langchain-core
+PyJWT>=2.10,<3
 pydantic-settings
 alembic==1.17.2

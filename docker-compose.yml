@@ -3,9 +3,9 @@ services:
     image: postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ciuser
-      POSTGRES_PASSWORD: cipassword
-      POSTGRES_DB: cidb
+      POSTGRES_USER: ${POSTGRES_USER:-ciuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-cidb}
     ports:
       - "5432:5432"
     volumes:
@@ -18,8 +18,28 @@ services:
       - ./:/app
     ports:
       - "8000:8000"
-    env_file:
-      - .env.dev
+    environment:
+      ENV: ${ENV:-dev}
+      DEBUG: ${DEBUG:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-ciuser}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-cidb}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      JWT_ALG: ${JWT_ALG:-HS256}
+      ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
+      REFRESH_TOKEN_TTL_MINUTES: ${REFRESH_TOKEN_TTL_MINUTES:-1440}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      HUGGINGCHAT_PROXY_URL: ${HUGGINGCHAT_PROXY_URL:-http://ml-proxy:8001}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_MODEL: ${HF_MODEL:-}
+      HF_MODEL_CANDIDATES: ${HF_MODEL_CANDIDATES:-}
+      HF_API_URL: ${HF_API_URL:-}
+      GIGA_CLIENT_ID: ${GIGA_CLIENT_ID:-}
+      GIGA_CLIENT_SECRET: ${GIGA_CLIENT_SECRET:-}
+      GIGA_SCOPE: ${GIGA_SCOPE:-GIGACHAT_API_PERS}
     depends_on:
       - db
 

@@ -14,3 +14,4 @@ class User(Base):
 
     courses = relationship("Course", back_populates="owner")
     course_structures = relationship("CourseStructure", back_populates="owner")
+    feedback = relationship("Feedback", back_populates="author")

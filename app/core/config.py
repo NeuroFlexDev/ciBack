@@ -1,7 +1,7 @@
-import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Literal
 
-ENV_PROFILE = os.getenv("ENV", "dev")
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # Основные секции конфига
@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
     DATABASE_URL: str
-    JWT_SECRET: str
-    JWT_ALG: str = "HS256"
+    JWT_SECRET: SecretStr = Field(min_length=32)
+    JWT_ALG: Literal["HS256"] = "HS256"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_MINUTES: int = 1440
 
@@ -26,10 +26,12 @@ class Settings(BaseSettings):
     HUGGINGCHAT_PROXY_URL: str = "http://ml-proxy:8001"
     HF_TOKEN: str = ""
     HF_MODEL: str = ""
-    # Откуда брать .env
+    # Локальная разработка использует один неотслеживаемый .env. В CI и
+    # deployment переменные окружения имеют приоритет над файлом.
     model_config = SettingsConfigDict(
-        env_file=f".env.{ENV_PROFILE}",  # выбирает нужный файл профиля
-        env_file_encoding='utf-8'
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
 settings = Settings()

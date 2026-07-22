@@ -9,7 +9,7 @@ from app.models.module import Module
 from app.models.lesson import Lesson
 from app.models.course import Course
 from app.models.user import User
-from app.security import get_current_user
+from app.services.auth_service import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

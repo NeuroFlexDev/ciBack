@@ -32,13 +32,14 @@
 git clone https://github.com/your-org/NeuroLearn.git
 cd NeuroLearn/ciBack
 
-# Создаём виртуальное окружение (вне папки mlcourse!)
-python -m venv venv
-source venv/bin/activate # Linux / Mac
-.\venv\Scripts\activate.ps1 # Windows
+# Создаём локальное виртуальное окружение
+python -m venv .venv
+source .venv/bin/activate # Linux / macOS
+.\.venv\Scripts\Activate.ps1 # Windows PowerShell
 
-# Устанавливаем зависимости
-pip install -r requirements.txt
+# Устанавливаем runtime- и dev-зависимости
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
 ```
 
 > ⚠️ Папка `mlcourse/` — это твоя локальная среда с кастомными либами.
@@ -48,17 +49,27 @@ pip install -r requirements.txt
 
 ## ⚙️ Переменные окружения
 
-Создайте файл `.env` или настройте переменные окружения (см. `.env.example`):
+Скопируйте безопасный шаблон в локальный `.env`, который не добавляется в Git:
+
+```bash
+cp .env.example .env # Linux / macOS
+Copy-Item .env.example .env # Windows PowerShell
+```
+
+Затем замените локальные пароли и секреты. Для stage/prod передавайте значения
+через переменные окружения или secret storage, не создавая `.env.stage` и
+`.env.prod` в репозитории.
+
+Access-токены имеют формат JWT и подписываются `JWT_SECRET`. Двухчастные
+HMAC-токены из предыдущей реализации больше не принимаются: после обновления
+пользователям необходимо войти заново.
 
 ```env
 APP_HOST=0.0.0.0
 APP_PORT=8000
 DATABASE_URL=sqlite:///./database.db
 
-HF_EMAIL=youremail@example.com
-HF_PASS=yourpassword
-
-JWT_SECRET=change-me
+JWT_SECRET=replace-with-a-random-local-secret
 JWT_ALG=HS256
 ```
 
@@ -82,10 +93,11 @@ uvicorn main:app --reload
 ```bash
 # поднять API и PostgreSQL
 docker compose up -d --build
-docker compose up -d
 ```
 
-> В конфиге уже прописан healthcheck для PostgreSQL и автоподключение API.
+Docker Compose читает локальный `.env` для подстановки `POSTGRES_*`,
+`JWT_SECRET` и остальных настроек. Значения из `.env.example` необходимо
+заменить перед запуском.
 
 ---
 
@@ -93,10 +105,10 @@ docker compose up -d
 
 ```bash
 # запуск всех тестов
-pytest -q
+python -m pytest -q
 
 # smoke-тест health endpoint
-pytest tests/test_smoke.py::test_healthz -q
+python -m pytest tests/test_smoke.py::test_healthz -q
 ```
 
 После запуска должен открыться `/api/healthz`:
@@ -130,7 +142,7 @@ ciBack/
 ├── main.py              # Точка входа FastAPI
 ├── requirements.txt
 ├── docker-compose.yml
-├── .env.dev(stage/prod) # Переменные окружения
+├── requirements-dev.txt # Зависимости локальной разработки и тестов
 └── .env.example
 ```
 

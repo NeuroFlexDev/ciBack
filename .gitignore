@@ -1,7 +1,42 @@
-*.pyc
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-mlcourse
-cookies
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+backend_fix_*.log
+
+# Local databases and runtime data
+*.db
+*.sqlite
+*.sqlite3
+cookies/
 mlcourse/
-**/__pycache__/
-*.pyc
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local agent context
+.agents/
+CODEX_TECHNICAL_ROADMAP_LERNIUM.md
+docs/

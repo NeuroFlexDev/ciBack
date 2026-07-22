@@ -16,7 +16,7 @@ from app.models.course_structure import CourseStructure
 from app.models.user import User
 from app.services.generation_service import generate_from_prompt
 from app.services.embedding_service import embed_and_add
-from app.security import get_current_user
+from app.services.auth_service import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

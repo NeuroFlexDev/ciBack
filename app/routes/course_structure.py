@@ -7,7 +7,7 @@ from typing import List
 from app.database.db import get_db
 from app.models.course_structure import CourseStructure
 from app.models.user import User
-from app.security import get_current_user
+from app.services.auth_service import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
