@@ -15,3 +15,5 @@ class User(Base):
     courses = relationship("Course", back_populates="owner")
     course_structures = relationship("CourseStructure", back_populates="owner")
     feedback = relationship("Feedback", back_populates="author")
+    documents = relationship("Document", back_populates="owner")
+    created_graphs = relationship("CourseGraph", back_populates="creator")

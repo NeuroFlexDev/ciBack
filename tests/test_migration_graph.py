@@ -11,7 +11,10 @@ EXPECTED_TABLES = {
     "course_modules",
     "course_structure",
     "course_versions",
+    "course_graphs",
     "courses",
+    "document_chunks",
+    "documents",
     "feedback",
     "lesson_versions",
     "lessons",
@@ -84,7 +87,7 @@ def test_application_import_does_not_create_database_schema(tmp_path):
     assert json.loads(result.stdout) == []
 
 
-def test_baseline_upgrade_check_and_downgrade(tmp_path):
+def test_migrations_upgrade_check_and_downgrade(tmp_path):
     database_path = tmp_path / "migration.sqlite"
     env = os.environ.copy()
     env.update(
@@ -92,11 +95,7 @@ def test_baseline_upgrade_check_and_downgrade(tmp_path):
         JWT_SECRET="test-only-jwt-secret-at-least-32-bytes",
     )
 
-    for arguments in (
-        ("upgrade", "head"),
-        ("check",),
-        ("downgrade", "-1"),
-    ):
+    for arguments in (("upgrade", "head"), ("check",), ("downgrade", "-1")):
         subprocess.run(
             [sys.executable, "-m", "alembic", *arguments],
             check=True,
@@ -105,18 +104,39 @@ def test_baseline_upgrade_check_and_downgrade(tmp_path):
             env=env,
         )
 
-    code = (
+    inspect_code = (
         "import json; "
         "from sqlalchemy import create_engine, inspect; "
         f"engine = create_engine({env['DATABASE_URL']!r}); "
         "print(json.dumps(inspect(engine).get_table_names()))"
     )
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-c", inspect_code],
         check=True,
         capture_output=True,
         text=True,
         env=env,
     )
+    assert set(json.loads(result.stdout)) == (
+        EXPECTED_TABLES
+        - {"course_graphs", "document_chunks", "documents"}
+        | {"alembic_version"}
+    )
 
+    for arguments in (("upgrade", "head"), ("check",), ("downgrade", "base")):
+        subprocess.run(
+            [sys.executable, "-m", "alembic", *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    result = subprocess.run(
+        [sys.executable, "-c", inspect_code],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
     assert json.loads(result.stdout) == ["alembic_version"]
