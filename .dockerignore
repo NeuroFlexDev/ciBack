@@ -19,6 +19,7 @@ htmlcov
 *.sqlite
 *.sqlite3
 *.log
+uploads
 
 .agents
 .codex

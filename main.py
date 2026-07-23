@@ -2,7 +2,7 @@ import os
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import agent, auth, chat, courses, feedback, graph, lessons, modules, search, tasks, tests, upload
+from app.routes import agent, auth, chat, course_content, courses, feedback, graph, lessons, modules, search, tasks, tests, upload
 from app.routes import course_generator
 from app.routes import course_structure
 from app.routes import healthz
@@ -37,6 +37,7 @@ app.include_router(theories.router, prefix="/api", tags=["Theory"], dependencies
 app.include_router(tasks.router, prefix="/api", tags=["Tasks"], dependencies=protected_dependencies)
 app.include_router(tests.router, prefix="/api", tags=["Tests"], dependencies=protected_dependencies)
 app.include_router(upload.router, prefix="/api", tags=["Files"], dependencies=protected_dependencies)
+app.include_router(course_content.router, prefix="/api", tags=["Course Content"], dependencies=protected_dependencies)
 app.include_router(course_structure.router, prefix="/api", tags=["Course Structure"], dependencies=protected_dependencies)
 app.include_router(course_generator.router, prefix="/api", tags=["Course Generation"], dependencies=protected_dependencies)
 app.include_router(versioning.router, prefix="/api", tags=["Course Versions"], dependencies=protected_dependencies)

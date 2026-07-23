@@ -29,6 +29,7 @@ backend_fix_*.log
 *.sqlite3
 cookies/
 mlcourse/
+uploads/
 
 # Editors and operating systems
 .idea/

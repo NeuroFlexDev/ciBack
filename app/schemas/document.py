@@ -57,3 +57,26 @@ class DocumentChunkOut(DocumentChunkCreate):
     is_deleted: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DocumentPublicOut(BaseModel):
+    id: int
+    course_id: int
+    version: int
+    status: DocumentStatus
+    source_type: str
+    original_filename: str
+    mime_type: str
+    size_bytes: int
+    processing_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DocumentListOut(BaseModel):
+    items: list[DocumentPublicOut]
+    total: int
+    limit: int
+    offset: int

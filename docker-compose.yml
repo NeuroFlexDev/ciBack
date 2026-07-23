@@ -26,12 +26,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-
   web:
     build: .
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./:/app
+      - uploads_data:/data/uploads
     ports:
       - "8000:8000"
     environment:
@@ -40,6 +40,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-ciuser}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-cidb}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      UPLOAD_DIR: /data/uploads
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
       JWT_ALG: ${JWT_ALG:-HS256}
       ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
       REFRESH_TOKEN_TTL_MINUTES: ${REFRESH_TOKEN_TTL_MINUTES:-1440}
@@ -62,3 +64,4 @@ services:
 
 volumes:
   db_data:
+  uploads_data:

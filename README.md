@@ -182,6 +182,66 @@ ciBack/
 
 ## 📘 Примеры API
 
+### Canvas курса
+
+Canvas хранится в БД как неизменяемые версии. Если canvas ещё не создан,
+`GET` возвращает версию `0` и пустые массивы. В `PUT` поле `version` — версия,
+которую клиент прочитал последней; сервер создаёт следующую версию. Если canvas
+успел изменить другой запрос, API отвечает `409 Conflict`.
+
+```http
+GET /api/courses/{course_id}/canvas
+
+PUT /api/courses/{course_id}/canvas
+Content-Type: application/json
+
+{
+  "version": 0,
+  "nodes": [{"id": "module-1", "position": {"x": 0, "y": 0}}],
+  "edges": []
+}
+```
+
+Узлы должны иметь уникальные строковые `id`. Поля `source` и `target` каждой
+связи должны указывать на существующие узлы. Дополнительные поля React Flow
+сохраняются.
+
+### Документы курса и локальное файловое хранилище
+
+```http
+POST /api/courses/{course_id}/documents
+Content-Type: multipart/form-data
+
+GET /api/courses/{course_id}/documents?limit=20&offset=0&sort_by=created_at&sort_order=desc
+```
+
+Новый API принимает PDF, DOCX и TXT размером не более 50 MiB. Файл сохраняется
+без запуска LLM или индексации, а запись получает статус `uploaded`. Внутреннее
+имя строится из ID владельца, ID курса и случайного UUID, поэтому клиентское имя
+не используется как путь. SHA-256 вычисляется во время потоковой записи.
+
+Настройки:
+
+```dotenv
+UPLOAD_DIR=./uploads
+MAX_UPLOAD_BYTES=52428800
+```
+
+При обычном локальном запуске файлы находятся в `./uploads`. Эта папка
+игнорируется Git и не должна коммититься. В Docker Compose используется
+отдельный named volume `uploads_data`, смонтированный в `/data/uploads`.
+Остановка контейнеров не удаляет volume, но команда `docker compose down -v`
+удалит его вместе с файлами и PostgreSQL volume. Для важных локальных данных
+нужно отдельно делать backup volume.
+
+Текущий этап намеренно использует `LocalFileStorage`, однако бизнес-логика
+работает через интерфейс `FileStorage`. Технический roadmap требует Storage
+Adapter, но не назначает S3 или MinIO отдельным обязательным этапом. Для
+production можно добавить `S3FileStorage` и выбрать его через конфигурацию:
+существующие API и значение `Document.storage_key` при этом менять не нужно.
+До реализации такого adapter S3/MinIO не запускаются, а Docker Compose не
+содержит объектного хранилища.
+
 ### Генерация модулей
 
 ```http

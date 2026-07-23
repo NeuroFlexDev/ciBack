@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -17,6 +18,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost"
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
+    UPLOAD_DIR: Path = Path("uploads")
+    MAX_UPLOAD_BYTES: int = Field(default=50 * 1024 * 1024, gt=0)
 
     SMTP_HOST: str = ""
     SMTP_PORT: int = 25
