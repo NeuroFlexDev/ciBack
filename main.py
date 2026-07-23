@@ -2,7 +2,6 @@ import os
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database.db import initialize_database
 from app.routes import agent, auth, chat, courses, feedback, graph, lessons, modules, search, tasks, tests, upload
 from app.routes import course_generator
 from app.routes import course_structure
@@ -10,8 +9,6 @@ from app.routes import healthz
 from app.routes import theories
 from app.routes import versioning
 from app.services.auth_service import get_current_user
-
-initialize_database()
 
 app = FastAPI(title="Lernium API")
 

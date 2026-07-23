@@ -13,4 +13,4 @@ class CourseModule(Base, BaseModelMixin):
     tests = Column(Text, default="[]")
     tasks = Column(Text, default="[]")
 
-    course = relationship("Course", back_populates="modules")
+    course = relationship("Course", back_populates="course_modules")

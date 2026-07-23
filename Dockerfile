@@ -10,8 +10,11 @@ ENV PYTHONUNBUFFERED=1
 # Скопируем файл зависимостей
 COPY requirements.txt .
 
-# Установим зависимости
-RUN pip install --no-cache-dir -r requirements.txt
+# sentence-transformers depends on PyTorch. Install the CPU wheel explicitly so
+# a backend image does not pull several gigabytes of unused CUDA libraries.
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir torch --index-url "${PYTORCH_INDEX_URL}" \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Скопируем весь код внутрь контейнера
 COPY . .

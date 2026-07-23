@@ -14,3 +14,36 @@ jobs:
       ref: ${{ github.ref_name }}
     secrets:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  migration-check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ciuser
+          POSTGRES_PASSWORD: cipassword
+          POSTGRES_DB: cidb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ciuser -d cidb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ENV: test
+      DATABASE_URL: postgresql+psycopg2://ciuser:cipassword@localhost:5432/cidb
+      JWT_SECRET: test-only-jwt-secret-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m alembic upgrade head
+      - run: python -m alembic check
+      - run: python -m alembic downgrade -1
+      - run: python -m alembic upgrade head
+      - run: python -m pytest -q tests/test_migration_graph.py

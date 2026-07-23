@@ -15,3 +15,6 @@ class Course(Base):
     # Связь с модулями
     owner = relationship("User", back_populates="courses")
     modules = relationship("Module", back_populates="course", cascade="all, delete-orphan")
+    course_modules = relationship(
+        "CourseModule", back_populates="course", cascade="all, delete-orphan"
+    )
