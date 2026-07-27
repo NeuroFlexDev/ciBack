@@ -1,84 +1,82 @@
-# app/services/chat_service.py
 from __future__ import annotations
-from typing import Any, List
+
 import logging
+from typing import Any
+
+from sqlalchemy.orm import Session
 
 from app.chat_engine import get_chat_engine
-from app.routes.chat_storage import get_history, store_bot_msg, store_user_msg
-from app.services.llm_registry import list_models
+from app.core.config import settings
+from app.models.chat import ChatMessage
+from app.repositories.chat import ChatRepository
 from app.schemas.chat import MessageOut
-
-# Вывел допом код из app/routes/chat.py сюда
+from app.services.llm_registry import list_models
 
 logger = logging.getLogger(__name__)
 
-_fallback_id = iter(range(10_000_000, 10_100_000))  # генератор уникальных ID
 
-def list_available_models() -> List[str]:
-    """Возвращает список доступных моделей для чата."""
+def list_available_models() -> list[str]:
     models = list_models()
-    logger.debug(f"Available models count={len(models)}")
+    logger.debug("Available models count=%d", len(models))
     return models
 
-# Функция преобразует сырые сообщения из хранилища в список Pydantic-схем
 
-def convert_messages(raw: List[dict[str, Any]]) -> List[MessageOut]:
-    out: List[MessageOut] = []
-    for m in raw:
-        mid = m.get("id")
-        if mid is None:
-            mid = next(_fallback_id)  # гарантированно уникальный int
-        role = m.get("role", "user")
-        author = "bot" if role == "assistant" else "user"
-        out.append(MessageOut(id=int(mid), author=author, text=m.get("content", "")))
-    return out
+def convert_messages(messages: list[ChatMessage]) -> list[MessageOut]:
+    return [
+        MessageOut(
+            id=message.id,
+            author="bot" if message.role == "assistant" else "user",
+            text=message.content,
+            is_deleted=message.is_deleted,
+        )
+        for message in messages
+    ]
+
+
+def _usage_from_response(response: dict[str, Any]) -> dict[str, int | None]:
+    usage = response.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+    completion = usage.get("completion_tokens", usage.get("output_tokens"))
+    total = usage.get("total_tokens")
+    if total is None and isinstance(prompt, int) and isinstance(completion, int):
+        total = prompt + completion
+    return {
+        "prompt_tokens": prompt if isinstance(prompt, int) else None,
+        "completion_tokens": completion if isinstance(completion, int) else None,
+        "total_tokens": total if isinstance(total, int) else None,
+    }
 
 
 def chat_generate(
-    *,
-    chat_id: int,
-    user_id: int,
-    text: str,
-    engine_name: str = "lc_giga",
-    model: str | None = None,
-    expect_json: bool = False,
-    db: Any = None,  # оставил на будущее, если нужно прокидывать БД
-    max_tokens: int = 1024,
+    *, chat_id: int, user_id: int, text: str, db: Session,
+    engine_name: str = "lc_giga", model: str | None = None,
+    expect_json: bool = False, max_tokens: int = 1024,
 ) -> dict[str, Any]:
-    """
-    Генерирует ответ модели и сохраняет оба сообщения (user + bot) в сторедж.
-    НИЧЕГО вручную не пушим в history — только через store_*.
-    Возвращает полезную инфу (ids, сырой ответ).
-    """
-
-    # 1. История до нового сообщения
-    history = get_history(chat_id, user_id)
-
-    # 2. Сохраняем сообщение пользователя (получаем его id)
-    user_msg_id = store_user_msg(chat_id, text)
-
-    # 3. Формируем историю для модели (локально добавляем текущее юзерское сообщение)
-    history_for_llm = history + [{"id": user_msg_id, "role": "user", "content": text}]
-
-    # 4. Берём нужный движок
-    engine = get_chat_engine(engine_name, model)
-
-    # 5. Генерация
-    res = engine.generate(
-        history_for_llm,
-        model=model,
-        expect_json=expect_json,
+    history = ChatRepository.get_recent_history(
+        db, chat_id, user_id, settings.CHAT_HISTORY_MESSAGES
     )
+    user_message = ChatRepository.add_message(db, chat_id, "user", text)
+    llm_history = [
+        {"role": message.role, "content": message.content} for message in history
+    ]
+    llm_history.append({"role": "user", "content": text})
 
-    answer = res.get("text") or res.get("choice") or ""
-
-    # 6. Сохраняем ответ бота
-    bot_msg_id = store_bot_msg(chat_id, answer)
-
-    # 7. Возвращаем всё, что может пригодиться
+    response = get_chat_engine(engine_name, model).generate(
+        llm_history, model=model, expect_json=expect_json
+    )
+    answer = response.get("text") or response.get("choice") or ""
+    response_model = response.get("model")
+    usage = _usage_from_response(response)
+    assistant_message = ChatRepository.add_message(
+        db, chat_id, "assistant", answer,
+        model=response_model if isinstance(response_model, str) else model,
+        metadata={"engine": engine_name}, **usage,
+    )
     return {
         "answer": answer,
-        "raw": res,  # полный ответ движка
-        "user_msg_id": user_msg_id,
-        "bot_msg_id": bot_msg_id,
+        "raw": response,
+        "user_msg_id": user_message.id,
+        "bot_msg_id": assistant_message.id,
     }

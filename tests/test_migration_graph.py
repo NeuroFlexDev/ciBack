@@ -8,6 +8,8 @@ from alembic.script import ScriptDirectory
 
 
 EXPECTED_TABLES = {
+    "chat_messages",
+    "chats",
     "course_modules",
     "course_structure",
     "course_versions",
@@ -119,7 +121,7 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
     )
     assert set(json.loads(result.stdout)) == (
         EXPECTED_TABLES
-        - {"course_graphs", "document_chunks", "documents"}
+        - {"chat_messages", "chats"}
         | {"alembic_version"}
     )
 

@@ -1,4 +1,8 @@
-# app/routes/chat_storage.py
+"""Deprecated in-memory chat storage.
+
+Kept only as a legacy reference. Production and test runtime code must use the
+SQL-backed ``ChatRepository`` and must not import this module as a fallback.
+"""
 from __future__ import annotations
 
 # Простое in‑memory хранилище (как у тебя было ранее)

@@ -1,8 +1,10 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
-# ---------- Schemas ----------
+
 class ChatCreate(BaseModel):
     name: str = "Новый чат"
+    course_id: int | None = None
+
 
 class ChatOut(BaseModel):
     id: int
@@ -10,13 +12,14 @@ class ChatOut(BaseModel):
     model: str | None = None
     engine: str | None = None
     is_deleted: bool
-    model_config = ConfigDict(from_attributes=True)
+
 
 class MessageOut(BaseModel):
     id: int
-    author: str  # 'user' | 'bot'
+    author: str
     text: str
     is_deleted: bool
+
 
 class MessageIn(BaseModel):
     chat_id: int | None = None

@@ -17,3 +17,4 @@ class User(Base):
     feedback = relationship("Feedback", back_populates="author")
     documents = relationship("Document", back_populates="owner")
     created_graphs = relationship("CourseGraph", back_populates="creator")
+    chats = relationship("Chat", back_populates="owner")

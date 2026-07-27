@@ -41,3 +41,4 @@ class Course(Base):
     current_graph = relationship(
         "CourseGraph", foreign_keys=[current_graph_id], post_update=True
     )
+    chats = relationship("Chat", back_populates="course")

@@ -1,3 +1,4 @@
+from .chat import Chat, ChatMessage
 from .course import Course
 from .course_graph import CourseGraph
 from .course_modules import CourseModule
@@ -15,6 +16,8 @@ from .theory import Theory
 from .user import User
 
 __all__ = [
+    "Chat",
+    "ChatMessage",
     "Course",
     "CourseGraph",
     "CourseModule",

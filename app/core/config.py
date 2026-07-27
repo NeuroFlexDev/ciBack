@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     UPLOAD_DIR: Path = Path("uploads")
     MAX_UPLOAD_BYTES: int = Field(default=50 * 1024 * 1024, gt=0)
+    CHAT_HISTORY_MESSAGES: int = Field(default=20, gt=0, le=200)
 
     SMTP_HOST: str = ""
     SMTP_PORT: int = 25
