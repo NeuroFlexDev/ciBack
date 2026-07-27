@@ -22,6 +22,37 @@ class CourseContentRepository:
         db.add(graph)
 
     @staticmethod
+    def list_graph_versions(
+        db: Session, *, course_id: int, limit: int, offset: int
+    ) -> tuple[list[CourseGraph], int]:
+        query = db.query(CourseGraph).filter(
+            CourseGraph.course_id == course_id,
+            CourseGraph.is_deleted.is_(False),
+        )
+        total = query.count()
+        items = (
+            query.order_by(CourseGraph.version.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return items, total
+
+    @staticmethod
+    def get_graph_version(
+        db: Session, *, course_id: int, version: int
+    ) -> CourseGraph | None:
+        return (
+            db.query(CourseGraph)
+            .filter(
+                CourseGraph.course_id == course_id,
+                CourseGraph.version == version,
+                CourseGraph.is_deleted.is_(False),
+            )
+            .first()
+        )
+
+    @staticmethod
     def add_document(db: Session, document: Document) -> None:
         db.add(document)
 

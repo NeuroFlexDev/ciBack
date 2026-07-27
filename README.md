@@ -202,9 +202,41 @@ Content-Type: application/json
 }
 ```
 
+История версий доступна отдельно:
+
+```http
+GET /api/courses/{course_id}/canvas/versions?limit=20&offset=0
+GET /api/courses/{course_id}/canvas/versions/{version}
+```
+
+Первый endpoint возвращает только metadata в порядке от новой версии к старой,
+не передавая тяжёлые `nodes`/`edges`. Второй возвращает полный immutable
+snapshot. Поле `is_current` показывает версию из `courses.current_graph_id`.
+
 Узлы должны иметь уникальные строковые `id`. Поля `source` и `target` каждой
 связи должны указывать на существующие узлы. Дополнительные поля React Flow
 сохраняются.
+
+#### Как frontend должен отказаться от localStorage
+
+Backend уже является источником истины, но он не может удалить или перестать
+читать `localStorage` внутри браузерного приложения. Это требует отдельного
+frontend PR:
+
+1. При открытии редактора вызвать `GET /api/courses/{course_id}/canvas`.
+2. Сохранить полученные `nodes`, `edges` и `version` в состоянии компонента.
+3. Несохранённые изменения держать только в памяти frontend.
+4. При сохранении вызвать `PUT`, передав последнюю полученную `version`.
+5. После успеха заменить локальную version значением из ответа.
+6. При `409 Conflict` повторно загрузить active canvas и показать разрешение
+   конфликта, не перезаписывая серверную версию автоматически.
+7. Историю загружать metadata endpoint, а выбранный snapshot — detail endpoint.
+8. После rollout удалить `localStorage.getItem/setItem` для canvas и очистить
+   старые canvas-ключи.
+
+Пока эти изменения не внесены во frontend, refresh и работа на другом устройстве
+могут по-прежнему зависеть от его старой логики, даже если backend persistence
+полностью готов.
 
 ### Документы курса и локальное файловое хранилище
 

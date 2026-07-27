@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.domain_enums import DocumentStatus
 from app.models.user import User
-from app.schemas.course_graph import CanvasOut, CanvasPut
+from app.schemas.course_graph import (
+    CanvasOut,
+    CanvasPut,
+    CanvasVersionListOut,
+    CanvasVersionOut,
+)
 from app.schemas.document import DocumentListOut, DocumentPublicOut
 from app.services.auth_service import get_current_user
 from app.services.course_content_service import CourseContentService
@@ -34,6 +39,37 @@ def put_canvas(
     current_user: User = Depends(get_current_user),
 ):
     return CourseContentService.save_canvas(db, course_id, current_user.id, payload)
+
+
+@router.get(
+    "/{course_id}/canvas/versions", response_model=CanvasVersionListOut
+)
+def list_canvas_versions(
+    course_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return CourseContentService.list_canvas_versions(
+        db, course_id, current_user.id, limit, offset
+    )
+
+
+@router.get(
+    "/{course_id}/canvas/versions/{version}", response_model=CanvasVersionOut
+)
+def get_canvas_version(
+    course_id: int,
+    version: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if version < 1:
+        raise HTTPException(status_code=422, detail="Версия должна быть больше нуля")
+    return CourseContentService.get_canvas_version(
+        db, course_id, current_user.id, version
+    )
 
 
 @router.post(

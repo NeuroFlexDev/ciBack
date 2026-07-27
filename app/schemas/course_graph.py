@@ -68,3 +68,26 @@ class CanvasOut(BaseModel):
     created_by: int | None
     created_at: datetime | None
     updated_at: datetime | None
+
+
+class CanvasVersionSummary(BaseModel):
+    graph_id: int
+    version: int
+    status: CourseGraphStatus
+    is_current: bool
+    created_by: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class CanvasVersionListOut(BaseModel):
+    items: list[CanvasVersionSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class CanvasVersionOut(CanvasVersionSummary):
+    course_id: int
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, Any]]

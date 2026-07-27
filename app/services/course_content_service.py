@@ -9,7 +9,13 @@ from app.models.course_graph import CourseGraph
 from app.models.document import Document
 from app.models.domain_enums import CourseGraphStatus, DocumentStatus
 from app.repositories.course_content import CourseContentRepository
-from app.schemas.course_graph import CanvasOut, CanvasPut
+from app.schemas.course_graph import (
+    CanvasOut,
+    CanvasPut,
+    CanvasVersionListOut,
+    CanvasVersionOut,
+    CanvasVersionSummary,
+)
 from app.services.file_storage import FileStorage, UploadTooLargeError
 
 
@@ -59,6 +65,59 @@ class CourseContentService:
         if course is None:
             raise _course_not_found()
         return _canvas_out(course.id, course.current_graph)
+
+    @staticmethod
+    def list_canvas_versions(
+        db: Session, course_id: int, owner_id: int, limit: int, offset: int
+    ) -> CanvasVersionListOut:
+        course = CourseContentRepository.get_owned_course(db, course_id, owner_id)
+        if course is None:
+            raise _course_not_found()
+        graphs, total = CourseContentRepository.list_graph_versions(
+            db, course_id=course_id, limit=limit, offset=offset
+        )
+        return CanvasVersionListOut(
+            items=[
+                CanvasVersionSummary(
+                    graph_id=graph.id,
+                    version=graph.version,
+                    status=graph.status,
+                    is_current=course.current_graph_id == graph.id,
+                    created_by=graph.created_by,
+                    created_at=graph.created_at,
+                    updated_at=graph.updated_at,
+                )
+                for graph in graphs
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    @staticmethod
+    def get_canvas_version(
+        db: Session, course_id: int, owner_id: int, version: int
+    ) -> CanvasVersionOut:
+        course = CourseContentRepository.get_owned_course(db, course_id, owner_id)
+        if course is None:
+            raise _course_not_found()
+        graph = CourseContentRepository.get_graph_version(
+            db, course_id=course_id, version=version
+        )
+        if graph is None:
+            raise HTTPException(status_code=404, detail="Версия canvas не найдена")
+        return CanvasVersionOut(
+            graph_id=graph.id,
+            course_id=course_id,
+            version=graph.version,
+            status=graph.status,
+            is_current=course.current_graph_id == graph.id,
+            nodes=graph.nodes,
+            edges=graph.edges,
+            created_by=graph.created_by,
+            created_at=graph.created_at,
+            updated_at=graph.updated_at,
+        )
 
     @staticmethod
     def save_canvas(

@@ -122,6 +122,105 @@ def test_canvas_validation_access_and_auth(
     )
 
 
+def test_canvas_version_history_and_detail(
+    client, db_session, auth_user, auth_headers
+):
+    course = make_course(db_session, owner_id=auth_user.id)
+    empty = client.get(
+        f"/api/courses/{course.id}/canvas/versions", headers=auth_headers
+    )
+    assert empty.status_code == 200
+    assert empty.json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
+
+    first_nodes = [{"id": "first", "data": {"label": "First"}}]
+    assert (
+        client.put(
+            f"/api/courses/{course.id}/canvas",
+            json={"version": 0, "nodes": first_nodes, "edges": []},
+            headers=auth_headers,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            f"/api/courses/{course.id}/canvas",
+            json={"version": 1, "nodes": [{"id": "second"}], "edges": []},
+            headers=auth_headers,
+        ).status_code
+        == 200
+    )
+
+    history = client.get(
+        f"/api/courses/{course.id}/canvas/versions",
+        params={"limit": 1, "offset": 0},
+        headers=auth_headers,
+    )
+    assert history.status_code == 200
+    body = history.json()
+    assert body["total"] == 2
+    assert body["items"][0]["version"] == 2
+    assert body["items"][0]["is_current"] is True
+    assert "nodes" not in body["items"][0]
+    assert "edges" not in body["items"][0]
+
+    previous = client.get(
+        f"/api/courses/{course.id}/canvas/versions/1", headers=auth_headers
+    )
+    assert previous.status_code == 200
+    assert previous.json()["nodes"] == first_nodes
+    assert previous.json()["is_current"] is False
+
+    current = client.get(
+        f"/api/courses/{course.id}/canvas/versions/2", headers=auth_headers
+    )
+    assert current.json()["is_current"] is True
+    assert (
+        client.get(
+            f"/api/courses/{course.id}/canvas/versions/999",
+            headers=auth_headers,
+        ).status_code
+        == 404
+    )
+
+
+def test_canvas_history_hides_deleted_and_foreign_versions(
+    client, db_session, auth_user, auth_headers
+):
+    course = make_course(db_session, owner_id=auth_user.id)
+    client.put(
+        f"/api/courses/{course.id}/canvas",
+        json={"version": 0, "nodes": [{"id": "one"}], "edges": []},
+        headers=auth_headers,
+    )
+    graph = (
+        db_session.query(CourseGraph)
+        .filter(CourseGraph.course_id == course.id, CourseGraph.version == 1)
+        .one()
+    )
+    graph.is_deleted = True
+    db_session.commit()
+    _, other_headers = _other_headers(db_session)
+
+    history = client.get(
+        f"/api/courses/{course.id}/canvas/versions", headers=auth_headers
+    )
+    assert history.json()["total"] == 0
+    assert (
+        client.get(
+            f"/api/courses/{course.id}/canvas/versions/1",
+            headers=auth_headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/api/courses/{course.id}/canvas/versions",
+            headers=other_headers,
+        ).status_code
+        == 404
+    )
+
+
 def test_document_upload_list_filters_and_storage(
     client, db_session, auth_user, auth_headers, tmp_path
 ):
