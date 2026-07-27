@@ -18,6 +18,7 @@ EXPECTED_TABLES = {
     "document_chunks",
     "documents",
     "feedback",
+    "generation_runs",
     "lesson_versions",
     "lessons",
     "module_versions",
@@ -121,7 +122,7 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
     )
     assert set(json.loads(result.stdout)) == (
         EXPECTED_TABLES
-        - {"chat_messages", "chats"}
+        - {"generation_runs"}
         | {"alembic_version"}
     )
 

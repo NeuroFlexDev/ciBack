@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     UPLOAD_DIR: Path = Path("uploads")
     MAX_UPLOAD_BYTES: int = Field(default=50 * 1024 * 1024, gt=0)
     CHAT_HISTORY_MESSAGES: int = Field(default=20, gt=0, le=200)
+    DOCUMENT_CHUNK_CHARS: int = Field(default=2000, ge=200, le=20000)
+    DOCUMENT_CHUNK_OVERLAP_CHARS: int = Field(default=200, ge=0, le=5000)
+    GRAPH_CONTEXT_MAX_CHARS: int = Field(default=60000, ge=1000, le=500000)
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
     SMTP_HOST: str = ""
     SMTP_PORT: int = 25

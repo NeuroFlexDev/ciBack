@@ -14,3 +14,15 @@ class CourseGraphStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
     ARCHIVED = "archived"
+
+
+class GenerationRunStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class GenerationRunType(str, Enum):
+    DOCUMENT_INDEX = "document_index"
+    GRAPH_GENERATION = "graph_generation"

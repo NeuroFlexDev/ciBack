@@ -10,6 +10,10 @@ def test_connected_routes_require_authentication(client):
         ("get", "/api/search", {"params": {"q": "test"}}),
         ("get", "/api/agent/improve-theory", {"params": {"lesson_id": 1, "goal": "test"}}),
         ("post", "/api/feedback/", {"json": {"lesson_id": 1}}),
+        ("get", "/api/documents/1", {}),
+        ("post", "/api/documents/1/reindex", {}),
+        ("post", "/api/courses/1/generate-graph", {}),
+        ("get", "/api/generation-runs/1", {}),
     ]
 
     for method, url, kwargs in requests:

@@ -6,6 +6,7 @@ from .course_structure import CourseStructure
 from .course_version import CourseVersion
 from .feedback import Feedback
 from .document import Document, DocumentChunk
+from .generation_run import GenerationRun
 from .lesson import Lesson
 from .lesson_version import LessonVersion
 from .module import Module
@@ -26,6 +27,7 @@ __all__ = [
     "Feedback",
     "Document",
     "DocumentChunk",
+    "GenerationRun",
     "Lesson",
     "LessonVersion",
     "Module",

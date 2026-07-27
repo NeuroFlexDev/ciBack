@@ -57,6 +57,7 @@ class Document(Base, BaseModelMixin):
     chunks = relationship(
         "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
     )
+    generation_runs = relationship("GenerationRun", back_populates="document")
 
 
 class DocumentChunk(Base, BaseModelMixin):

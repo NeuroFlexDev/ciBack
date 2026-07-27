@@ -23,6 +23,8 @@ class FileStorage(Protocol):
 
     def delete(self, storage_key: str) -> None: ...
 
+    def read_bytes(self, storage_key: str) -> bytes: ...
+
 
 class LocalFileStorage:
     chunk_size = 1024 * 1024
@@ -63,6 +65,9 @@ class LocalFileStorage:
 
     def delete(self, storage_key: str) -> None:
         self._target(storage_key).unlink(missing_ok=True)
+
+    def read_bytes(self, storage_key: str) -> bytes:
+        return self._target(storage_key).read_bytes()
 
 
 def get_file_storage() -> FileStorage:

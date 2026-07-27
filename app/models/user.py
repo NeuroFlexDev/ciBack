@@ -18,3 +18,4 @@ class User(Base):
     documents = relationship("Document", back_populates="owner")
     created_graphs = relationship("CourseGraph", back_populates="creator")
     chats = relationship("Chat", back_populates="owner")
+    generation_runs = relationship("GenerationRun", back_populates="owner")

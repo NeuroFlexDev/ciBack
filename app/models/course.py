@@ -42,3 +42,6 @@ class Course(Base):
         "CourseGraph", foreign_keys=[current_graph_id], post_update=True
     )
     chats = relationship("Chat", back_populates="course")
+    generation_runs = relationship(
+        "GenerationRun", back_populates="course", cascade="all, delete-orphan"
+    )

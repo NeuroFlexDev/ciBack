@@ -1,0 +1,8 @@
+На основе приведённых фрагментов учебных документов создай граф курса.
+Верни только JSON-объект вида:
+{"nodes":[{"id":"...","label":"...","type":"module|lesson"}],"edges":[{"source":"...","target":"...","relation":"contains|precedes"}]}
+
+Название курса: {{ course_title }}
+
+Фрагменты документов:
+{{ document_context }}
