@@ -19,3 +19,6 @@ class Module(Base, BaseModelMixin):
     lessons = relationship("Lesson", back_populates="module", cascade="all, delete-orphan")
     tests = relationship("Test", back_populates="module", cascade="all, delete-orphan")
     tasks = relationship("Task", back_populates="module", cascade="all, delete-orphan")
+    learning_objectives = relationship(
+        "LearningObjective", back_populates="module"
+    )

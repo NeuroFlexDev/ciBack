@@ -45,3 +45,13 @@ class Course(Base):
     generation_runs = relationship(
         "GenerationRun", back_populates="course", cascade="all, delete-orphan"
     )
+    competencies = relationship(
+        "Competency", back_populates="course", cascade="all, delete-orphan"
+    )
+    learning_objectives = relationship(
+        "LearningObjective", back_populates="course", cascade="all, delete-orphan"
+    )
+    assessment_rubrics = relationship(
+        "AssessmentRubric", back_populates="course", cascade="all, delete-orphan"
+    )
+    learning_events = relationship("LearningEvent", back_populates="course")

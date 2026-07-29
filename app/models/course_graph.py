@@ -46,3 +46,6 @@ class CourseGraph(Base, BaseModelMixin):
         "Course", back_populates="graphs", foreign_keys=[course_id]
     )
     creator = relationship("User", back_populates="created_graphs")
+    approvals = relationship(
+        "Approval", back_populates="course_graph", cascade="all, delete-orphan"
+    )

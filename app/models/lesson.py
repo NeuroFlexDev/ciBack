@@ -17,3 +17,6 @@ class Lesson(Base, BaseModelMixin):
         "Theory", uselist=False, back_populates="lesson", cascade="all, delete-orphan"
     )
     feedback = relationship("Feedback", back_populates="lesson", cascade="all, delete-orphan")
+    learning_objectives = relationship(
+        "LearningObjective", back_populates="lesson"
+    )

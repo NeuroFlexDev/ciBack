@@ -26,3 +26,10 @@ class GenerationRunStatus(str, Enum):
 class GenerationRunType(str, Enum):
     DOCUMENT_INDEX = "document_index"
     GRAPH_GENERATION = "graph_generation"
+
+
+class ApprovalDecision(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CHANGES_REQUESTED = "changes_requested"

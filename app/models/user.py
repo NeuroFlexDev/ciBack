@@ -19,3 +19,5 @@ class User(Base):
     created_graphs = relationship("CourseGraph", back_populates="creator")
     chats = relationship("Chat", back_populates="owner")
     generation_runs = relationship("GenerationRun", back_populates="owner")
+    approvals = relationship("Approval", back_populates="reviewer")
+    learning_events = relationship("LearningEvent", back_populates="user")

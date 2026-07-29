@@ -13,3 +13,4 @@ class Task(Base, BaseModelMixin):
 
     # Обратная связь с Module
     module = relationship("Module", back_populates="tasks")
+    assessment_rubrics = relationship("AssessmentRubric", back_populates="task")
