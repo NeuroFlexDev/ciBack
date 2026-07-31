@@ -3,6 +3,10 @@ from io import BytesIO
 
 import fitz
 from docx import Document as DocxDocument
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 
 @dataclass(frozen=True)
@@ -10,6 +14,14 @@ class ExtractedBlock:
     text: str
     page: int | None = None
     section: str | None = None
+
+
+def _iter_docx_blocks(document):
+    for child in document.element.body.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, document)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, document)
 
 
 def extract_blocks(content: bytes, mime_type: str) -> list[ExtractedBlock]:
@@ -29,13 +41,21 @@ def extract_blocks(content: bytes, mime_type: str) -> list[ExtractedBlock]:
         blocks = []
         section = None
         document = DocxDocument(BytesIO(content))
-        for paragraph in document.paragraphs:
-            text = " ".join(paragraph.text.split())
-            if not text:
+        for block in _iter_docx_blocks(document):
+            if isinstance(block, Paragraph):
+                text = " ".join(block.text.split())
+                if not text:
+                    continue
+                if block.style and block.style.name.lower().startswith("heading"):
+                    section = text
+                blocks.append(ExtractedBlock(text=text, section=section))
                 continue
-            if paragraph.style and paragraph.style.name.lower().startswith("heading"):
-                section = text
-            blocks.append(ExtractedBlock(text=text, section=section))
+
+            for row in block.rows:
+                cells = [" ".join(cell.text.split()) for cell in row.cells]
+                text = " | ".join(cell for cell in cells if cell)
+                if text:
+                    blocks.append(ExtractedBlock(text=text, section=section))
         return blocks
 
     if mime_type == "text/plain":

@@ -112,8 +112,23 @@ class PipelineService:
                 raise ValueError("В документе не найден текст для индексации")
 
             chunk_models = PipelineRepository.replace_chunks(db, document, chunks)
+            vector_chunks = [
+                {
+                    "chunk_id": chunk_model.id,
+                    "chunk_index": chunk_model.chunk_index,
+                    "text": chunk_model.text,
+                    "page": chunk_model.page,
+                    "section": chunk_model.section,
+                    "source": document.original_filename,
+                    "source_type": document.source_type,
+                    "owner_id": document.owner_id,
+                    "organization_id": None,
+                    "course_id": document.course_id,
+                }
+                for chunk_model in chunk_models
+            ]
             embedding_ids = replace_document_embeddings(
-                document.id, document.version, chunks
+                document.id, document.version, vector_chunks
             )
             for chunk_model, embedding_id in zip(
                 chunk_models, embedding_ids, strict=True

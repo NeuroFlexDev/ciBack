@@ -34,6 +34,24 @@ def test_docx_extraction_preserves_heading():
     assert blocks[-1].section == "Раздел"
 
 
+def test_docx_extraction_preserves_table_rows_and_section():
+    stream = BytesIO()
+    document = DocxDocument()
+    document.add_heading("Таблица", level=1)
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "Понятие"
+    table.cell(0, 1).text = "Описание"
+    document.save(stream)
+
+    blocks = extract_blocks(
+        stream.getvalue(),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    assert blocks[-1].text == "Понятие | Описание"
+    assert blocks[-1].section == "Таблица"
+
+
 def test_pdf_extraction_preserves_page_number():
     document = fitz.open()
     page = document.new_page()

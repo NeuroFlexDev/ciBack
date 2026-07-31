@@ -85,6 +85,17 @@ def test_reindex_is_idempotent_and_persists_run(
         == first_count
     )
     assert all(chunk.embedding_id for chunk in document.chunks)
+    assert document.chunks[0].metadata_json == {
+        "page": None,
+        "section": "Topic",
+        "document_id": document.id,
+        "document_version": 1,
+        "source": "document.txt",
+        "source_type": "upload",
+        "owner_id": auth_user.id,
+        "organization_id": None,
+        "course_id": course.id,
+    }
     assert document.status == "indexed"
 
 

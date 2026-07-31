@@ -8,6 +8,7 @@ def test_connected_routes_require_authentication(client):
         ("get", "/api/chat/models", {}),
         ("get", "/api/graph", {"params": {"course_id": 1}}),
         ("get", "/api/search", {"params": {"q": "test"}}),
+        ("get", "/api/courses/1/retrieval", {"params": {"q": "test"}}),
         ("get", "/api/agent/improve-theory", {"params": {"lesson_id": 1, "goal": "test"}}),
         ("post", "/api/feedback/", {"json": {"lesson_id": 1}}),
         ("get", "/api/documents/1", {}),

@@ -82,7 +82,18 @@ class PipelineRepository:
                 text=chunk["text"],
                 page=chunk.get("page"),
                 section=chunk.get("section"),
-                metadata_json=chunk.get("metadata_json", {}),
+                metadata_json={
+                    **chunk.get("metadata_json", {}),
+                    "document_id": document.id,
+                    "document_version": document.version,
+                    "page": chunk.get("page"),
+                    "section": chunk.get("section"),
+                    "source": document.original_filename,
+                    "source_type": document.source_type,
+                    "owner_id": document.owner_id,
+                    "organization_id": None,
+                    "course_id": document.course_id,
+                },
                 chunk_index=chunk["chunk_index"],
             )
             for chunk in chunks

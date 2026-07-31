@@ -274,6 +274,27 @@ production можно добавить `S3FileStorage` и выбрать его 
 До реализации такого adapter S3/MinIO не запускаются, а Docker Compose не
 содержит объектного хранилища.
 
+### Индексация и ACL-aware retrieval
+
+```http
+POST /api/documents/{document_id}/reindex
+GET  /api/courses/{course_id}/retrieval?q=архитектура&limit=5
+```
+
+Reindex сохраняет chunks и полный retrieval scope (`document/version`,
+`page/section`, source, owner, organization и course). Ответ retrieval содержит
+текст найденного фрагмента и citation с документом, страницей/секцией и chunk
+ID. Кандидаты выбираются из БД только среди текущих проиндексированных
+документов владельца курса до выполнения vector search; чужие и старые версии
+не попадают в выборку.
+
+`FaissVectorStore` остаётся локальной in-memory demo-реализацией за интерфейсом
+`VectorStore`: после рестарта его нужно заполнить повторным reindex. Он не
+является production source of truth и не подходит для нескольких workers.
+Следующий P2 backend (`PgVectorStore`) сможет заменить его без изменения
+retrieval API. До появления штатного worker reindex выполняется синхронно, а
+его состояние и ошибки сохраняются в `GenerationRun`.
+
 ### Генерация модулей
 
 ```http

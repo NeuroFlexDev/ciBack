@@ -5,6 +5,7 @@ import faiss
 import numpy as np
 
 from app.core.config import settings
+from app.services.vector_store import FaissVectorStore, VectorRecord, VectorStore
 
 logger = logging.getLogger(__name__)
 model = None
@@ -30,6 +31,13 @@ def get_model():
 
     return model if model is not False else None
 
+
+document_vector_store = FaissVectorStore(get_model)
+
+
+def get_vector_store() -> VectorStore:
+    return document_vector_store
+
 def embed_and_add(lesson_id: int, obj_type: str, text: str):
     active_model = get_model()
     if active_model is None or not text.strip():
@@ -50,52 +58,39 @@ def replace_document_embeddings(
     document_version: int,
     chunks: list[dict],
 ) -> list[str]:
-    """Replace one document version in the demo FAISS index without duplicates."""
-    active_model = get_model()
-    if active_model is None:
-        raise RuntimeError("Embedding model is unavailable")
-
-    retained = [
-        item
-        for item in metadata
-        if not (
-            item.get("kind") == "document"
-            and item.get("document_id") == document_id
-            and item.get("document_version") == document_version
-        )
-    ]
-    document_items = []
-    embedding_ids = []
+    """Replace a document and deactivate all older in-memory versions."""
+    records = []
     for chunk in chunks:
         embedding_id = (
             f"document:{document_id}:v{document_version}:chunk:{chunk['chunk_index']}"
         )
-        embedding_ids.append(embedding_id)
-        document_items.append(
-            {
-                "kind": "document",
-                "document_id": document_id,
-                "document_version": document_version,
-                "embedding_id": embedding_id,
-                "page": chunk.get("page"),
-                "section": chunk.get("section"),
-                "text": chunk["text"],
-            }
+        records.append(
+            VectorRecord(
+                embedding_id=embedding_id,
+                text=chunk["text"],
+                metadata={
+                    "kind": "document",
+                    "document_id": document_id,
+                    "document_version": document_version,
+                    "chunk_id": chunk["chunk_id"],
+                    "chunk_index": chunk["chunk_index"],
+                    "page": chunk.get("page"),
+                    "section": chunk.get("section"),
+                    "source": chunk.get("source"),
+                    "source_type": chunk.get("source_type"),
+                    "owner_id": chunk["owner_id"],
+                    "organization_id": chunk.get("organization_id"),
+                    "course_id": chunk["course_id"],
+                },
+            )
         )
-
-    rebuilt = retained + document_items
-    texts = [item["text"] for item in rebuilt]
-    vectors = (
-        np.asarray(active_model.encode(texts), dtype=np.float32)
-        if texts
-        else np.empty((0, 384), dtype=np.float32)
+    return document_vector_store.replace_document(
+        document_id, document_version, records
     )
-    with _index_lock:
-        index.reset()
-        metadata[:] = rebuilt
-        if len(vectors):
-            index.add(vectors)
-    return embedding_ids
+
+
+def remove_document_embeddings(document_id: int) -> None:
+    document_vector_store.delete_document(document_id)
 
 def search(query: str, k: int = 5, allowed_lesson_ids: set[int] | None = None):
     active_model = get_model()

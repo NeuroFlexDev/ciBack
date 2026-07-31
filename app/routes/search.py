@@ -9,6 +9,10 @@ from app.models.module import Module
 from app.models.user import User
 from app.services.auth_service import get_current_user
 from app.services.embedding_service import search
+from app.schemas.retrieval import RetrievalResponse
+from app.services.embedding_service import get_vector_store
+from app.services.retrieval_service import RetrievalService
+from app.services.vector_store import VectorStore
 
 router = APIRouter()
 
@@ -29,3 +33,26 @@ def semantic_search(
     }
     results = search(q, allowed_lesson_ids=lesson_ids)
     return {"results": results}
+
+
+@router.get(
+    "/courses/{course_id}/retrieval",
+    response_model=RetrievalResponse,
+    summary="Поиск по проиндексированным документам курса",
+)
+def retrieve_course_documents(
+    course_id: int,
+    q: str = Query(..., min_length=1, max_length=2000),
+    limit: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    vector_store: VectorStore = Depends(get_vector_store),
+):
+    return RetrievalService.search_course(
+        db,
+        course_id=course_id,
+        owner_id=current_user.id,
+        query=q,
+        limit=limit,
+        vector_store=vector_store,
+    )

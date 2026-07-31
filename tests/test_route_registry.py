@@ -6,6 +6,7 @@ REQUIRED_ROUTES = {
     ("GET", "/api/chat/models"),
     ("GET", "/api/graph"),
     ("GET", "/api/search"),
+    ("GET", "/api/courses/{course_id}/retrieval"),
     ("GET", "/api/agent/improve-theory"),
     ("POST", "/api/feedback/"),
 }
