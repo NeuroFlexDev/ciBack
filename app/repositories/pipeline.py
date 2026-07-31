@@ -14,10 +14,12 @@ class PipelineRepository:
     ) -> Document | None:
         return (
             db.query(Document)
+            .join(Course, Course.id == Document.course_id)
             .filter(
                 Document.id == document_id,
                 Document.owner_id == owner_id,
                 Document.is_deleted.is_(False),
+                Course.is_deleted.is_(False),
             )
             .first()
         )
@@ -27,7 +29,9 @@ class PipelineRepository:
         db: Session, course_id: int, owner_id: int, *, for_update: bool = False
     ) -> Course | None:
         query = db.query(Course).filter(
-            Course.id == course_id, Course.owner_id == owner_id
+            Course.id == course_id,
+            Course.owner_id == owner_id,
+            Course.is_deleted.is_(False),
         )
         if for_update:
             query = query.with_for_update()

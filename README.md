@@ -240,24 +240,113 @@ frontend PR:
 
 ### Документы курса и локальное файловое хранилище
 
+Step 2 wizard работает с уже созданным draft-курсом. Полный сценарий:
+
+1. Создать draft через `POST /api/courses/drafts` и сохранить его `id`.
+2. Загрузить каждый источник через `POST /api/courses/{course_id}/documents`.
+3. Для принятого документа вызвать `POST /api/documents/{document_id}/reindex`.
+4. Читать состояние через список или `GET /api/documents/{document_id}`.
+
 ```http
 POST /api/courses/{course_id}/documents
 Content-Type: multipart/form-data
 
 GET /api/courses/{course_id}/documents?limit=20&offset=0&sort_by=created_at&sort_order=desc
+GET /api/documents/{document_id}
+POST /api/documents/{document_id}/reindex
 ```
 
-Новый API принимает PDF, DOCX и TXT размером не более 50 MiB. Файл сохраняется
-без запуска LLM или индексации, а запись получает статус `uploaded`. Внутреннее
-имя строится из ID владельца, ID курса и случайного UUID, поэтому клиентское имя
-не используется как путь. SHA-256 вычисляется во время потоковой записи.
+Multipart-поле всегда называется `file`. Пример:
 
-Настройки:
+```bash
+curl -X POST "http://localhost:8000/api/courses/42/documents" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "file=@./regulation.pdf;type=application/pdf"
+```
+
+Успешная загрузка возвращает `202 Accepted`: файл сохранён, но ещё не считается
+проиндексированным. Upload не запускает ненадёжную in-process очередь. До
+появления штатного worker обработка явно запускается endpoint-ом `/reindex`.
+
+```json
+{
+  "id": 17,
+  "course_id": 42,
+  "original_filename": "regulation.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 248371,
+  "source_type": "upload",
+  "version": 1,
+  "status": "processing",
+  "error_message": null,
+  "created_at": "2026-07-31T12:10:00",
+  "updated_at": "2026-07-31T12:10:00"
+}
+```
+
+#### Форматы и валидация
+
+| Формат | Расширение | MIME type | Проверка содержимого |
+|---|---|---|---|
+| PDF | `.pdf` | `application/pdf` | начало файла `%PDF-` |
+| DOCX | `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | ZIP с `[Content_Types].xml` и `word/document.xml` |
+| TXT | `.txt` | `text/plain` | корректный UTF-8/UTF-8 BOM, без NUL-байтов |
+
+Расширение и MIME должны соответствовать друг другу. Пустой файл, неверная
+сигнатура, повреждённый DOCX, бинарный или невалидный UTF-8 TXT отклоняются до
+parsing, LLM и индексации. Клиентское имя очищается и хранится только как
+metadata; storage key строится из owner ID, course ID и случайного UUID. SHA-256
+считается во время потоковой записи.
+
+#### Размер файла
+
+Основная настройка задаётся в мегабайтах и по умолчанию равна 25 MiB:
+
 
 ```dotenv
 UPLOAD_DIR=./uploads
-MAX_UPLOAD_BYTES=52428800
+MAX_DOCUMENT_SIZE_MB=25
 ```
+
+Лимит переводится в байты как `MB * 1024 * 1024`. Запись выполняется chunks по
+1 MiB и прекращается сразу после превышения лимита; произвольно большой файл не
+читается целиком в память перед проверкой. Старый `MAX_UPLOAD_BYTES` поддержан
+как legacy override для существующих deployment-конфигураций, но в новых `.env`
+используется `MAX_DOCUMENT_SIZE_MB`.
+
+#### Публичные статусы и список
+
+Frontend видит только стабильные значения:
+
+| Внутренний статус | Публичный статус |
+|---|---|
+| `uploaded`, `queued`, `processing` | `processing` |
+| `indexed` | `ready` |
+| `failed` | `error` |
+
+Фильтр `status` принимает только `processing`, `ready` или `error`; один фильтр
+`processing` включает все три внутренних промежуточных состояния. Поддерживаются
+`limit` 1–100, `offset`, `source_type`, `sort_by` и `sort_order=asc|desc`.
+Ответ списка содержит `items`, `total`, `limit`, `offset`. Поля `storage_key`,
+`content_hash`, chunks, embedding IDs и внутренние статусы наружу не выдаются.
+При ошибке обработки `error_message` содержит безопасное сообщение без stack
+trace, локальных путей и credentials.
+
+#### Ошибки и ACL
+
+| HTTP | Причина |
+|---:|---|
+| `400` | multipart-файл отсутствует, пуст или повреждён |
+| `401` | отсутствует или недействителен access token |
+| `404` | курс/документ отсутствует, удалён или принадлежит другому owner |
+| `413` | превышен настроенный размер |
+| `415` | расширение или MIME не поддерживаются/не совпадают |
+| `422` | некорректные query-параметры |
+| `500` | непредвиденная ошибка без раскрытия внутренних деталей |
+
+Documents API использует owner ACL. Для чужого ресурса возвращается `404`, а не
+`403`, чтобы не раскрывать факт его существования. Tenant/organization-фильтр
+будет добавлен вместе со штатной multi-tenant моделью.
 
 При обычном локальном запуске файлы находятся в `./uploads`. Эта папка
 игнорируется Git и не должна коммититься. В Docker Compose используется
@@ -303,6 +392,8 @@ GET /api/courses/{course_id}/generate_modules
 
 ### Загрузка документа и обновление описания курса (RAG)
 
+Legacy endpoint ниже помечен deprecated и не используется новым wizard flow:
+
 ```http
 POST /api/courses/{course_id}/upload-description
 Content-Type: multipart/form-data
@@ -347,21 +438,3 @@ GET /api/healthz
 *Последнее обновление: 2025-21-11*
 
 ---
-
-### Course wizard drafts
-
-The wizard creates a persistent course before document upload. `POST
-/api/courses/drafts` has no request body and returns `201 Created` with a draft
-ID, `setup_step: "documents"`, and a nullable title. `GET /api/courses/drafts`
-lists only the current owner's drafts. Drafts are excluded from `GET
-/api/courses/`, and creating one does not start indexing or generation. The ID
-can be used immediately with `POST /api/courses/{course_id}/documents`.
-
-### Course wizard drafts
-
-The wizard creates a persistent course before document upload. `POST
-/api/courses/drafts` has no request body and returns `201 Created` with a draft
-ID, `setup_step: "documents"`, and a nullable title. `GET /api/courses/drafts`
-lists only the current owner's drafts. Drafts are excluded from `GET
-/api/courses/`, and creating one does not start indexing or generation. The ID
-can be used immediately with `POST /api/courses/{course_id}/documents`.

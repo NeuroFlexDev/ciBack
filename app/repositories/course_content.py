@@ -66,7 +66,7 @@ class CourseContentRepository:
         owner_id: int,
         limit: int,
         offset: int,
-        status: str | None,
+        statuses: tuple[str, ...] | None,
         source_type: str | None,
         sort_by: str,
         sort_order: str,
@@ -75,9 +75,10 @@ class CourseContentRepository:
             Document.course_id == course_id,
             Document.owner_id == owner_id,
             Document.is_deleted.is_(False),
+            Document.status != "archived",
         )
-        if status is not None:
-            query = query.filter(Document.status == status)
+        if statuses is not None:
+            query = query.filter(Document.status.in_(statuses))
         if source_type is not None:
             query = query.filter(Document.source_type == source_type)
 

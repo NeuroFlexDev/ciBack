@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
-from app.models.domain_enums import DocumentStatus
 from app.models.user import User
 from app.schemas.course_graph import (
     CanvasOut,
@@ -12,7 +11,13 @@ from app.schemas.course_graph import (
     CanvasVersionListOut,
     CanvasVersionOut,
 )
-from app.schemas.document import DocumentListOut, DocumentPublicOut
+from app.schemas.document import (
+    DocumentListResponse,
+    DocumentStatus,
+    DocumentUploadResponse,
+    PUBLIC_TO_INTERNAL_STATUSES,
+    document_list_item,
+)
 from app.services.auth_service import get_current_user
 from app.services.course_content_service import CourseContentService
 from app.services.file_storage import FileStorage, get_file_storage
@@ -74,26 +79,29 @@ def get_canvas_version(
 
 @router.post(
     "/{course_id}/documents",
-    response_model=DocumentPublicOut,
-    status_code=status.HTTP_201_CREATED,
+    response_model=DocumentUploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 def upload_document(
     course_id: int,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     storage: FileStorage = Depends(get_file_storage),
 ):
-    return CourseContentService.upload_document(
+    if file is None:
+        raise HTTPException(status_code=400, detail="Файл не передан")
+    document = CourseContentService.upload_document(
         db,
         course_id=course_id,
         owner_id=current_user.id,
         upload=file,
         storage=storage,
     )
+    return document_list_item(document)
 
 
-@router.get("/{course_id}/documents", response_model=DocumentListOut)
+@router.get("/{course_id}/documents", response_model=DocumentListResponse)
 def list_documents(
     course_id: int,
     limit: int = Query(default=20, ge=1, le=100),
@@ -118,9 +126,18 @@ def list_documents(
         owner_id=current_user.id,
         limit=limit,
         offset=offset,
-        status=document_status.value if document_status else None,
+        statuses=(
+            PUBLIC_TO_INTERNAL_STATUSES[document_status]
+            if document_status is not None
+            else None
+        ),
         source_type=source_type,
         sort_by=sort_by,
         sort_order=sort_order,
     )
-    return DocumentListOut(items=items, total=total, limit=limit, offset=offset)
+    return DocumentListResponse(
+        items=[document_list_item(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

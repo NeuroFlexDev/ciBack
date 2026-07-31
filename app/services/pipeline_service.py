@@ -40,11 +40,17 @@ def _safe_error(exc: Exception) -> str:
     return message[:4000]
 
 
+def _safe_document_error(exc: Exception) -> str:
+    if isinstance(exc, (ValueError, UnicodeError)):
+        return "Не удалось извлечь текст из документа"
+    return "Не удалось обработать документ"
+
+
 class PipelineService:
     @staticmethod
     def get_document(db: Session, document_id: int, owner_id: int):
         document = PipelineRepository.get_owned_document(db, document_id, owner_id)
-        if document is None:
+        if document is None or document.status == DocumentStatus.ARCHIVED.value:
             raise HTTPException(status_code=404, detail="Документ не найден")
         return document
 
@@ -161,7 +167,7 @@ class PipelineService:
                 failed_run.latency_ms = _elapsed_ms(started)
             if failed_document is not None:
                 failed_document.status = DocumentStatus.FAILED.value
-                failed_document.processing_error = error
+                failed_document.processing_error = _safe_document_error(exc)
             db.commit()
             status_code = 422 if isinstance(exc, (ValueError, UnicodeError)) else 503
             raise PipelineRunFailed(run_id, error, status_code) from exc

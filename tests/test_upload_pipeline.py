@@ -128,7 +128,8 @@ def test_reindex_failure_is_persisted(tmp_path, monkeypatch):
     assert run.status == "failed"
     assert run.error
     assert document.status == "failed"
-    assert document.processing_error == run.error
+    assert document.processing_error == "Не удалось извлечь текст из документа"
+    assert document.processing_error != run.error
     db_session.close()
 
 

@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
     UPLOAD_DIR: Path = Path("uploads")
-    MAX_UPLOAD_BYTES: int = Field(default=50 * 1024 * 1024, gt=0)
+    MAX_DOCUMENT_SIZE_MB: int = Field(default=25, gt=0)
+    # Backward-compatible override for existing deployments. New environments
+    # should use MAX_DOCUMENT_SIZE_MB.
+    MAX_UPLOAD_BYTES: int | None = Field(default=None, gt=0)
     CHAT_HISTORY_MESSAGES: int = Field(default=20, gt=0, le=200)
     DOCUMENT_CHUNK_CHARS: int = Field(default=2000, ge=200, le=20000)
     DOCUMENT_CHUNK_OVERLAP_CHARS: int = Field(default=200, ge=0, le=5000)
@@ -41,5 +44,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def max_document_bytes(self) -> int:
+        if self.MAX_UPLOAD_BYTES is not None:
+            return self.MAX_UPLOAD_BYTES
+        return self.MAX_DOCUMENT_SIZE_MB * 1024 * 1024
 
 settings = Settings()

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.user import User
-from app.schemas.document import DocumentPublicOut
+from app.schemas.document import DocumentListItem, document_list_item
 from app.schemas.generation_run import GenerationRunOut
 from app.services.auth_service import get_current_user
 from app.services.file_storage import FileStorage, get_file_storage
@@ -20,13 +20,15 @@ def _translate_failure(exc: PipelineRunFailed) -> HTTPException:
     )
 
 
-@router.get("/documents/{document_id}", response_model=DocumentPublicOut)
+@router.get("/documents/{document_id}", response_model=DocumentListItem)
 def get_document(
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return PipelineService.get_document(db, document_id, current_user.id)
+    return document_list_item(
+        PipelineService.get_document(db, document_id, current_user.id)
+    )
 
 
 @router.post(

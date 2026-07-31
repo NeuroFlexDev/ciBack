@@ -232,10 +232,14 @@ def test_document_upload_list_filters_and_storage(
         files={"file": ("notes.txt", b"hello course", "text/plain")},
         headers=auth_headers,
     )
-    assert response.status_code == 201
+    assert response.status_code == 202
     body = response.json()
-    assert body["status"] == "uploaded"
+    assert body["status"] == "processing"
     assert body["original_filename"] == "notes.txt"
+    assert body["content_type"] == "text/plain"
+    assert body["error_message"] is None
+    assert "mime_type" not in body
+    assert "processing_error" not in body
     assert "storage_key" not in body
     assert "content_hash" not in body
 
@@ -253,7 +257,7 @@ def test_document_upload_list_filters_and_storage(
         params={
             "limit": 1,
             "offset": 0,
-            "status": "uploaded",
+            "status": "processing",
             "source_type": "upload",
             "sort_by": "original_filename",
             "sort_order": "asc",

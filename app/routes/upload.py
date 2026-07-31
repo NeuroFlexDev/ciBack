@@ -12,7 +12,11 @@ from docx import Document
 
 router = APIRouter()
 
-@router.post("/courses/{course_id}/upload-description", summary="RAG: загрузка файла и обновление описания курса")
+@router.post(
+    "/courses/{course_id}/upload-description",
+    summary="RAG: загрузка файла и обновление описания курса",
+    deprecated=True,
+)
 def upload_and_update_description(
     course_id: int,
     file: UploadFile = File(...),
@@ -20,7 +24,11 @@ def upload_and_update_description(
     current_user: User = Depends(get_current_user),
 ):
     # Проверка курса
-    course = db.query(Course).filter(Course.id == course_id, Course.owner_id == current_user.id).first()
+    course = db.query(Course).filter(
+        Course.id == course_id,
+        Course.owner_id == current_user.id,
+        Course.is_deleted.is_(False),
+    ).first()
     if not course:
         raise HTTPException(404, detail="❌ Курс не найден")
 

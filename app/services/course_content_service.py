@@ -1,10 +1,13 @@
 from pathlib import Path
 from uuid import uuid4
+import codecs
+import zipfile
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.course_graph import CourseGraph
 from app.models.document import Document
 from app.models.domain_enums import CourseGraphStatus, DocumentStatus
@@ -27,9 +30,55 @@ ALLOWED_UPLOADS = {
     ".txt": {"text/plain"},
 }
 
+DOCX_REQUIRED_MEMBERS = {"[Content_Types].xml", "word/document.xml"}
+
 
 def _course_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail="Курс не найден")
+
+
+def _invalid_file() -> HTTPException:
+    return HTTPException(status_code=400, detail="Файл пустой или повреждён")
+
+
+def _validate_upload_content(upload: UploadFile, suffix: str) -> None:
+    source = upload.file
+    try:
+        source.seek(0)
+        first_byte = source.read(1)
+        if not first_byte:
+            raise _invalid_file()
+        source.seek(0)
+
+        if suffix == ".pdf":
+            if source.read(5) != b"%PDF-":
+                raise _invalid_file()
+        elif suffix == ".docx":
+            try:
+                with zipfile.ZipFile(source) as archive:
+                    if not DOCX_REQUIRED_MEMBERS.issubset(archive.namelist()):
+                        raise _invalid_file()
+            except (zipfile.BadZipFile, OSError):
+                raise _invalid_file()
+        elif suffix == ".txt":
+            decoder = codecs.getincrementaldecoder("utf-8-sig")("strict")
+            total = 0
+            while chunk := source.read(1024 * 1024):
+                total += len(chunk)
+                if total > settings.max_document_bytes:
+                    raise UploadTooLargeError
+                if b"\x00" in chunk:
+                    raise _invalid_file()
+                decoder.decode(chunk)
+            decoder.decode(b"", final=True)
+    except HTTPException:
+        raise
+    except UploadTooLargeError:
+        raise
+    except (UnicodeError, ValueError):
+        raise _invalid_file()
+    finally:
+        source.seek(0)
 
 
 def _canvas_out(course_id: int, graph: CourseGraph | None) -> CanvasOut:
@@ -192,6 +241,11 @@ class CourseContentService:
         if suffix not in ALLOWED_UPLOADS or upload.content_type not in ALLOWED_UPLOADS[suffix]:
             raise HTTPException(status_code=415, detail="Неподдерживаемый тип файла")
 
+        try:
+            _validate_upload_content(upload, suffix)
+        except UploadTooLargeError:
+            raise HTTPException(status_code=413, detail="Файл превышает допустимый размер")
+
         storage_key = f"{owner_id}/{course_id}/{uuid4().hex}{suffix}"
         try:
             stored = storage.save(upload.file, storage_key)
@@ -199,7 +253,7 @@ class CourseContentService:
             raise HTTPException(status_code=413, detail="Файл превышает допустимый размер")
         if stored.size_bytes == 0:
             storage.delete(storage_key)
-            raise HTTPException(status_code=400, detail="Пустой файл")
+            raise _invalid_file()
 
         document = Document(
             storage_key=storage_key,

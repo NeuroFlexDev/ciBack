@@ -1,9 +1,10 @@
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.domain_enums import DocumentStatus
+from app.models.domain_enums import DocumentStatus as InternalDocumentStatus
 
 
 class DocumentCreate(BaseModel):
@@ -11,7 +12,7 @@ class DocumentCreate(BaseModel):
     owner_id: int = Field(gt=0)
     course_id: int = Field(gt=0)
     version: int = Field(default=1, gt=0)
-    status: DocumentStatus = DocumentStatus.UPLOADED
+    status: InternalDocumentStatus = InternalDocumentStatus.UPLOADED
     content_hash: str = Field(min_length=1, max_length=128)
     source_type: str = Field(min_length=1, max_length=64)
     original_filename: str = Field(min_length=1, max_length=512)
@@ -20,7 +21,7 @@ class DocumentCreate(BaseModel):
 
 
 class DocumentUpdate(BaseModel):
-    status: DocumentStatus | None = None
+    status: InternalDocumentStatus | None = None
     processing_error: str | None = None
 
 
@@ -59,24 +60,70 @@ class DocumentChunkOut(DocumentChunkCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
-class DocumentPublicOut(BaseModel):
+class DocumentStatus(str, Enum):
+    PROCESSING = "processing"
+    READY = "ready"
+    ERROR = "error"
+
+
+INTERNAL_TO_PUBLIC_STATUS = {
+    InternalDocumentStatus.UPLOADED.value: DocumentStatus.PROCESSING,
+    InternalDocumentStatus.QUEUED.value: DocumentStatus.PROCESSING,
+    InternalDocumentStatus.PROCESSING.value: DocumentStatus.PROCESSING,
+    InternalDocumentStatus.INDEXED.value: DocumentStatus.READY,
+    InternalDocumentStatus.FAILED.value: DocumentStatus.ERROR,
+}
+
+PUBLIC_TO_INTERNAL_STATUSES = {
+    DocumentStatus.PROCESSING: (
+        InternalDocumentStatus.UPLOADED.value,
+        InternalDocumentStatus.QUEUED.value,
+        InternalDocumentStatus.PROCESSING.value,
+    ),
+    DocumentStatus.READY: (InternalDocumentStatus.INDEXED.value,),
+    DocumentStatus.ERROR: (InternalDocumentStatus.FAILED.value,),
+}
+
+
+class DocumentListItem(BaseModel):
     id: int
     course_id: int
     version: int
     status: DocumentStatus
     source_type: str
     original_filename: str
-    mime_type: str
+    content_type: str
     size_bytes: int
-    processing_error: str | None
+    error_message: str | None
     created_at: datetime
     updated_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+
+class DocumentUploadResponse(DocumentListItem):
+    pass
 
 
-class DocumentListOut(BaseModel):
-    items: list[DocumentPublicOut]
+class DocumentListResponse(BaseModel):
+    items: list[DocumentListItem]
     total: int
     limit: int
     offset: int
+
+
+def document_list_item(document) -> DocumentListItem:
+    public_status = INTERNAL_TO_PUBLIC_STATUS.get(document.status)
+    if public_status is None:
+        raise ValueError(f"Document status is not public: {document.status}")
+    return DocumentListItem(
+        id=document.id,
+        course_id=document.course_id,
+        original_filename=document.original_filename,
+        content_type=document.mime_type,
+        size_bytes=document.size_bytes,
+        source_type=document.source_type,
+        version=document.version,
+        status=public_status,
+        error_message=document.processing_error,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+    )

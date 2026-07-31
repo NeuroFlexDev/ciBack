@@ -94,7 +94,7 @@ def test_draft_id_accepts_document_without_starting_processing(
         headers=auth_headers,
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 202
     document = db_session.get(Document, response.json()["id"])
     assert document.course_id == draft_id
     assert document.status == "uploaded"

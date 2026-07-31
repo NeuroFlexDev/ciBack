@@ -71,4 +71,4 @@ class LocalFileStorage:
 
 
 def get_file_storage() -> FileStorage:
-    return LocalFileStorage(settings.UPLOAD_DIR, settings.MAX_UPLOAD_BYTES)
+    return LocalFileStorage(settings.UPLOAD_DIR, settings.max_document_bytes)
