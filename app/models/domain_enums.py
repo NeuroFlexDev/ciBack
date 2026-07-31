@@ -24,6 +24,18 @@ class CourseStatus(str, Enum):
     GENERATION_FAILED = "generation_failed"
 
 
+class CourseDifficulty(str, Enum):
+    INTERNSHIP = "internship"
+    BASIC = "basic"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+
+
+class CourseLanguage(str, Enum):
+    RU = "ru"
+    EN = "en"
+
+
 class GenerationRunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"

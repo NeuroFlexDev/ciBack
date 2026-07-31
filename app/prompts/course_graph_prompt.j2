@@ -3,6 +3,16 @@
 {"nodes":[{"id":"...","label":"...","type":"module|lesson"}],"edges":[{"source":"...","target":"...","relation":"contains|precedes"}]}
 
 Название курса: {{ course_title }}
+Цель курса: {{ goal }}
+Целевая аудитория: {{ target_audience or "не указана" }}
+Сложность: {{ difficulty }}
+Язык контента: {{ language }}
+Общее число уроков во всём курсе: {{ lesson_count }}
+
+Создай ровно {{ lesson_count }} узлов с type="lesson". Используй язык
+{{ language }} и глубину из уровня {{ difficulty }}. Узлы тестов не создавай:
+module_tests_enabled={{ module_tests_enabled }} и
+final_test_enabled={{ final_test_enabled }} применяются сервером после генерации.
 
 Фрагменты документов:
 {{ document_context }}

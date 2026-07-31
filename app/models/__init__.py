@@ -3,6 +3,7 @@ from .assessment_rubric import AssessmentRubric
 from .chat import Chat, ChatMessage
 from .competency import Competency
 from .course import Course
+from .course_generation_settings import CourseGenerationSettings
 from .course_graph import CourseGraph
 from .course_modules import CourseModule
 from .course_structure import CourseStructure
@@ -28,6 +29,7 @@ __all__ = [
     "ChatMessage",
     "Competency",
     "Course",
+    "CourseGenerationSettings",
     "CourseGraph",
     "CourseModule",
     "CourseStructure",

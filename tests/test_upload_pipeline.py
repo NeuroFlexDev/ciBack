@@ -5,6 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from app.core.security import hash_password
 from app.database.db import Base
 from app.models.course import Course
+from app.models.course_generation_settings import CourseGenerationSettings
+from app.models.domain_enums import CourseStatus
 from app.models.course_graph import CourseGraph
 from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
@@ -21,9 +23,27 @@ class MemoryStorage:
 
 
 def _course_and_document(db_session, auth_user, content=b"# Topic\nSome useful text"):
-    course = Course(name="Pipeline course", owner_id=auth_user.id)
+    course = Course(
+        name="Pipeline course",
+        owner_id=auth_user.id,
+        status=CourseStatus.CONFIGURED.value,
+    )
     db_session.add(course)
     db_session.flush()
+    db_session.add(
+        CourseGenerationSettings(
+            course_id=course.id,
+            goal="Teach the topic",
+            target_audience="Learners",
+            difficulty="basic",
+            language="en",
+            lesson_count=1,
+            module_tests_enabled=True,
+            final_test_enabled=True,
+            created_by=auth_user.id,
+            updated_by=auth_user.id,
+        )
+    )
     document = Document(
         storage_key="document.txt",
         owner_id=auth_user.id,
@@ -188,7 +208,13 @@ def test_graph_generation_reuses_fingerprint_and_force_creates_version(
     assert graphs[0].status == "archived"
     assert graphs[1].status == "draft"
     assert course.current_graph_id == graphs[1].id
-    assert forced.output["node_count"] == 2
+    assert forced.output["node_count"] == 4
+    assert forced.settings_snapshot["lesson_count"] == 1
+    assert course.status == "ready"
+    test_nodes = [
+        node for node in graphs[1].nodes if node.get("type") == "test"
+    ]
+    assert {node["assessment_scope"] for node in test_nodes} == {"module", "final"}
 
 
 def test_invalid_generated_graph_persists_failed_run_without_partial_graph(
@@ -231,6 +257,9 @@ def test_invalid_generated_graph_persists_failed_run_without_partial_graph(
     run = db_session.get(GenerationRun, raised.value.run_id)
     assert run.status == "failed"
     assert run.error
+    assert run.settings_snapshot["difficulty"] == "basic"
+    db_session.refresh(course)
+    assert course.status == "generation_failed"
     assert db_session.query(CourseGraph).count() == 0
     db_session.close()
 

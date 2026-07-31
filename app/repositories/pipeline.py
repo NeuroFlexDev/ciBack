@@ -3,11 +3,25 @@ from sqlalchemy.orm import Session
 
 from app.models.course import Course
 from app.models.course_graph import CourseGraph
+from app.models.course_generation_settings import CourseGenerationSettings
 from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
 
 
 class PipelineRepository:
+    @staticmethod
+    def get_generation_settings(
+        db: Session, course_id: int
+    ) -> CourseGenerationSettings | None:
+        return (
+            db.query(CourseGenerationSettings)
+            .filter(
+                CourseGenerationSettings.course_id == course_id,
+                CourseGenerationSettings.is_deleted.is_(False),
+            )
+            .first()
+        )
+
     @staticmethod
     def get_owned_document(
         db: Session, document_id: int, owner_id: int

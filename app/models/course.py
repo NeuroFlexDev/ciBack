@@ -60,6 +60,12 @@ class Course(Base, BaseModelMixin):
     generation_runs = relationship(
         "GenerationRun", back_populates="course", cascade="all, delete-orphan"
     )
+    generation_settings = relationship(
+        "CourseGenerationSettings",
+        back_populates="course",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
     competencies = relationship(
         "Competency", back_populates="course", cascade="all, delete-orphan"
     )

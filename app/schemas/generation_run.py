@@ -15,6 +15,7 @@ class GenerationRunOut(BaseModel):
     status: GenerationRunStatus
     model: str | None
     input_docs: list[dict[str, Any]]
+    settings_snapshot: dict[str, Any]
     output: dict[str, Any] | None
     cost_usd: Decimal | None
     latency_ms: int | None

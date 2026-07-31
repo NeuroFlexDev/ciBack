@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 
 from fastapi import HTTPException
@@ -13,6 +14,7 @@ from app.models.domain_enums import (
     DocumentStatus,
     GenerationRunStatus,
     GenerationRunType,
+    CourseStatus,
 )
 from app.models.generation_run import GenerationRun
 from app.repositories.pipeline import PipelineRepository
@@ -21,6 +23,10 @@ from app.services.document_processing import chunk_blocks, extract_blocks
 from app.services.embedding_service import replace_document_embeddings
 from app.services.file_storage import FileStorage
 from app.services.generation_service import DEFAULT_ENGINE, generate_from_prompt
+from app.services.course_generation_settings_service import (
+    generation_settings_snapshot,
+    settings_not_found,
+)
 
 
 class PipelineRunFailed(Exception):
@@ -44,6 +50,59 @@ def _safe_document_error(exc: Exception) -> str:
     if isinstance(exc, (ValueError, UnicodeError)):
         return "Не удалось извлечь текст из документа"
     return "Не удалось обработать документ"
+
+
+def _unique_node_id(existing: set[str], base: str) -> str:
+    candidate = base
+    suffix = 2
+    while candidate in existing:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    existing.add(candidate)
+    return candidate
+
+
+def _apply_assessment_settings(
+    nodes: list[dict], edges: list[dict], snapshot: dict
+) -> tuple[list[dict], list[dict]]:
+    existing = {str(node["id"]) for node in nodes}
+    modules = [node for node in nodes if node.get("type") == "module"]
+    language = snapshot["language"]
+
+    if snapshot["module_tests_enabled"]:
+        for index, module in enumerate(modules, start=1):
+            test_id = _unique_node_id(existing, f"module-test-{module['id']}")
+            nodes.append(
+                {
+                    "id": test_id,
+                    "label": (
+                        f"Тест модуля {index}"
+                        if language == "ru"
+                        else f"Module {index} test"
+                    ),
+                    "type": "test",
+                    "assessment_scope": "module",
+                }
+            )
+            edges.append(
+                {"source": module["id"], "target": test_id, "relation": "contains"}
+            )
+
+    if snapshot["final_test_enabled"]:
+        final_id = _unique_node_id(existing, "final-test")
+        nodes.append(
+            {
+                "id": final_id,
+                "label": "Итоговый тест" if language == "ru" else "Final test",
+                "type": "test",
+                "assessment_scope": "final",
+            }
+        )
+        for module in modules:
+            edges.append(
+                {"source": module["id"], "target": final_id, "relation": "precedes"}
+            )
+    return nodes, edges
 
 
 class PipelineService:
@@ -179,6 +238,30 @@ class PipelineService:
         course = PipelineRepository.get_owned_course(db, course_id, owner_id)
         if course is None:
             raise HTTPException(status_code=404, detail="Курс не найден")
+        generation_settings = PipelineRepository.get_generation_settings(db, course_id)
+        if generation_settings is None:
+            raise settings_not_found()
+        if course.status == CourseStatus.GENERATING.value:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "course_generation_in_progress",
+                    "message": "Генерация курса уже выполняется",
+                },
+            )
+        if course.status not in {
+            CourseStatus.CONFIGURED.value,
+            CourseStatus.GENERATION_FAILED.value,
+            CourseStatus.READY.value,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "course_not_configured",
+                    "message": "Курс не готов к генерации",
+                },
+            )
+        settings_snapshot = generation_settings_snapshot(course, generation_settings)
         documents = PipelineRepository.indexed_documents(db, course_id, owner_id)
         if not documents:
             raise HTTPException(
@@ -193,9 +276,14 @@ class PipelineService:
             }
             for document in documents
         ]
-        fingerprint_source = "|".join(
+        documents_fingerprint = "|".join(
             f"{item['document_id']}:{item['version']}:{item['content_hash']}"
             for item in input_docs
+        )
+        fingerprint_source = (
+            documents_fingerprint
+            + "|"
+            + json.dumps(settings_snapshot, ensure_ascii=False, sort_keys=True)
         )
         fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
         if not force:
@@ -208,6 +296,8 @@ class PipelineService:
                 and isinstance(graph_id, int)
                 and PipelineRepository.graph_by_id(db, graph_id) is not None
             ):
+                course.status = CourseStatus.READY.value
+                db.commit()
                 return existing
 
         run = GenerationRun(
@@ -218,9 +308,11 @@ class PipelineService:
             prompt="course_graph_prompt.j2",
             model=DEFAULT_ENGINE,
             input_docs=input_docs,
+            settings_snapshot=settings_snapshot,
             input_fingerprint=fingerprint,
         )
         db.add(run)
+        course.status = CourseStatus.GENERATING.value
         db.commit()
         db.refresh(run)
         run_id = run.id
@@ -255,10 +347,27 @@ class PipelineService:
                 include_external_context=False,
                 use_feedback=False,
                 course_title=course.name,
+                goal=settings_snapshot["goal"],
+                target_audience=settings_snapshot["target_audience"],
+                difficulty=settings_snapshot["difficulty"],
+                language=settings_snapshot["language"],
+                lesson_count=settings_snapshot["lesson_count"],
+                module_tests_enabled=settings_snapshot["module_tests_enabled"],
+                final_test_enabled=settings_snapshot["final_test_enabled"],
                 document_context="\n".join(context_parts),
             )
             payload = GeneratedGraphPayload.model_validate(raw_graph)
             nodes, edges = payload.json_payload()
+            generated_lessons = sum(
+                node.get("type") == "lesson" for node in nodes
+            )
+            if generated_lessons != settings_snapshot["lesson_count"]:
+                raise ValueError(
+                    "Generated lesson count does not match generation settings"
+                )
+            nodes, edges = _apply_assessment_settings(
+                nodes, edges, settings_snapshot
+            )
 
             locked_course = PipelineRepository.get_owned_course(
                 db, course_id, owner_id, for_update=True
@@ -281,6 +390,7 @@ class PipelineService:
             db.add(graph)
             db.flush()
             locked_course.current_graph = graph
+            locked_course.status = CourseStatus.READY.value
 
             run.status = GenerationRunStatus.SUCCEEDED.value
             run.latency_ms = _elapsed_ms(started)
@@ -297,9 +407,14 @@ class PipelineService:
             db.rollback()
             error = _safe_error(exc)
             failed_run = db.get(GenerationRun, run_id)
+            failed_course = PipelineRepository.get_owned_course(
+                db, course_id, owner_id, for_update=True
+            )
             if failed_run is not None:
                 failed_run.status = GenerationRunStatus.FAILED.value
                 failed_run.error = error
                 failed_run.latency_ms = _elapsed_ms(started)
+            if failed_course is not None:
+                failed_course.status = CourseStatus.GENERATION_FAILED.value
             db.commit()
             raise PipelineRunFailed(run_id, error, 502) from exc

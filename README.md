@@ -384,6 +384,76 @@ ID. Кандидаты выбираются из БД только среди т
 retrieval API. До появления штатного worker reindex выполняется синхронно, а
 его состояние и ошибки сохраняются в `GenerationRun`.
 
+### Step 3: настройки генерации курса
+
+После загрузки документов wizard сохраняет всю форму Step 3 одним идемпотентным
+PUT. GET восстанавливает форму после refresh или на другом устройстве:
+
+```http
+PUT /api/courses/{course_id}/generation-settings
+GET /api/courses/{course_id}/generation-settings
+```
+
+```json
+{
+  "title": "Введение в информационную безопасность",
+  "goal": "Научить сотрудников соблюдать базовые требования",
+  "target_audience": "Новые сотрудники",
+  "difficulty": "basic",
+  "language": "ru",
+  "lesson_count": 12,
+  "module_tests_enabled": true,
+  "final_test_enabled": true
+}
+```
+
+Поля `title`, `goal`, `difficulty`, `language`, `lesson_count` и оба boolean
+обязательны; неизвестные поля запрещены. `title` обрезается по краям и должен
+содержать 1–200 символов, `goal` — 1–2000. `target_audience` допускает `null`,
+ограничен 1000 символами, а строка из пробелов нормализуется в `null`.
+
+`difficulty` принимает только `internship`, `basic`, `intermediate`, `advanced`;
+`language` — только `ru` или `en`. `lesson_count` находится в диапазоне 1–100
+и означает суммарное число уроков во всём курсе, а не число уроков в модуле.
+
+Title хранится в `Course`, остальные значения — в единственной
+`CourseGenerationSettings` для курса. Повторный PUT обновляет ту же запись.
+Успешное сохранение переводит курс в `configured`. Настройки разрешено менять у
+`draft`, `configured`, `generation_failed` и `ready`; готовый курс при этом снова
+становится `configured`, но существующий graph не удаляется. Во время
+`generating` PUT возвращает `409`.
+
+Если GET вызывается до сохранения формы, API отвечает `404`:
+
+```json
+{
+  "detail": {
+    "code": "generation_settings_not_found",
+    "message": "Настройки генерации курса не найдены"
+  }
+}
+```
+
+Owner ACL скрывает чужой или удалённый курс через `404`. Ошибки enum, диапазона,
+пробельных обязательных строк, отсутствующих boolean и лишних полей дают `422`.
+
+#### Как настройки влияют на generate-graph
+
+`POST /api/courses/{course_id}/generate-graph` читает настройки из БД, поэтому
+frontend не отправляет их повторно. Перед запуском требуются сохранённые settings
+и хотя бы один документ в публичном состоянии `ready` (`indexed` внутри).
+
+Каждый `GenerationRun` получает immutable `settings_snapshot`. Snapshot вместе
+с версиями и hash документов входит в fingerprint: изменение формы создаёт новый
+run даже при прежних документах. Курс переходит `configured → generating`, затем
+в `ready` при успехе или `generation_failed` при ошибке.
+
+Goal и target audience задают контекст prompt, difficulty — глубину, language —
+язык, а LLM обязан вернуть ровно `lesson_count` lesson-узлов. Несовпадение числа
+уроков считается ошибкой генерации. Module test после каждого модуля и final
+test добавляются сервером детерминированно согласно boolean-полям, а не оставлены
+на усмотрение LLM.
+
 ### Генерация модулей
 
 ```http

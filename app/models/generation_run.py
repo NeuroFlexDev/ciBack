@@ -63,6 +63,7 @@ class GenerationRun(Base, BaseModelMixin):
     prompt = Column(Text, nullable=True)
     model = Column(String(255), nullable=True)
     input_docs = Column(JSON_PAYLOAD, nullable=False, default=list)
+    settings_snapshot = Column(JSON_PAYLOAD, nullable=False, default=dict)
     input_fingerprint = Column(String(128), nullable=True)
     output = Column(JSON_PAYLOAD, nullable=True)
     cost_usd = Column(Numeric(12, 6), nullable=True)
