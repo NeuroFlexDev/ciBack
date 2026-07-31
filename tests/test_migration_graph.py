@@ -34,15 +34,6 @@ EXPECTED_TABLES = {
     "users",
 }
 
-CORE_COMPLETION_TABLES = {
-    "approvals",
-    "assessment_rubrics",
-    "competencies",
-    "learning_events",
-    "learning_objectives",
-}
-
-
 def test_alembic_revision_graph_has_one_connected_head():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     revisions = list(script.walk_revisions())
@@ -133,11 +124,7 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         text=True,
         env=env,
     )
-    assert set(json.loads(result.stdout)) == (
-        EXPECTED_TABLES
-        - CORE_COMPLETION_TABLES
-        | {"alembic_version"}
-    )
+    assert set(json.loads(result.stdout)) == EXPECTED_TABLES | {"alembic_version"}
 
     for arguments in (("upgrade", "head"), ("check",), ("downgrade", "base")):
         subprocess.run(

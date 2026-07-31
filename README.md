@@ -347,3 +347,21 @@ GET /api/healthz
 *Последнее обновление: 2025-21-11*
 
 ---
+
+### Course wizard drafts
+
+The wizard creates a persistent course before document upload. `POST
+/api/courses/drafts` has no request body and returns `201 Created` with a draft
+ID, `setup_step: "documents"`, and a nullable title. `GET /api/courses/drafts`
+lists only the current owner's drafts. Drafts are excluded from `GET
+/api/courses/`, and creating one does not start indexing or generation. The ID
+can be used immediately with `POST /api/courses/{course_id}/documents`.
+
+### Course wizard drafts
+
+The wizard creates a persistent course before document upload. `POST
+/api/courses/drafts` has no request body and returns `201 Created` with a draft
+ID, `setup_step: "documents"`, and a nullable title. `GET /api/courses/drafts`
+lists only the current owner's drafts. Drafts are excluded from `GET
+/api/courses/`, and creating one does not start indexing or generation. The ID
+can be used immediately with `POST /api/courses/{course_id}/documents`.

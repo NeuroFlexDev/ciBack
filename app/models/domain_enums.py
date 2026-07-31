@@ -16,6 +16,14 @@ class CourseGraphStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class CourseStatus(str, Enum):
+    DRAFT = "draft"
+    CONFIGURED = "configured"
+    GENERATING = "generating"
+    READY = "ready"
+    GENERATION_FAILED = "generation_failed"
+
+
 class GenerationRunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"

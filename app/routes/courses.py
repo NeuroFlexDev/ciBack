@@ -11,6 +11,9 @@ from app.models.test import Test
 from app.models.task import Task
 from app.models.user import User
 from app.services.auth_service import get_current_user
+from app.models.domain_enums import CourseStatus
+from app.schemas.course import CourseDraftResponse
+from app.services.course_draft_service import CourseDraftService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -73,6 +76,44 @@ def parse_course_enum(value: object) -> int:
     except (TypeError, ValueError):
         return 1
 
+
+def draft_response(course: Course) -> CourseDraftResponse:
+    return CourseDraftResponse(
+        id=course.id,
+        status=CourseStatus.DRAFT,
+        title=None,
+        created_at=course.created_at,
+        updated_at=course.updated_at,
+    )
+
+
+@router.post(
+    "/courses/drafts",
+    status_code=201,
+    response_model=CourseDraftResponse,
+    summary="Create an empty course draft",
+)
+def create_course_draft(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return draft_response(CourseDraftService.create(db, current_user.id))
+
+
+@router.get(
+    "/courses/drafts",
+    response_model=list[CourseDraftResponse],
+    summary="List current user's course drafts",
+)
+def list_course_drafts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return [
+        draft_response(course)
+        for course in CourseDraftService.list_for_owner(db, current_user.id)
+    ]
+
 @router.post("/courses/", summary="Создание курса", response_model=CourseResponse)
 def create_course(
     course: CourseCreate,
@@ -90,6 +131,7 @@ def create_course(
             level=course.level,
             language=course.language,
             owner_id=current_user.id,
+            status=CourseStatus.READY.value,
         )
         db.add(new_course)
         db.commit()
@@ -116,7 +158,15 @@ def get_all_courses(
     Возвращает список всех курсов, сохраненных в базе данных.
     """
     try:
-        courses = db.query(Course).filter(Course.owner_id == current_user.id).all()
+        courses = (
+            db.query(Course)
+            .filter(
+                Course.owner_id == current_user.id,
+                Course.status != CourseStatus.DRAFT.value,
+                Course.is_deleted.is_(False),
+            )
+            .all()
+        )
         return [
             CourseResponse(
                 id=course.id,
@@ -144,7 +194,11 @@ def update_course(
     try:
         course = (
             db.query(Course)
-            .filter(Course.id == course_id, Course.owner_id == current_user.id)
+            .filter(
+                Course.id == course_id,
+                Course.owner_id == current_user.id,
+                Course.is_deleted.is_(False),
+            )
             .first()
         )
         if not course:
@@ -190,16 +244,22 @@ def delete_course(
     try:
         course = (
             db.query(Course)
-            .filter(Course.id == course_id, Course.owner_id == current_user.id)
+            .filter(
+                Course.id == course_id,
+                Course.owner_id == current_user.id,
+                Course.is_deleted.is_(False),
+            )
             .first()
         )
         if not course:
             raise HTTPException(status_code=404, detail="Курс не найден")
         
-        db.delete(course)
+        course.is_deleted = True
         db.commit()
         logger.info("Курс удален: ID=%s", course_id)
         return {"message": f"Курс с ID {course_id} успешно удален"}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         logger.error("Ошибка при удалении курса: %s", str(e), exc_info=True)
@@ -214,7 +274,11 @@ def load_modules(
 ):
     course = (
         db.query(Course)
-        .filter(Course.id == course_id, Course.owner_id == current_user.id)
+        .filter(
+            Course.id == course_id,
+            Course.owner_id == current_user.id,
+            Course.is_deleted.is_(False),
+        )
         .first()
     )
     if not course:
@@ -272,7 +336,11 @@ def save_modules(
 ):
     course = (
         db.query(Course)
-        .filter(Course.id == course_id, Course.owner_id == current_user.id)
+        .filter(
+            Course.id == course_id,
+            Course.owner_id == current_user.id,
+            Course.is_deleted.is_(False),
+        )
         .first()
     )
     if not course:

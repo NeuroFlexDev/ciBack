@@ -1,5 +1,9 @@
+from datetime import datetime
+from typing import Literal, Optional
+
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
+
+from app.models.domain_enums import CourseStatus
 
 # Pydantic-модель для создания курса
 class CourseCreate(BaseModel):
@@ -24,3 +28,12 @@ class CourseResponse(BaseModel):
     language: int
     is_deleted: bool
     model_config = ConfigDict(from_attributes=True)
+
+
+class CourseDraftResponse(BaseModel):
+    id: int
+    status: Literal[CourseStatus.DRAFT]
+    setup_step: Literal["documents"] = "documents"
+    title: None = None
+    created_at: datetime
+    updated_at: datetime

@@ -1,16 +1,31 @@
-from sqlalchemy import Column, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 from app.database.db import Base
+from app.models.base import BaseModelMixin
+from app.models.domain_enums import CourseStatus
 
-class Course(Base):
+class Course(Base, BaseModelMixin):
     __tablename__ = "courses"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'configured', 'generating', 'ready', 'generation_failed')",
+            name="ck_courses_status",
+        ),
+        CheckConstraint(
+            "status = 'draft' OR name IS NOT NULL",
+            name="ck_courses_non_draft_name",
+        ),
+        Index("ix_courses_owner_status", "owner_id", "status"),
+    )
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
+    name = Column(String, nullable=True)
     description = Column(String, nullable=True)
     level = Column(String, nullable=True)
     language = Column(String, nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    status = Column(
+        String(32), nullable=False, default=CourseStatus.READY.value, index=True
+    )
     current_graph_id = Column(
         Integer,
         ForeignKey(
