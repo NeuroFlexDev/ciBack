@@ -30,6 +30,7 @@ from app.services.course_generation_settings_service import (
     generation_settings_snapshot,
     settings_not_found,
 )
+from app.services.course_materialization_service import CourseMaterializationService
 
 
 class PipelineRunFailed(Exception):
@@ -635,6 +636,9 @@ class PipelineService:
             db.add(graph)
             db.flush()
             locked_course.current_graph = graph
+            materialized = CourseMaterializationService.materialize(
+                db, course=locked_course, nodes=nodes, edges=edges
+            )
             locked_course.status = CourseStatus.READY.value
 
             run.status = GenerationRunStatus.COMPLETED.value if prepared_run is not None else GenerationRunStatus.SUCCEEDED.value
@@ -647,6 +651,7 @@ class PipelineService:
                 "graph_version": graph.version,
                 "node_count": len(nodes),
                 "edge_count": len(edges),
+                **materialized,
             }
             db.commit()
             db.refresh(run)

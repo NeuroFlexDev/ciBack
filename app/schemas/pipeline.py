@@ -5,6 +5,12 @@ from pydantic import BaseModel, Field, model_validator
 
 class GeneratedGraphNode(BaseModel):
     id: str = Field(min_length=1)
+    label: str | None = None
+    type: str | None = None
+    description: str | None = None
+    content: str | None = None
+    assessment_scope: str | None = None
+    questions: list[dict[str, Any]] = Field(default_factory=list)
 
     model_config = {"extra": "allow"}
 
@@ -30,6 +36,9 @@ class GeneratedGraphPayload(BaseModel):
         known = set(node_ids)
         if any(edge.source not in known or edge.target not in known for edge in self.edges):
             raise ValueError("generated graph edge references an unknown node")
+        node_types = {node.type for node in self.nodes}
+        if not {"module", "lesson"}.issubset(node_types):
+            raise ValueError("generated graph must contain modules and lessons")
         return self
 
     def json_payload(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

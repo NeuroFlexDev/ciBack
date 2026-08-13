@@ -1,6 +1,6 @@
 import logging
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, ConfigDict
 from app.database.db import get_db
@@ -14,6 +14,8 @@ from app.services.auth_service import get_current_user
 from app.models.domain_enums import CourseStatus
 from app.schemas.course import CourseDraftResponse
 from app.services.course_draft_service import CourseDraftService
+from app.schemas.course_publication import CourseListItem, CoursePublishResponse
+from app.services.course_publication_service import CoursePublicationService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -149,8 +151,12 @@ def create_course(
         logger.error("Ошибка при создании курса: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка при создании курса")
 
-@router.get("/courses/", summary="Получение всех курсов", response_model=list[CourseResponse])
+@router.get("/courses/", summary="Получение всех курсов", response_model=list[CourseListItem])
 def get_all_courses(
+    response: Response,
+    publication_status: str | None = Query(default=None, pattern="^(draft|published)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -158,28 +164,19 @@ def get_all_courses(
     Возвращает список всех курсов, сохраненных в базе данных.
     """
     try:
-        courses = (
-            db.query(Course)
-            .filter(
-                Course.owner_id == current_user.id,
-                Course.status != CourseStatus.DRAFT.value,
-                Course.is_deleted.is_(False),
-            )
-            .all()
-        )
-        return [
-            CourseResponse(
-                id=course.id,
-                title=course.name,
-                description=course.description,
-                level=parse_course_enum(course.level),
-                language=parse_course_enum(course.language),
-            )
-            for course in courses
-        ]
+        items, total = CoursePublicationService.list_courses(db, current_user.id, publication_status, limit, offset)
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["X-Limit"] = str(limit)
+        response.headers["X-Offset"] = str(offset)
+        return items
     except Exception as e:
         logger.error("Ошибка при получении курсов: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка при получении курсов")
+
+@router.post("/courses/{course_id}/publish", response_model=CoursePublishResponse, status_code=200, summary="Publish a ready course")
+def publish_course(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return CoursePublicationService.publish(db, course_id, current_user.id)
+
 
 @router.put("/courses/{course_id}", summary="Обновление курса", response_model=CourseResponse)
 def update_course(
@@ -214,6 +211,7 @@ def update_course(
                 setattr(course, "name", value)
             else:
                 setattr(course, field, value)
+        CoursePublicationService.prepare_for_edit(course)
         
         db.commit()
         db.refresh(course)
@@ -345,6 +343,8 @@ def save_modules(
     )
     if not course:
         raise HTTPException(status_code=404, detail="Курс не найден")
+
+    CoursePublicationService.prepare_for_edit(course)
 
     for module in list(course.modules):
         db.delete(module)

@@ -8,9 +8,24 @@ from app.database.db import get_db
 from app.models.course_structure import CourseStructure
 from app.models.user import User
 from app.services.auth_service import get_current_user
+from app.schemas.course_review import CourseReviewStructure
+from app.services.course_review_service import CourseReviewService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get(
+    "/courses/{course_id}/structure",
+    response_model=CourseReviewStructure,
+    summary="Получение сгенерированной структуры курса для Step 5",
+)
+def get_generated_course_structure(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return CourseReviewService.structure(db, course_id, current_user.id)
 
 # Pydantic-модель для создания структуры курса
 class CourseStructureCreate(BaseModel):

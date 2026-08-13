@@ -15,10 +15,18 @@ def test_connected_routes_require_authentication(client):
         ("post", "/api/documents/1/reindex", {}),
         ("post", "/api/courses/1/generate-graph", {}),
         ("post", "/api/courses/1/generation-runs", {}),
+        ("post", "/api/courses/1/publish", {}),
         ("get", "/api/courses/1/generation-settings", {}),
         ("put", "/api/courses/1/generation-settings", {"json": {}}),
         ("get", "/api/generation-runs/1", {}),
         ("post", "/api/generation-runs/1/retry", {}),
+        ("get", "/api/courses/1/structure", {}),
+        ("get", "/api/modules/1", {}),
+        ("put", "/api/courses/1/modules/order", {"json": {"items": []}}),
+        ("put", "/api/modules/1/lessons/order", {"json": {"items": []}}),
+        ("put", "/api/modules/1/tests/order", {"json": {"items": []}}),
+        ("post", "/api/courses/1/tests/", {"json": {}}),
+        ("get", "/api/versions/test/1", {}),
     ]
 
     for method, url, kwargs in requests:

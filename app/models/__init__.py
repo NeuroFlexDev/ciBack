@@ -19,6 +19,7 @@ from .module import Module
 from .module_version import ModuleVersion
 from .task import Task
 from .test import Test
+from .test_version import TestVersion
 from .theory import Theory
 from .user import User
 
@@ -46,6 +47,7 @@ __all__ = [
     "ModuleVersion",
     "Task",
     "Test",
+    "TestVersion",
     "Theory",
     "User",
 ]

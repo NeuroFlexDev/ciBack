@@ -1,6 +1,6 @@
 На основе приведённых фрагментов учебных документов создай граф курса.
 Верни только JSON-объект вида:
-{"nodes":[{"id":"...","label":"...","type":"module|lesson"}],"edges":[{"source":"...","target":"...","relation":"contains|precedes"}]}
+{"nodes":[{"id":"...","label":"...","type":"module|lesson","description":"...","content":"..."}],"edges":[{"source":"...","target":"...","relation":"contains|precedes"}]}
 
 Название курса: {{ course_title }}
 Цель курса: {{ goal }}
@@ -13,6 +13,10 @@
 {{ language }} и глубину из уровня {{ difficulty }}. Узлы тестов не создавай:
 module_tests_enabled={{ module_tests_enabled }} и
 final_test_enabled={{ final_test_enabled }} применяются сервером после генерации.
+Для каждого урока заполни краткое description и самостоятельный учебный текст content.
+Добавь relation="precedes" между последовательными модулями и между
+последовательными уроками внутри каждого модуля. Каждый урок должен иметь ровно
+одну входящую связь relation="contains" от своего модуля.
 
 Фрагменты документов:
 {{ document_context }}

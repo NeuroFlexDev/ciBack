@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 from app.models.base import BaseModelMixin
 from app.database.db import Base
@@ -8,9 +8,16 @@ from app.database.db import Base
 
 class Module(Base, BaseModelMixin):
     __tablename__ = "modules"
+    __table_args__ = (
+        CheckConstraint("position >= 0", name="ck_modules_position_nonnegative"),
+        CheckConstraint("revision > 0", name="ck_modules_revision_positive"),
+        Index("ix_modules_course_position", "course_id", "position"),
+    )
 
     title = Column(String, nullable=False)
     course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"))
+    position = Column(Integer, nullable=False, default=0)
+    revision = Column(Integer, nullable=False, default=1)
 
     # Обратная связь с Course
     course = relationship("Course", back_populates="modules")

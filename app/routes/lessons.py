@@ -1,179 +1,51 @@
-import logging
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
-from app.models.module import Module
 from app.models.lesson import Lesson
-from app.models.course import Course
 from app.models.user import User
+from app.schemas.course_editor import LessonCreateEditor, LessonUpdateEditor, OrderUpdate
 from app.services.auth_service import get_current_user
+from app.services.course_editor_service import CourseEditorService
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
-
-# Pydantic-модель для создания урока
-class LessonCreate(BaseModel):
-    title: str = Field(..., min_length=1, description="Название урока")
-    description: str = Field(..., min_length=1, description="Описание урока")
-
-# Pydantic-модель для обновления урока (поля опциональные)
-class LessonUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, description="Новое название урока")
-    description: Optional[str] = Field(None, min_length=1, description="Новое описание урока")
-
-# Pydantic-модель для ответа
-class LessonResponse(BaseModel):
-    id: int
-    title: str
-    description: str
-    module_id: int
-
-    model_config = ConfigDict(from_attributes=True)
-
-def get_owned_module(db: Session, course_id: int, module_id: int, user_id: int) -> Module | None:
-    return (
-        db.query(Module)
-        .join(Course, Module.course_id == Course.id)
-        .filter(Module.id == module_id, Module.course_id == course_id, Course.owner_id == user_id)
-        .first()
-    )
 
 
-def get_owned_lesson(db: Session, lesson_id: int, user_id: int) -> Lesson | None:
-    return (
-        db.query(Lesson)
-        .join(Module, Lesson.module_id == Module.id)
-        .join(Course, Module.course_id == Course.id)
-        .filter(Lesson.id == lesson_id, Course.owner_id == user_id)
-        .first()
-    )
+def _out(item: Lesson) -> dict:
+    content = item.theory.content if item.theory and not item.theory.is_deleted else ""
+    return {"id": item.id, "title": item.title, "description": item.description or "", "content": content, "module_id": item.module_id, "position": item.position, "revision": item.revision}
 
 
-@router.post("/courses/{course_id}/modules/{module_id}/lessons/", response_model=LessonResponse, summary="Добавление урока в модуль")
-def add_lesson(
-    course_id: int,
-    module_id: int,
-    lesson: LessonCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Добавляет новый урок к модулю конкретного курса.
-    Проверяет, что модуль существует и принадлежит указанному курсу.
-    """
-    # Здесь можно добавить дополнительную проверку, что модуль действительно относится к курсу course_id,
-    # если в модели Module есть поле course_id.
-    module = get_owned_module(db, course_id, module_id, current_user.id)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found for given course")
+@router.post("/courses/{course_id}/modules/{module_id}/lessons/", status_code=201)
+def add_lesson(course_id: int, module_id: int, payload: LessonCreateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _out(CourseEditorService.create_lesson(db, course_id, module_id, current_user.id, payload.title, payload.description, payload.content))
 
-    new_lesson = Lesson(
-        title=lesson.title,         # Используем поле title, так как в модели Lesson его так и называют
-        description=lesson.description,
-        module_id=module.id
-    )
-    db.add(new_lesson)
-    db.commit()
-    db.refresh(new_lesson)
-    logger.info("Добавлен новый урок: ID=%s в модуль ID=%s (Курс ID=%s)", new_lesson.id, module_id, course_id)
-    return LessonResponse(
-        id=new_lesson.id,
-        title=new_lesson.title,
-        description=new_lesson.description,
-        module_id=new_lesson.module_id
-    )
 
-@router.get("/courses/{course_id}/modules/{module_id}/lessons/", response_model=List[LessonResponse], summary="Получение уроков модуля")
-def get_lessons(
-    course_id: int,
-    module_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Возвращает список всех уроков для модуля конкретного курса.
-    """
-    module = get_owned_module(db, course_id, module_id, current_user.id)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found for given course")
-    
-    lessons = module.lessons  # Предполагается, что у Module есть отношение lessons
-    return [
-        LessonResponse(
-            id=lesson.id,
-            title=lesson.title,
-            description=lesson.description,
-            module_id=lesson.module_id
-        )
-        for lesson in lessons
-    ]
+@router.get("/courses/{course_id}/modules/{module_id}/lessons/")
+def get_lessons(course_id: int, module_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    module = CourseEditorService._module(db, module_id, current_user.id)
+    if module.course_id != course_id: from fastapi import HTTPException; raise HTTPException(404, "Module not found")
+    return [_out(item) for item in sorted((x for x in module.lessons if not x.is_deleted), key=lambda x: (x.position, x.id))]
 
-@router.get("/lessons/{lesson_id}", response_model=LessonResponse, summary="Получение урока по ID")
-def get_lesson(
-    lesson_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Возвращает данные урока по его ID.
-    """
-    lesson = get_owned_lesson(db, lesson_id, current_user.id)
-    if not lesson:
-        raise HTTPException(status_code=404, detail="Lesson not found")
-    return LessonResponse(
-        id=lesson.id,
-        title=lesson.title,
-        description=lesson.description,
-        module_id=lesson.module_id
-    )
 
-@router.put("/lessons/{lesson_id}", response_model=LessonResponse, summary="Обновление урока")
-def update_lesson(
-    lesson_id: int,
-    lesson_update: LessonUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Обновляет данные урока по указанному ID.
-    """
-    lesson = get_owned_lesson(db, lesson_id, current_user.id)
-    if not lesson:
-        raise HTTPException(status_code=404, detail="Lesson not found")
-    
-    update_data = lesson_update.dict(exclude_unset=True)
-    if "title" in update_data:
-        lesson.title = update_data["title"]
-    if "description" in update_data:
-        lesson.description = update_data["description"]
-    
-    db.commit()
-    db.refresh(lesson)
-    logger.info("Обновлен урок: ID=%s", lesson.id)
-    return LessonResponse(
-        id=lesson.id,
-        title=lesson.title,
-        description=lesson.description,
-        module_id=lesson.module_id
-    )
+@router.put("/modules/{module_id}/lessons/order")
+def reorder_lessons(module_id: int, payload: OrderUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    CourseEditorService._module(db, module_id, current_user.id, True)
+    rows = CourseEditorService.reorder(db, entity=Lesson, parent_filter=(Lesson.module_id == module_id,), items=payload.items, owner_id=current_user.id, snapshot=CourseEditorService._lesson_snapshot)
+    return [_out(item) for item in rows]
 
-@router.delete("/lessons/{lesson_id}", summary="Удаление урока")
-def delete_lesson(
-    lesson_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Удаляет урок по его ID.
-    """
-    lesson = get_owned_lesson(db, lesson_id, current_user.id)
-    if not lesson:
-        raise HTTPException(status_code=404, detail="Lesson not found")
-    
-    db.delete(lesson)
-    db.commit()
-    logger.info("Удален урок: ID=%s", lesson_id)
-    return {"message": f"Lesson with ID {lesson_id} successfully deleted."}
+
+@router.get("/lessons/{lesson_id}")
+def get_lesson(lesson_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _out(CourseEditorService._lesson(db, lesson_id, current_user.id))
+
+
+@router.put("/lessons/{lesson_id}")
+def update_lesson(lesson_id: int, payload: LessonUpdateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _out(CourseEditorService.update_lesson(db, lesson_id, current_user.id, payload.model_dump(exclude={"expected_revision"}, exclude_unset=True), payload.expected_revision))
+
+
+@router.delete("/lessons/{lesson_id}")
+def delete_lesson(lesson_id: int, expected_revision: int = Query(gt=0), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    CourseEditorService.delete(db, kind="lesson", item_id=lesson_id, owner_id=current_user.id, expected=expected_revision)
+    return {"message": "Lesson deleted"}

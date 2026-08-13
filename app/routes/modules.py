@@ -1,163 +1,52 @@
-import logging
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
-from app.models.module import Module
 from app.models.course import Course
+from app.models.module import Module
 from app.models.user import User
+from app.schemas.course_editor import ModuleCreateEditor, ModuleUpdateEditor, OrderUpdate
+from app.schemas.course_review import ModuleDetail
 from app.services.auth_service import get_current_user
+from app.services.course_editor_service import CourseEditorService
+from app.services.course_review_service import CourseReviewService
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
-
-# Pydantic-модель для создания модуля
-class ModuleCreate(BaseModel):
-    title: str = Field(..., min_length=1, description="Название модуля")
-
-# Pydantic-модель для обновления модуля (опциональные поля)
-class ModuleUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, description="Новое название модуля")
-
-# Pydantic-модель для ответа
-class ModuleResponse(BaseModel):
-    id: int
-    title: str
-    course_id: int
-
-    model_config = ConfigDict(from_attributes=True)
-
-def get_owned_course(db: Session, course_id: int, user_id: int) -> Course | None:
-    return (
-        db.query(Course)
-        .filter(Course.id == course_id, Course.owner_id == user_id)
-        .first()
-    )
 
 
-def get_owned_module(db: Session, module_id: int, user_id: int) -> Module | None:
-    return (
-        db.query(Module)
-        .join(Course, Module.course_id == Course.id)
-        .filter(Module.id == module_id, Course.owner_id == user_id)
-        .first()
-    )
+def _out(item: Module) -> dict:
+    return {"id": item.id, "title": item.title, "course_id": item.course_id, "position": item.position, "revision": item.revision}
 
 
-@router.post("/courses/{course_id}/modules/", response_model=ModuleResponse, summary="Создание модуля для курса")
-def add_module(
-    course_id: int,
-    module: ModuleCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Создает новый модуль для курса с заданным course_id.
-    """
-    # Проверяем, существует ли курс с данным course_id
-    course = get_owned_course(db, course_id, current_user.id)
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+@router.post("/courses/{course_id}/modules/", status_code=201)
+def add_module(course_id: int, payload: ModuleCreateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _out(CourseEditorService.create_module(db, course_id, current_user.id, payload.title))
 
-    new_module = Module(
-        title=module.title,
-        course_id=course_id
-    )
-    db.add(new_module)
-    db.commit()
-    db.refresh(new_module)
-    logger.info("Создан модуль: ID=%s для курса ID=%s", new_module.id, course_id)
-    return ModuleResponse(
-        id=new_module.id,
-        title=new_module.title,
-        course_id=new_module.course_id
-    )
 
-@router.get("/courses/{course_id}/modules/", response_model=List[ModuleResponse], summary="Получение модулей курса")
-def get_modules(
-    course_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Возвращает список всех модулей для курса с указанным course_id.
-    """
-    # Проверяем, существует ли курс с данным course_id
-    course = get_owned_course(db, course_id, current_user.id)
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+@router.get("/courses/{course_id}/modules/")
+def get_modules(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    CourseEditorService._course(db, course_id, current_user.id)
+    return [_out(item) for item in db.query(Module).filter(Module.course_id == course_id, Module.is_deleted.is_(False)).order_by(Module.position, Module.id)]
 
-    modules = db.query(Module).filter(Module.course_id == course_id).all()
-    return [
-        ModuleResponse(
-            id=mod.id,
-            title=mod.title,
-            course_id=mod.course_id
-        )
-        for mod in modules
-    ]
 
-@router.get("/modules/{module_id}", response_model=ModuleResponse, summary="Получение модуля по ID")
-def get_module(
-    module_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Возвращает данные модуля по его ID.
-    """
-    mod = get_owned_module(db, module_id, current_user.id)
-    if not mod:
-        raise HTTPException(status_code=404, detail="Module not found")
-    return ModuleResponse(
-        id=mod.id,
-        title=mod.title,
-        course_id=mod.course_id
-    )
+@router.put("/courses/{course_id}/modules/order")
+def reorder_modules(course_id: int, payload: OrderUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    CourseEditorService._course(db, course_id, current_user.id, True)
+    rows = CourseEditorService.reorder(db, entity=Module, parent_filter=(Module.course_id == course_id,), items=payload.items, owner_id=current_user.id, snapshot=CourseEditorService._module_snapshot)
+    return [_out(item) for item in rows]
 
-@router.put("/modules/{module_id}", response_model=ModuleResponse, summary="Обновление модуля")
-def update_module(
-    module_id: int,
-    module_update: ModuleUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Обновляет данные модуля по его ID.
-    """
-    mod = get_owned_module(db, module_id, current_user.id)
-    if not mod:
-        raise HTTPException(status_code=404, detail="Module not found")
 
-    update_data = module_update.dict(exclude_unset=True)
-    if "title" in update_data:
-        mod.title = update_data["title"]
+@router.get("/modules/{module_id}", response_model=ModuleDetail)
+def get_module(module_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return CourseReviewService.module_detail(db, module_id, current_user.id)
 
-    db.commit()
-    db.refresh(mod)
-    logger.info("Обновлен модуль: ID=%s", module_id)
-    return ModuleResponse(
-        id=mod.id,
-        title=mod.title,
-        course_id=mod.course_id
-    )
 
-@router.delete("/modules/{module_id}", summary="Удаление модуля")
-def delete_module(
-    module_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Удаляет модуль по его ID.
-    """
-    mod = get_owned_module(db, module_id, current_user.id)
-    if not mod:
-        raise HTTPException(status_code=404, detail="Module not found")
+@router.put("/modules/{module_id}")
+def update_module(module_id: int, payload: ModuleUpdateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _out(CourseEditorService.update_module(db, module_id, current_user.id, payload.title, payload.expected_revision))
 
-    db.delete(mod)
-    db.commit()
-    logger.info("Удален модуль: ID=%s", module_id)
-    return {"message": f"Module with ID {module_id} successfully deleted."}
+
+@router.delete("/modules/{module_id}")
+def delete_module(module_id: int, expected_revision: int = Query(gt=0), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    CourseEditorService.delete(db, kind="module", item_id=module_id, owner_id=current_user.id, expected=expected_revision)
+    return {"message": "Module deleted"}

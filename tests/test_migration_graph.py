@@ -31,6 +31,7 @@ EXPECTED_TABLES = {
     "modules",
     "tasks",
     "tests",
+    "test_versions",
     "theories",
     "users",
 }

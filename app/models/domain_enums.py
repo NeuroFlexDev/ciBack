@@ -24,6 +24,11 @@ class CourseStatus(str, Enum):
     GENERATION_FAILED = "generation_failed"
 
 
+class PublicationStatus(str, Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+
+
 class CourseDifficulty(str, Enum):
     INTERNSHIP = "internship"
     BASIC = "basic"

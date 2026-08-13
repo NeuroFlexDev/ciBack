@@ -1,39 +1,49 @@
-# app/routes/theories.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
 from app.database.db import get_db
-from app.schemas.theory import TheoryCreate, TheoryUpdate, TheoryResponse
-from app.repositories.theory import TheoryRepository
+from app.models.user import User
+from app.services.auth_service import get_current_user
+from app.services.course_editor_service import CourseEditorService
 
 router = APIRouter()
 
-@router.post("/theories/", summary="Создание теоретического блока", response_model=TheoryResponse)
-def create_theory(payload: TheoryCreate, db: Session = Depends(get_db)):
-    try:
-        theory = TheoryRepository.create_theory(db, payload)
-        return TheoryResponse(lesson_id=theory.lesson_id, content=theory.content)
-    except ValueError as e:
-        raise HTTPException(400 if "существует" in str(e) else 404, str(e))
 
-@router.get("/theories/{lesson_id}", summary="Получение теории по ID урока", response_model=TheoryResponse)
-def get_theory_by_lesson(lesson_id: int, db: Session = Depends(get_db)):
-    theory = TheoryRepository.get_theory_by_lesson(db, lesson_id)
-    if not theory:
-        raise HTTPException(404, "Теория не найдена")
-    return TheoryResponse(lesson_id=theory.lesson_id, content=theory.content)
+class TheoryCreateEditor(BaseModel):
+    lesson_id: int = Field(gt=0)
+    content: str
+    expected_revision: int = Field(gt=0)
 
-@router.put("/theories/{lesson_id}", summary="Обновление теории", response_model=TheoryResponse)
-def update_theory(lesson_id: int, payload: TheoryUpdate, db: Session = Depends(get_db)):
-    theory = TheoryRepository.get_theory_by_lesson(db, lesson_id)
-    if not theory:
-        raise HTTPException(404, "Теория не найдена")
-    theory = TheoryRepository.update_theory(db, theory, payload)
-    return TheoryResponse(lesson_id=theory.lesson_id, content=theory.content)
 
-@router.delete("/theories/{lesson_id}", summary="Удаление теории")
-def delete_theory(lesson_id: int, db: Session = Depends(get_db)):
-    theory = TheoryRepository.get_theory_by_lesson(db, lesson_id)
-    if not theory:
-        raise HTTPException(404, "Теория не найдена")
-    TheoryRepository.delete_theory(db, theory)
-    return {"message": "Теория удалена"}
+class TheoryUpdateEditor(BaseModel):
+    content: str
+    expected_revision: int = Field(gt=0)
+
+
+def _out(lesson):
+    return {"lesson_id": lesson.id, "content": lesson.theory.content if lesson.theory else "", "revision": lesson.revision}
+
+
+@router.post("/theories/")
+def create_theory(payload: TheoryCreateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    lesson = CourseEditorService.update_lesson(db, payload.lesson_id, current_user.id, {"content": payload.content}, payload.expected_revision)
+    return _out(lesson)
+
+
+@router.get("/theories/{lesson_id}")
+def get_theory_by_lesson(lesson_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _out(CourseEditorService._lesson(db, lesson_id, current_user.id))
+
+
+@router.put("/theories/{lesson_id}")
+def update_theory(lesson_id: int, payload: TheoryUpdateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _out(CourseEditorService.update_lesson(db, lesson_id, current_user.id, {"content": payload.content}, payload.expected_revision))
+
+
+@router.delete("/theories/{lesson_id}")
+def delete_theory(lesson_id: int, expected_revision: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    lesson = CourseEditorService.update_lesson(db, lesson_id, current_user.id, {"content": ""}, expected_revision)
+    lesson.theory.is_deleted = True
+    db.commit()
+    return {"message": "Theory deleted", "revision": lesson.revision}

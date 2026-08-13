@@ -1,8 +1,8 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 from app.database.db import Base
 from app.models.base import BaseModelMixin
-from app.models.domain_enums import CourseStatus
+from app.models.domain_enums import CourseStatus, PublicationStatus
 
 class Course(Base, BaseModelMixin):
     __tablename__ = "courses"
@@ -15,7 +15,10 @@ class Course(Base, BaseModelMixin):
             "status = 'draft' OR name IS NOT NULL",
             name="ck_courses_non_draft_name",
         ),
+        CheckConstraint("publication_status IN ('draft', 'published')", name="ck_courses_publication_status"),
+        CheckConstraint("content_revision > 0", name="ck_courses_content_revision_positive"),
         Index("ix_courses_owner_status", "owner_id", "status"),
+        Index("ix_courses_owner_publication_status", "owner_id", "publication_status"),
     )
 
     name = Column(String, nullable=True)
@@ -26,6 +29,9 @@ class Course(Base, BaseModelMixin):
     status = Column(
         String(32), nullable=False, default=CourseStatus.READY.value, index=True
     )
+    publication_status = Column(String(16), nullable=False, default=PublicationStatus.DRAFT.value, index=True)
+    published_at = Column(DateTime, nullable=True)
+    content_revision = Column(Integer, nullable=False, default=1)
     current_graph_id = Column(
         Integer,
         ForeignKey(
@@ -41,6 +47,7 @@ class Course(Base, BaseModelMixin):
     # Связь с модулями
     owner = relationship("User", back_populates="courses")
     modules = relationship("Module", back_populates="course", cascade="all, delete-orphan")
+    final_tests = relationship("Test", back_populates="course", cascade="all, delete-orphan")
     course_modules = relationship(
         "CourseModule", back_populates="course", cascade="all, delete-orphan"
     )
@@ -66,6 +73,7 @@ class Course(Base, BaseModelMixin):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    versions = relationship("CourseVersion", back_populates="course")
     competencies = relationship(
         "Competency", back_populates="course", cascade="all, delete-orphan"
     )

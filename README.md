@@ -537,3 +537,30 @@ GET /api/healthz
 *Последнее обновление: 2025-21-11*
 
 ---
+### Step 5: generated course structure
+
+После завершения generation run нормализованная структура доступна через
+`GET /api/courses/{course_id}/structure`, а содержимое отдельного модуля — через
+`GET /api/modules/{module_id}`. Модули, уроки и вопросы возвращаются в явном
+порядке; метрики и оценка длительности рассчитываются backend из persisted данных.
+Полный локальный контракт описан в `docs/contracts/course_review_structure.md`.
+
+Редактор использует обязательный `expected_revision` для PUT, DELETE и batch
+reorder. Конфликт возвращает HTTP 409 и не перезаписывает параллельные изменения.
+После реализации публикации в этапе 10.8 первая правка опубликованного курса
+должна создавать новую draft revision; `publication_status` намеренно не добавлен
+в 10.7.
+
+### Публикация курса
+
+Готовый курс публикуется идемпотентным запросом `POST /api/courses/{course_id}/publish`.
+Workflow генерации (`status`) и состояние публикации (`publication_status`) хранятся
+раздельно. Публикация разрешена владельцу только для `ready`-курса с активным модулем,
+уроком и непустым содержимым урока; активная или частичная генерация блокирует операцию.
+При публикации сохраняется полный versioned snapshot структуры. Первая последующая
+правка открывает новую draft revision, которую можно опубликовать повторно.
+
+`GET /api/courses/` поддерживает `publication_status=draft|published`, `limit` и
+`offset`. Ответ остаётся JSON-массивом для обратной совместимости, а `X-Total-Count`,
+`X-Limit` и `X-Offset` содержат метаданные пагинации. Каждый элемент включает
+`publication_status`, `module_count`, `lesson_count`, `updated_at` и `published_at`.
