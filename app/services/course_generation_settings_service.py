@@ -73,6 +73,8 @@ class CourseGenerationSettingsService:
         course_id: int,
         owner_id: int,
         payload: CourseGenerationSettingsUpdate,
+        *,
+        commit: bool = True,
     ) -> CourseGenerationSettingsResponse:
         try:
             course = CourseGenerationSettingsRepository.get_owned_course(
@@ -109,7 +111,10 @@ class CourseGenerationSettingsService:
 
             course.name = payload.title
             course.status = CourseStatus.CONFIGURED.value
-            db.commit()
+            if commit:
+                db.commit()
+            else:
+                db.flush()
             db.refresh(settings)
             db.refresh(course)
             return settings_response(course, settings)

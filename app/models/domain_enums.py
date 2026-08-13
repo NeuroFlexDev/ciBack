@@ -40,6 +40,7 @@ class GenerationRunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    COMPLETED = "completed"
     FAILED = "failed"
 
 

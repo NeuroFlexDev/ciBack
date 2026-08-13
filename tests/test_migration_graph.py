@@ -125,9 +125,7 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         text=True,
         env=env,
     )
-    assert set(json.loads(result.stdout)) == (
-        EXPECTED_TABLES - {"course_generation_settings"} | {"alembic_version"}
-    )
+    assert set(json.loads(result.stdout)) == EXPECTED_TABLES | {"alembic_version"}
 
     for arguments in (("upgrade", "head"), ("check",), ("downgrade", "base")):
         subprocess.run(

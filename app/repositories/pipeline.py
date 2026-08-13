@@ -82,6 +82,49 @@ class PipelineRepository:
         )
 
     @staticmethod
+    def selected_indexed_documents(
+        db: Session, course_id: int, owner_id: int, document_ids: list[int]
+    ) -> list[Document]:
+        return (
+            db.query(Document)
+            .filter(
+                Document.id.in_(document_ids),
+                Document.course_id == course_id,
+                Document.owner_id == owner_id,
+                Document.status == "indexed",
+                Document.is_deleted.is_(False),
+            )
+            .order_by(Document.id)
+            .all()
+        )
+
+    @staticmethod
+    def documents_for_snapshot(
+        db: Session, course_id: int, owner_id: int, snapshot: list[dict]
+    ) -> list[Document]:
+        ids = [item["document_id"] for item in snapshot]
+        return PipelineRepository.selected_indexed_documents(
+            db, course_id, owner_id, ids
+        )
+
+    @staticmethod
+    def active_graph_run(
+        db: Session, course_id: int, owner_id: int
+    ) -> GenerationRun | None:
+        return (
+            db.query(GenerationRun)
+            .filter(
+                GenerationRun.course_id == course_id,
+                GenerationRun.owner_id == owner_id,
+                GenerationRun.run_type == "graph_generation",
+                GenerationRun.status.in_(("queued", "running")),
+                GenerationRun.is_deleted.is_(False),
+            )
+            .order_by(GenerationRun.id.desc())
+            .first()
+        )
+
+    @staticmethod
     def replace_chunks(
         db: Session, document: Document, chunks: list[dict]
     ) -> list[DocumentChunk]:

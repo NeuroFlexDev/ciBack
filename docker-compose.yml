@@ -1,4 +1,13 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   db:
     image: postgres
     restart: unless-stopped
@@ -62,7 +71,33 @@ services:
       GIGA_CLIENT_ID: ${GIGA_CLIENT_ID:-}
       GIGA_CLIENT_SECRET: ${GIGA_CLIENT_SECRET:-}
       GIGA_SCOPE: ${GIGA_SCOPE:-GIGACHAT_API_PERS}
+      REDIS_URL: redis://redis:6379/0
     depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: rq worker generation --url redis://redis:6379/0
+    volumes:
+      - ./:/app
+      - uploads_data:/data/uploads
+    environment:
+      ENV: ${ENV:-dev}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-ciuser}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-cidb}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      UPLOAD_DIR: /data/uploads
+      REDIS_URL: redis://redis:6379/0
+      GRAPH_CONTEXT_MAX_CHARS: ${GRAPH_CONTEXT_MAX_CHARS:-60000}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_MODEL: ${HF_MODEL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 

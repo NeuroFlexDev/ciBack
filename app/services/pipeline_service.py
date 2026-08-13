@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from datetime import datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.models.course_graph import CourseGraph
+from app.models.course import Course
 from app.models.domain_enums import (
     CourseGraphStatus,
     DocumentStatus,
@@ -106,6 +109,124 @@ def _apply_assessment_settings(
 
 
 class PipelineService:
+    GENERATION_STAGES = (
+        ("knowledge_extraction", "Извлечение знаний"),
+        ("structure_building", "Построение структуры"),
+        ("lesson_writing", "Написание уроков"),
+    )
+
+    @staticmethod
+    def _checkpoint(db: Session, run: GenerationRun, stage: str, progress: int) -> None:
+        run.current_stage = stage
+        run.progress_percent = progress
+        db.commit()
+
+    @staticmethod
+    def validate_generation_documents(
+        db: Session, *, course_id: int, owner_id: int, document_ids: list[int]
+    ) -> None:
+        course = PipelineRepository.get_owned_course(db, course_id, owner_id)
+        if course is None:
+            raise HTTPException(status_code=404, detail="Курс не найден")
+        selected_ids = list(dict.fromkeys(document_ids))
+        documents = PipelineRepository.selected_indexed_documents(
+            db, course_id, owner_id, selected_ids
+        )
+        if len(documents) != len(selected_ids):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "documents_not_ready",
+                    "message": "Документы не найдены, не принадлежат курсу или ещё не проиндексированы",
+                },
+            )
+
+    @staticmethod
+    def prepare_graph_generation(
+        db: Session, *, course_id: int, owner_id: int, document_ids: list[int]
+    ) -> GenerationRun:
+        course = PipelineRepository.get_owned_course(db, course_id, owner_id, for_update=True)
+        if course is None:
+            raise HTTPException(status_code=404, detail="Курс не найден")
+        generation_settings = PipelineRepository.get_generation_settings(db, course_id)
+        if generation_settings is None:
+            raise settings_not_found()
+        active = PipelineRepository.active_graph_run(db, course_id, owner_id)
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "generation_run_active", "message": "Генерация курса уже запущена", "run_id": active.id},
+            )
+        selected_ids = list(dict.fromkeys(document_ids))
+        documents = PipelineRepository.selected_indexed_documents(db, course_id, owner_id, selected_ids)
+        if len(documents) != len(selected_ids):
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "documents_not_ready", "message": "Документы не найдены, не принадлежат курсу или ещё не проиндексированы"},
+            )
+        settings_snapshot = generation_settings_snapshot(course, generation_settings)
+        docs_snapshot = [
+            {"document_id": item.id, "version": item.version, "content_hash": item.content_hash}
+            for item in documents
+        ]
+        fingerprint = hashlib.sha256(
+            (json.dumps(docs_snapshot, sort_keys=True) + json.dumps(settings_snapshot, sort_keys=True)).encode()
+        ).hexdigest()
+        now = datetime.utcnow()
+        run = GenerationRun(
+            owner_id=owner_id,
+            course_id=course_id,
+            run_type=GenerationRunType.GRAPH_GENERATION.value,
+            status=GenerationRunStatus.QUEUED.value,
+            current_stage="queued",
+            progress_percent=0,
+            queued_at=now,
+            prompt="course_graph_prompt.j2",
+            model=DEFAULT_ENGINE,
+            input_docs=docs_snapshot,
+            input_documents_snapshot=docs_snapshot,
+            settings_snapshot=settings_snapshot,
+            input_fingerprint=fingerprint,
+        )
+        db.add(run)
+        course.status = CourseStatus.GENERATING.value
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            active = PipelineRepository.active_graph_run(db, course_id, owner_id)
+            if active is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "generation_run_active", "message": "Генерация курса уже запущена", "run_id": active.id},
+                ) from exc
+            raise
+        db.refresh(run)
+        return run
+
+    @staticmethod
+    def fail_run(db: Session, run_id: int, *, code: str = "queue_unavailable") -> None:
+        run = db.get(GenerationRun, run_id)
+        if run is not None and run.status in {
+            GenerationRunStatus.QUEUED.value,
+            GenerationRunStatus.RUNNING.value,
+        }:
+            run.status = GenerationRunStatus.FAILED.value
+            run.error_code = code
+            run.error_message = (
+                "Не удалось поставить генерацию в очередь"
+                if code == "queue_unavailable"
+                else "Не удалось завершить генерацию курса. Попробуйте ещё раз."
+            )
+            run.retryable = True
+            run.finished_at = datetime.utcnow()
+            course = db.get(Course, run.course_id)
+            if course is not None:
+                course.status = CourseStatus.GENERATION_FAILED.value
+            db.commit()
+
+    fail_enqueue = fail_run
+
     @staticmethod
     def get_document(db: Session, document_id: int, owner_id: int):
         document = PipelineRepository.get_owned_document(db, document_id, owner_id)
@@ -119,6 +240,119 @@ class PipelineService:
         if run is None:
             raise HTTPException(status_code=404, detail="Запуск не найден")
         return run
+
+    @staticmethod
+    def get_run_status(db: Session, run_id: int, owner_id: int) -> dict:
+        run = PipelineService.get_run(db, run_id, owner_id)
+        data = {column.name: getattr(run, column.name) for column in run.__table__.columns}
+        data["run_id"] = run.id
+        data["stages"] = []
+        if run.run_type == GenerationRunType.GRAPH_GENERATION.value:
+            codes = [item[0] for item in PipelineService.GENERATION_STAGES]
+            current_index = codes.index(run.current_stage) if run.current_stage in codes else -1
+            terminal_success = run.status in {
+                GenerationRunStatus.COMPLETED.value,
+                GenerationRunStatus.SUCCEEDED.value,
+            }
+            for index, (code, title) in enumerate(PipelineService.GENERATION_STAGES):
+                if terminal_success or index < current_index:
+                    stage_status = "completed"
+                elif index == current_index and run.status in {
+                    GenerationRunStatus.RUNNING.value,
+                    GenerationRunStatus.FAILED.value,
+                }:
+                    stage_status = "running"
+                else:
+                    stage_status = "pending"
+                data["stages"].append(
+                    {"code": code, "title": title, "status": stage_status}
+                )
+        data["status_error"] = (
+            {
+                "code": run.error_code or "generation_failed",
+                "message": run.error_message
+                or "Не удалось завершить генерацию курса. Попробуйте ещё раз.",
+                "retryable": run.retryable,
+            }
+            if run.status == GenerationRunStatus.FAILED.value
+            else None
+        )
+        if data["status_error"] is not None:
+            data["error"] = data["status_error"]["message"]
+        return data
+
+    @staticmethod
+    def retry_graph_generation(
+        db: Session, run_id: int, owner_id: int
+    ) -> GenerationRun:
+        original = PipelineService.get_run(db, run_id, owner_id)
+        if (
+            original.run_type != GenerationRunType.GRAPH_GENERATION.value
+            or original.status != GenerationRunStatus.FAILED.value
+            or not original.retryable
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "generation_run_not_retryable", "message": "Запуск нельзя повторить"},
+            )
+        active = PipelineRepository.active_graph_run(db, original.course_id, owner_id)
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "generation_run_active", "message": "Генерация курса уже запущена", "run_id": active.id},
+            )
+        documents = PipelineRepository.documents_for_snapshot(
+            db, original.course_id, owner_id, original.input_documents_snapshot
+        )
+        actual = {(item.id, item.version, item.content_hash) for item in documents}
+        expected = {
+            (item["document_id"], item["version"], item["content_hash"])
+            for item in original.input_documents_snapshot
+        }
+        if actual != expected:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "retry_input_unavailable", "message": "Исходные версии документов недоступны"},
+            )
+        course = PipelineRepository.get_owned_course(
+            db, original.course_id, owner_id, for_update=True
+        )
+        if course is None:
+            raise HTTPException(status_code=404, detail="Курс не найден")
+        retry = GenerationRun(
+            owner_id=owner_id,
+            course_id=original.course_id,
+            run_type=original.run_type,
+            status=GenerationRunStatus.QUEUED.value,
+            current_stage="queued",
+            progress_percent=0,
+            queued_at=datetime.utcnow(),
+            prompt=original.prompt,
+            model=original.model,
+            input_docs=original.input_docs,
+            input_documents_snapshot=original.input_documents_snapshot,
+            settings_snapshot=original.settings_snapshot,
+            input_fingerprint=original.input_fingerprint,
+            attempt=original.attempt + 1,
+            retry_of_run_id=original.id,
+        )
+        course.status = CourseStatus.GENERATING.value
+        db.add(retry)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            active = PipelineRepository.active_graph_run(
+                db, original.course_id, owner_id
+            )
+            if active is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "generation_run_active", "message": "Генерация курса уже запущена", "run_id": active.id},
+                ) from exc
+            raise
+        db.refresh(retry)
+        return retry
 
     @staticmethod
     def reindex_document(
@@ -233,15 +467,16 @@ class PipelineService:
 
     @staticmethod
     def generate_graph(
-        db: Session, *, course_id: int, owner_id: int, force: bool
+        db: Session, *, course_id: int, owner_id: int, force: bool, prepared_run_id: int | None = None
     ) -> GenerationRun:
         course = PipelineRepository.get_owned_course(db, course_id, owner_id)
         if course is None:
             raise HTTPException(status_code=404, detail="Курс не найден")
+        prepared_run = db.get(GenerationRun, prepared_run_id) if prepared_run_id is not None else None
         generation_settings = PipelineRepository.get_generation_settings(db, course_id)
         if generation_settings is None:
             raise settings_not_found()
-        if course.status == CourseStatus.GENERATING.value:
+        if course.status == CourseStatus.GENERATING.value and prepared_run is None:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -249,7 +484,7 @@ class PipelineService:
                     "message": "Генерация курса уже выполняется",
                 },
             )
-        if course.status not in {
+        if prepared_run is None and course.status not in {
             CourseStatus.CONFIGURED.value,
             CourseStatus.GENERATION_FAILED.value,
             CourseStatus.READY.value,
@@ -261,8 +496,12 @@ class PipelineService:
                     "message": "Курс не готов к генерации",
                 },
             )
-        settings_snapshot = generation_settings_snapshot(course, generation_settings)
-        documents = PipelineRepository.indexed_documents(db, course_id, owner_id)
+        settings_snapshot = prepared_run.settings_snapshot if prepared_run is not None else generation_settings_snapshot(course, generation_settings)
+        if prepared_run is not None:
+            selected_ids = [item["document_id"] for item in prepared_run.input_documents_snapshot]
+            documents = PipelineRepository.selected_indexed_documents(db, course_id, owner_id, selected_ids)
+        else:
+            documents = PipelineRepository.indexed_documents(db, course_id, owner_id)
         if not documents:
             raise HTTPException(
                 status_code=409, detail="У курса нет проиндексированных документов"
@@ -300,7 +539,7 @@ class PipelineService:
                 db.commit()
                 return existing
 
-        run = GenerationRun(
+        run = prepared_run or GenerationRun(
             owner_id=owner_id,
             course_id=course_id,
             run_type=GenerationRunType.GRAPH_GENERATION.value,
@@ -311,7 +550,8 @@ class PipelineService:
             settings_snapshot=settings_snapshot,
             input_fingerprint=fingerprint,
         )
-        db.add(run)
+        if prepared_run is None:
+            db.add(run)
         course.status = CourseStatus.GENERATING.value
         db.commit()
         db.refresh(run)
@@ -320,7 +560,8 @@ class PipelineService:
         started = time.perf_counter()
         try:
             run.status = GenerationRunStatus.RUNNING.value
-            db.commit()
+            run.started_at = datetime.utcnow()
+            PipelineService._checkpoint(db, run, "knowledge_extraction", 10)
 
             context_parts = []
             remaining = settings.GRAPH_CONTEXT_MAX_CHARS
@@ -341,6 +582,8 @@ class PipelineService:
                         break
                 if remaining <= 0:
                     break
+
+            PipelineService._checkpoint(db, run, "structure_building", 40)
 
             raw_graph = generate_from_prompt(
                 "course_graph_prompt.j2",
@@ -369,6 +612,8 @@ class PipelineService:
                 nodes, edges, settings_snapshot
             )
 
+            PipelineService._checkpoint(db, run, "lesson_writing", 80)
+
             locked_course = PipelineRepository.get_owned_course(
                 db, course_id, owner_id, for_update=True
             )
@@ -392,7 +637,10 @@ class PipelineService:
             locked_course.current_graph = graph
             locked_course.status = CourseStatus.READY.value
 
-            run.status = GenerationRunStatus.SUCCEEDED.value
+            run.status = GenerationRunStatus.COMPLETED.value if prepared_run is not None else GenerationRunStatus.SUCCEEDED.value
+            run.current_stage = "completed"
+            run.progress_percent = 100
+            run.finished_at = datetime.utcnow()
             run.latency_ms = _elapsed_ms(started)
             run.output = {
                 "graph_id": graph.id,
@@ -413,6 +661,10 @@ class PipelineService:
             if failed_run is not None:
                 failed_run.status = GenerationRunStatus.FAILED.value
                 failed_run.error = error
+                failed_run.error_code = "generation_failed"
+                failed_run.error_message = "Не удалось сгенерировать курс"
+                failed_run.retryable = True
+                failed_run.finished_at = datetime.utcnow()
                 failed_run.latency_ms = _elapsed_ms(started)
             if failed_course is not None:
                 failed_course.status = CourseStatus.GENERATION_FAILED.value

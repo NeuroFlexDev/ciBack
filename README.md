@@ -437,6 +437,35 @@ Title хранится в `Course`, остальные значения — в �
 Owner ACL скрывает чужой или удалённый курс через `404`. Ошибки enum, диапазона,
 пробельных обязательных строк, отсутствующих boolean и лишних полей дают `422`.
 
+#### Асинхронный запуск генерации (Step 3 → Step 4)
+
+Production-запуск выполняется через `POST /api/courses/{course_id}/generation-runs`.
+Запрос содержит сохранённую схему `settings` и список `document_ids`; принимаются
+только проиндексированные документы текущего владельца и курса. API сохраняет
+`GenerationRun` и immutable snapshots настроек/версий документов, ставит задачу
+в Redis/RQ и сразу отвечает `202 Accepted` с `run_id` и `status_url`.
+
+API, Redis, миграции и отдельный worker запускаются вместе:
+
+```bash
+docker compose up --build db redis migrate web worker
+```
+
+Локально worker можно запустить отдельно (при доступных PostgreSQL и Redis):
+
+```bash
+rq worker generation --url redis://localhost:6379/0
+```
+
+`JOB_EAGER=true` предназначен только для локальных/тестовых запусков. В production
+FastAPI `BackgroundTasks` не используется: queued job переживает процесс API.
+
+Step 4 polls persisted progress through `GET /api/generation-runs/{run_id}`.
+The complete response schema, checkpoints, safe errors and recommended polling
+interval are in `docs/contracts/generation_progress.md`.
+`POST /api/generation-runs/{run_id}/retry` creates a separate run from immutable
+snapshots and preserves the failed attempt history.
+
 #### Как настройки влияют на generate-graph
 
 `POST /api/courses/{course_id}/generate-graph` читает настройки из БД, поэтому

@@ -4,13 +4,54 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.user import User
 from app.schemas.document import DocumentListItem, document_list_item
-from app.schemas.generation_run import GenerationRunOut
+from app.schemas.generation_run import GenerationRunAccepted, GenerationRunCreate, GenerationRunOut, GenerationRunStatusOut
+from app.services.course_generation_settings_service import CourseGenerationSettingsService
+from app.services.job_queue import enqueue_generation
+from app.repositories.pipeline import PipelineRepository
 from app.services.auth_service import get_current_user
 from app.services.file_storage import FileStorage, get_file_storage
 from app.services.pipeline_service import PipelineRunFailed, PipelineService
 
 
 router = APIRouter()
+
+
+@router.post("/courses/{course_id}/generation-runs", response_model=GenerationRunAccepted, status_code=202)
+def launch_generation(
+    course_id: int,
+    payload: GenerationRunCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    active = PipelineRepository.active_graph_run(db, course_id, current_user.id)
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "generation_run_active",
+                "message": "Генерация курса уже запущена",
+                "run_id": active.id,
+            },
+        )
+    PipelineService.validate_generation_documents(
+        db, course_id=course_id, owner_id=current_user.id,
+        document_ids=payload.document_ids,
+    )
+    CourseGenerationSettingsService.upsert(
+        db, course_id, current_user.id, payload.settings, commit=False
+    )
+    run = PipelineService.prepare_graph_generation(
+        db, course_id=course_id, owner_id=current_user.id, document_ids=payload.document_ids
+    )
+    try:
+        enqueue_generation(run.id)
+    except Exception:
+        PipelineService.fail_enqueue(db, run.id)
+        raise HTTPException(status_code=503, detail={"code": "queue_unavailable", "message": "Сервис генерации временно недоступен"})
+    return GenerationRunAccepted(
+        run_id=run.id, course_id=course_id, status=run.status,
+        status_url=f"/api/generation-runs/{run.id}",
+    )
 
 
 def _translate_failure(exc: PipelineRunFailed) -> HTTPException:
@@ -68,10 +109,37 @@ def generate_graph(
         raise _translate_failure(exc)
 
 
-@router.get("/generation-runs/{run_id}", response_model=GenerationRunOut)
+@router.get("/generation-runs/{run_id}", response_model=GenerationRunStatusOut)
 def get_generation_run(
     run_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return PipelineService.get_run(db, run_id, current_user.id)
+    return PipelineService.get_run_status(db, run_id, current_user.id)
+
+
+@router.post(
+    "/generation-runs/{run_id}/retry",
+    response_model=GenerationRunAccepted,
+    status_code=202,
+)
+def retry_generation_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    run = PipelineService.retry_graph_generation(db, run_id, current_user.id)
+    try:
+        enqueue_generation(run.id)
+    except Exception:
+        PipelineService.fail_run(db, run.id, code="queue_unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "queue_unavailable", "message": "Сервис генерации временно недоступен"},
+        )
+    return GenerationRunAccepted(
+        run_id=run.id,
+        course_id=run.course_id,
+        status=run.status,
+        status_url=f"/api/generation-runs/{run.id}",
+    )

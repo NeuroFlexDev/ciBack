@@ -9,6 +9,8 @@ REQUIRED_ROUTES = {
     ("GET", "/api/courses/{course_id}/retrieval"),
     ("GET", "/api/courses/{course_id}/generation-settings"),
     ("PUT", "/api/courses/{course_id}/generation-settings"),
+    ("POST", "/api/courses/{course_id}/generation-runs"),
+    ("POST", "/api/generation-runs/{run_id}/retry"),
     ("GET", "/api/agent/improve-theory"),
     ("POST", "/api/feedback/"),
 }

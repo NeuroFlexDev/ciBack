@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     DOCUMENT_CHUNK_OVERLAP_CHARS: int = Field(default=200, ge=0, le=5000)
     GRAPH_CONTEXT_MAX_CHARS: int = Field(default=60000, ge=1000, le=500000)
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    REDIS_URL: str = "redis://localhost:6379/0"
+    GENERATION_QUEUE_NAME: str = "generation"
+    JOB_EAGER: bool = False
 
     SMTP_HOST: str = ""
     SMTP_PORT: int = 25
