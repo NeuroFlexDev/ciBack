@@ -22,7 +22,15 @@ class GenerationRunAccepted(BaseModel):
 
 
 class GenerationStageOut(BaseModel):
-    code: Literal["knowledge_extraction", "structure_building", "lesson_writing"]
+    code: Literal[
+        "ingestion",
+        "competency_mapping",
+        "course_architecture",
+        "lesson_writing",
+        "assessment_generation",
+        "quality_assurance",
+        "materialization",
+    ]
     title: str
     status: Literal["pending", "running", "completed"]
 

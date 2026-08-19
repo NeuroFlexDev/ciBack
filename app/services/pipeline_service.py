@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime
 
@@ -12,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.models.course_graph import CourseGraph
 from app.models.course import Course
+from app.models.course_source_link import CourseSourceLink
+from app.models.document import Document
 from app.models.domain_enums import (
     CourseGraphStatus,
     DocumentStatus,
@@ -23,6 +26,8 @@ from app.models.generation_run import GenerationRun
 from app.repositories.pipeline import PipelineRepository
 from app.schemas.pipeline import GeneratedGraphPayload
 from app.services.document_processing import chunk_blocks, extract_blocks
+from app.services.agent_runtime import AgentRuntime
+from app.services.agentic_course_pipeline import AgenticCoursePipeline
 from app.services.embedding_service import replace_document_embeddings
 from app.services.file_storage import FileStorage
 from app.services.generation_service import DEFAULT_ENGINE, generate_from_prompt
@@ -31,6 +36,11 @@ from app.services.course_generation_settings_service import (
     settings_not_found,
 )
 from app.services.course_materialization_service import CourseMaterializationService
+from app.services.course_update_service import CourseUpdateService
+from app.services.source_catalog_service import build_source_catalog, graph_source_links
+
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineRunFailed(Exception):
@@ -111,9 +121,13 @@ def _apply_assessment_settings(
 
 class PipelineService:
     GENERATION_STAGES = (
-        ("knowledge_extraction", "Извлечение знаний"),
-        ("structure_building", "Построение структуры"),
+        ("ingestion", "Извлечение структуры документов"),
+        ("competency_mapping", "Карта компетенций"),
+        ("course_architecture", "Архитектура курса"),
         ("lesson_writing", "Написание уроков"),
+        ("assessment_generation", "Оценочные материалы"),
+        ("quality_assurance", "Проверка качества"),
+        ("materialization", "Сохранение курса"),
     )
 
     @staticmethod
@@ -171,7 +185,11 @@ class PipelineService:
             for item in documents
         ]
         fingerprint = hashlib.sha256(
-            (json.dumps(docs_snapshot, sort_keys=True) + json.dumps(settings_snapshot, sort_keys=True)).encode()
+            (
+                json.dumps(docs_snapshot, sort_keys=True)
+                + json.dumps(settings_snapshot, sort_keys=True)
+                + "agentic-pipeline-v1"
+            ).encode()
         ).hexdigest()
         now = datetime.utcnow()
         run = GenerationRun(
@@ -182,7 +200,7 @@ class PipelineService:
             current_stage="queued",
             progress_percent=0,
             queued_at=now,
-            prompt="course_graph_prompt.j2",
+            prompt="agentic-pipeline-v1",
             model=DEFAULT_ENGINE,
             input_docs=docs_snapshot,
             input_documents_snapshot=docs_snapshot,
@@ -281,6 +299,15 @@ class PipelineService:
         if data["status_error"] is not None:
             data["error"] = data["status_error"]["message"]
         return data
+
+    @staticmethod
+    def get_run_artifacts(db: Session, run_id: int, owner_id: int):
+        artifacts = PipelineRepository.list_agent_artifacts(
+            db, run_id=run_id, owner_id=owner_id
+        )
+        if artifacts is None:
+            raise HTTPException(status_code=404, detail="Запуск не найден")
+        return artifacts
 
     @staticmethod
     def retry_graph_generation(
@@ -435,6 +462,14 @@ class PipelineService:
             ):
                 chunk_model.embedding_id = embedding_id
 
+            if document.supersedes_document_id is not None:
+                previous = db.get(Document, document.supersedes_document_id)
+                if previous is None or previous.document_key != document.document_key:
+                    raise ValueError("Некорректная цепочка версий документа")
+                previous.is_current = False
+                db.flush()
+                document.is_current = True
+
             document.status = DocumentStatus.INDEXED.value
             document.processing_error = None
             run.status = GenerationRunStatus.SUCCEEDED.value
@@ -446,6 +481,27 @@ class PipelineService:
                 "embedding_count": len(embedding_ids),
             }
             db.commit()
+            if document.supersedes_document_id is not None:
+                try:
+                    proposal = CourseUpdateService.analyze_replacement(
+                        db,
+                        document=document,
+                        run=run,
+                        generate=generate_from_prompt,
+                    )
+                    if proposal is not None:
+                        run.output = {
+                            **(run.output or {}),
+                            "update_proposal_id": proposal.id,
+                        }
+                        db.commit()
+                except Exception as update_exc:
+                    db.rollback()
+                    logger.warning(
+                        "Update impact analysis failed run_id=%s error=%s",
+                        run.id,
+                        update_exc.__class__.__name__,
+                    )
             db.refresh(run)
             return run
         except Exception as exc:
@@ -499,8 +555,12 @@ class PipelineService:
             )
         settings_snapshot = prepared_run.settings_snapshot if prepared_run is not None else generation_settings_snapshot(course, generation_settings)
         if prepared_run is not None:
-            selected_ids = [item["document_id"] for item in prepared_run.input_documents_snapshot]
-            documents = PipelineRepository.selected_indexed_documents(db, course_id, owner_id, selected_ids)
+            documents = PipelineRepository.documents_for_snapshot(
+                db,
+                course_id,
+                owner_id,
+                prepared_run.input_documents_snapshot,
+            )
         else:
             documents = PipelineRepository.indexed_documents(db, course_id, owner_id)
         if not documents:
@@ -524,6 +584,7 @@ class PipelineService:
             documents_fingerprint
             + "|"
             + json.dumps(settings_snapshot, ensure_ascii=False, sort_keys=True)
+            + "|agentic-pipeline-v1"
         )
         fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
         if not force:
@@ -545,7 +606,7 @@ class PipelineService:
             course_id=course_id,
             run_type=GenerationRunType.GRAPH_GENERATION.value,
             status=GenerationRunStatus.QUEUED.value,
-            prompt="course_graph_prompt.j2",
+            prompt="agentic-pipeline-v1",
             model=DEFAULT_ENGINE,
             input_docs=input_docs,
             settings_snapshot=settings_snapshot,
@@ -562,45 +623,31 @@ class PipelineService:
         try:
             run.status = GenerationRunStatus.RUNNING.value
             run.started_at = datetime.utcnow()
-            PipelineService._checkpoint(db, run, "knowledge_extraction", 10)
-
-            context_parts = []
-            remaining = settings.GRAPH_CONTEXT_MAX_CHARS
-            for document in documents:
-                chunks = sorted(document.chunks, key=lambda item: item.chunk_index)
-                for chunk in chunks:
-                    header = (
-                        f"[document={document.id} version={document.version} "
-                        f"page={chunk.page or '-'} section={chunk.section or '-'}]\n"
-                    )
-                    part = f"{header}{chunk.text}\n"
-                    if len(part) > remaining:
-                        part = part[:remaining]
-                    if part:
-                        context_parts.append(part)
-                        remaining -= len(part)
-                    if remaining <= 0:
-                        break
-                if remaining <= 0:
-                    break
-
-            PipelineService._checkpoint(db, run, "structure_building", 40)
-
-            raw_graph = generate_from_prompt(
-                "course_graph_prompt.j2",
-                include_external_context=False,
-                use_feedback=False,
-                course_title=course.name,
-                goal=settings_snapshot["goal"],
-                target_audience=settings_snapshot["target_audience"],
-                difficulty=settings_snapshot["difficulty"],
-                language=settings_snapshot["language"],
-                lesson_count=settings_snapshot["lesson_count"],
-                module_tests_enabled=settings_snapshot["module_tests_enabled"],
-                final_test_enabled=settings_snapshot["final_test_enabled"],
-                document_context="\n".join(context_parts),
+            source_catalog = build_source_catalog(
+                documents, max_chars=settings.GRAPH_CONTEXT_MAX_CHARS
             )
-            payload = GeneratedGraphPayload.model_validate(raw_graph)
+            if not source_catalog:
+                raise ValueError("В документах нет доступных фрагментов для генерации")
+            runtime = AgentRuntime(
+                db=db,
+                run_id=run.id,
+                course_id=course_id,
+                generate=generate_from_prompt,
+            )
+            pipeline = AgenticCoursePipeline(
+                runtime=runtime,
+                checkpoint=lambda stage, progress: PipelineService._checkpoint(
+                    db, run, stage, progress
+                ),
+            )
+            build = pipeline.run(
+                course_title=course.name,
+                settings_snapshot=settings_snapshot,
+                source_catalog=source_catalog,
+            )
+            payload = GeneratedGraphPayload.model_validate(
+                {"nodes": build.nodes, "edges": build.edges}
+            )
             nodes, edges = payload.json_payload()
             generated_lessons = sum(
                 node.get("type") == "lesson" for node in nodes
@@ -609,11 +656,10 @@ class PipelineService:
                 raise ValueError(
                     "Generated lesson count does not match generation settings"
                 )
-            nodes, edges = _apply_assessment_settings(
-                nodes, edges, settings_snapshot
-            )
-
-            PipelineService._checkpoint(db, run, "lesson_writing", 80)
+            if build.legacy_fallback:
+                nodes, edges = _apply_assessment_settings(
+                    nodes, edges, settings_snapshot
+                )
 
             locked_course = PipelineRepository.get_owned_course(
                 db, course_id, owner_id, for_update=True
@@ -639,6 +685,26 @@ class PipelineService:
             materialized = CourseMaterializationService.materialize(
                 db, course=locked_course, nodes=nodes, edges=edges
             )
+            learning_map = (
+                CourseMaterializationService.materialize_learning_map(
+                    db, course=locked_course, result=build.result
+                )
+                if build.result is not None
+                else {"competency_count": 0, "learning_objective_count": 0}
+            )
+            link_payloads = graph_source_links(nodes, source_catalog)
+            PipelineRepository.add_source_links(
+                db,
+                [
+                    CourseSourceLink(
+                        course_id=course_id,
+                        graph_id=graph.id,
+                        run_id=run.id,
+                        **item,
+                    )
+                    for item in link_payloads
+                ],
+            )
             locked_course.status = CourseStatus.READY.value
 
             run.status = GenerationRunStatus.COMPLETED.value if prepared_run is not None else GenerationRunStatus.SUCCEEDED.value
@@ -651,6 +717,11 @@ class PipelineService:
                 "graph_version": graph.version,
                 "node_count": len(nodes),
                 "edge_count": len(edges),
+                "agentic_pipeline_version": "1.0",
+                "legacy_fallback": build.legacy_fallback,
+                "qa": build.qa_summary,
+                "source_link_count": len(link_payloads),
+                **learning_map,
                 **materialized,
             }
             db.commit()

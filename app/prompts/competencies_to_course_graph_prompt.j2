@@ -1,0 +1,9 @@
+{#
+  Public three-stage contract: competency map -> logical course graph.
+
+  The canonical input is CompetencyMapArtifact serialized as
+  `competency_map_json`; the canonical response is CoursePlan. CoursePlan is the
+  source-grounded logical graph that the backend later materializes for canvas.
+  Keep this alias thin so it cannot drift from the live Course Architect prompt.
+#}
+{% include "course_architect_prompt.j2" %}

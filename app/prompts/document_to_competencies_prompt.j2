@@ -1,0 +1,9 @@
+{#
+  Public three-stage contract: document knowledge -> competency map.
+
+  The canonical input is an IngestionArtifact serialized as
+  `ingestion_artifact_json`; the canonical response is CompetencyMapArtifact.
+  Keep this alias thin so its rules and JSON example cannot drift from the live
+  Competency Mapper prompt.
+#}
+{% include "competency_mapper_prompt.j2" %}

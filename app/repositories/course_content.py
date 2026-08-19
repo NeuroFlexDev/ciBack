@@ -59,6 +59,22 @@ class CourseContentRepository:
         db.add(document)
 
     @staticmethod
+    def get_current_owned_document(
+        db: Session, *, document_id: int, course_id: int, owner_id: int
+    ) -> Document | None:
+        return (
+            db.query(Document)
+            .filter(
+                Document.id == document_id,
+                Document.course_id == course_id,
+                Document.owner_id == owner_id,
+                Document.is_current.is_(True),
+                Document.is_deleted.is_(False),
+            )
+            .first()
+        )
+
+    @staticmethod
     def list_documents(
         db: Session,
         *,
@@ -74,6 +90,7 @@ class CourseContentRepository:
         query = db.query(Document).filter(
             Document.course_id == course_id,
             Document.owner_id == owner_id,
+            Document.is_current.is_(True),
             Document.is_deleted.is_(False),
             Document.status != "archived",
         )

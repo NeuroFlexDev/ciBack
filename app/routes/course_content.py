@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
@@ -85,6 +85,7 @@ def get_canvas_version(
 def upload_document(
     course_id: int,
     file: UploadFile | None = File(default=None),
+    replace_document_id: int | None = Form(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     storage: FileStorage = Depends(get_file_storage),
@@ -97,6 +98,7 @@ def upload_document(
         owner_id=current_user.id,
         upload=file,
         storage=storage,
+        replace_document_id=replace_document_id,
     )
     return document_list_item(document)
 

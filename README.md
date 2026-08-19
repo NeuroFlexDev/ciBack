@@ -478,10 +478,38 @@ run даже при прежних документах. Курс переход
 в `ready` при успехе или `generation_failed` при ошибке.
 
 Goal и target audience задают контекст prompt, difficulty — глубину, language —
-язык, а LLM обязан вернуть ровно `lesson_count` lesson-узлов. Несовпадение числа
-уроков считается ошибкой генерации. Module test после каждого модуля и final
-test добавляются сервером детерминированно согласно boolean-полям, а не оставлены
-на усмотрение LLM.
+язык, а Course Architect обязан вернуть ровно `lesson_count` уроков.
+Несовпадение считается ошибкой генерации. Assessment Agent создаёт тесты,
+практики, кейсы и рубрики согласно настройкам курса.
+
+### Agentic generation pipeline
+
+Генерация выполняется как сохраняемая source-grounded последовательность:
+
+`Ingestion → Competency Mapper → Course Architect → Lesson Writer → Assessment → Critic/QA → materialization`.
+
+Каждый агент возвращает строгий versioned JSON contract. Результаты сохраняются
+в `agent_artifacts`; Lesson Writer запускается отдельно для каждого урока, а
+граф и нормализованный курс записываются только после QA verdict `pass`. Узлы
+графа содержат `src:*` citations, а `course_source_links` хранит обратную связь
+с версией документа, chunk locator и evidence excerpt.
+
+Черновой единый формат ответа AI для canvas (`modules`, `lessons`, `tests`,
+`assignments`) и pending checklist согласования описаны в
+[`docs/adr/0001-ai-canvas-response-contract.md`](docs/adr/0001-ai-canvas-response-contract.md).
+
+Backend endpoints для аудита (frontend от них пока не зависит):
+
+```http
+GET /api/generation-runs/{run_id}/artifacts
+GET /api/courses/{course_id}/update-proposals
+```
+
+Новую immutable-версию документа можно загрузить через существующий endpoint,
+передав multipart-поле `replace_document_id`. Предыдущая версия остаётся current,
+пока новая не проиндексирована. После атомарного переключения Update Agent
+находит затронутые source links и сохраняет human-reviewable diff; сам курс он
+не изменяет.
 
 ### Генерация модулей
 

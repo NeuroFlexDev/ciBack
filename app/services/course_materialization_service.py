@@ -4,9 +4,13 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.models.assessment_rubric import AssessmentRubric
+from app.models.competency import Competency
 from app.models.course import Course
+from app.models.learning_objective import LearningObjective
 from app.models.lesson import Lesson
 from app.models.module import Module
+from app.models.task import Task
 from app.models.test import Test
 from app.models.theory import Theory
 
@@ -60,6 +64,57 @@ def _question_payload(test_node: dict) -> list[dict]:
 
 class CourseMaterializationService:
     @staticmethod
+    def materialize_learning_map(db: Session, *, course: Course, result) -> dict:
+        for item in course.competencies:
+            if not item.is_deleted:
+                item.is_deleted = True
+        for item in course.learning_objectives:
+            if not item.is_deleted:
+                item.is_deleted = True
+
+        roles_by_competency: dict[str, list[str]] = {}
+        for role in result.competency_map.roles:
+            for competency_id in role.competency_ids:
+                roles_by_competency.setdefault(competency_id, []).append(role.title)
+        for competency in result.competency_map.competencies:
+            db.add(
+                Competency(
+                    course_id=course.id,
+                    title=competency.title,
+                    description=competency.description,
+                    level=competency.level,
+                    job_role=", ".join(roles_by_competency.get(competency.id, [])) or None,
+                )
+            )
+
+        modules_by_objective: dict[str, list[str]] = {}
+        lessons_by_objective: dict[str, list[str]] = {}
+        for module in result.course_plan.modules:
+            for objective_id in module.objective_ids:
+                modules_by_objective.setdefault(objective_id, []).append(module.id)
+        for lesson in result.course_plan.lessons:
+            for objective_id in lesson.objective_ids:
+                lessons_by_objective.setdefault(objective_id, []).append(lesson.id)
+        for objective in result.course_plan.objectives:
+            db.add(
+                LearningObjective(
+                    course_id=course.id,
+                    bloom_level=objective.bloom_level,
+                    measurable_verb=objective.measurable_verb,
+                    text=objective.text,
+                    linked_node_ids=[
+                        *modules_by_objective.get(objective.id, []),
+                        *lessons_by_objective.get(objective.id, []),
+                    ],
+                )
+            )
+        db.flush()
+        return {
+            "competency_count": len(result.competency_map.competencies),
+            "learning_objective_count": len(result.course_plan.objectives),
+        }
+
+    @staticmethod
     def materialize(
         db: Session, *, course: Course, nodes: list[dict], edges: list[dict]
     ) -> dict:
@@ -99,10 +154,15 @@ class CourseMaterializationService:
         for test in course.final_tests:
             if not test.is_deleted:
                 test.is_deleted = True
+        for rubric in course.assessment_rubrics:
+            if not rubric.is_deleted:
+                rubric.is_deleted = True
 
         materialized_modules: list[Module] = []
         lesson_count = 0
         test_count = 0
+        task_count = 0
+        rubric_count = 0
         for module_position, module_id in enumerate(module_ids):
             node = by_id[module_id]
             module = Module(
@@ -126,6 +186,57 @@ class CourseMaterializationService:
                 db.flush()
                 content = str(lesson_node.get("content") or lesson_node.get("description") or "")
                 db.add(Theory(lesson_id=lesson.id, content=content))
+                assessment_items = [
+                    ("practice", item) for item in lesson_node.get("practices", [])
+                ] + [("case", item) for item in lesson_node.get("cases", [])]
+                for kind, item in assessment_items:
+                    if kind == "practice":
+                        description = "\n\n".join(
+                            value
+                            for value in (
+                                item.get("instructions"),
+                                f"Результат: {item.get('deliverable')}"
+                                if item.get("deliverable")
+                                else None,
+                            )
+                            if value
+                        )
+                    else:
+                        description = "\n\n".join(
+                            value
+                            for value in (
+                                item.get("scenario"),
+                                "\n".join(item.get("prompts") or []),
+                                f"Ожидаемый ответ: {item.get('expected_response')}"
+                                if item.get("expected_response")
+                                else None,
+                            )
+                            if value
+                        )
+                    task = Task(
+                        module_id=module.id,
+                        name=str(item.get("title") or item.get("id") or "Задание"),
+                        description=description,
+                    )
+                    db.add(task)
+                    db.flush()
+                    task_count += 1
+                    rubric = item.get("rubric")
+                    if rubric:
+                        levels = [
+                            {"criterion_id": criterion.get("id"), **level}
+                            for criterion in rubric.get("criteria", [])
+                            for level in criterion.get("levels", [])
+                        ]
+                        db.add(
+                            AssessmentRubric(
+                                course_id=course.id,
+                                task_id=task.id,
+                                criteria=rubric.get("criteria", []),
+                                levels=levels,
+                            )
+                        )
+                        rubric_count += 1
                 lesson_count += 1
             for test_node_id in module_tests[module_id]:
                 for position, question in enumerate(_question_payload(by_id[test_node_id])):
@@ -157,4 +268,6 @@ class CourseMaterializationService:
             "module_count": len(materialized_modules),
             "lesson_count": lesson_count,
             "test_question_count": test_count,
+            "task_count": task_count,
+            "rubric_count": rubric_count,
         }

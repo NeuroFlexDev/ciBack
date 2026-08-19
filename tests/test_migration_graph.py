@@ -7,7 +7,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 
-EXPECTED_TABLES = {
+BASE_TABLES = {
     "approvals",
     "assessment_rubrics",
     "chat_messages",
@@ -34,6 +34,11 @@ EXPECTED_TABLES = {
     "test_versions",
     "theories",
     "users",
+}
+EXPECTED_TABLES = BASE_TABLES | {
+    "agent_artifacts",
+    "course_source_links",
+    "course_update_proposals",
 }
 
 def test_alembic_revision_graph_has_one_connected_head():
@@ -93,7 +98,7 @@ def test_application_import_does_not_create_database_schema(tmp_path):
         env=env,
     )
 
-    assert json.loads(result.stdout) == []
+    assert json.loads(result.stdout.splitlines()[-1]) == []
 
 
 def test_migrations_upgrade_check_and_downgrade(tmp_path):
@@ -126,7 +131,7 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         text=True,
         env=env,
     )
-    assert set(json.loads(result.stdout)) == EXPECTED_TABLES | {"alembic_version"}
+    assert set(json.loads(result.stdout)) == BASE_TABLES | {"alembic_version"}
 
     for arguments in (("upgrade", "head"), ("check",), ("downgrade", "base")):
         subprocess.run(

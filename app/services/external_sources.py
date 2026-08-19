@@ -61,6 +61,10 @@ def search_openalex(query: str, limit: int = 5) -> list[str]:
     except Exception as e:
         raise RuntimeError(f"Ошибка поиска в OpenAlex: {e}")
 
+
+def openalex_search(*args, **kwargs):
+    return search_openalex(*args, **kwargs)
+
 # вызов функции под тест
 def crossref_search(*args, **kwargs):
     return search_crossref(*args, **kwargs)
@@ -78,14 +82,20 @@ def aggregated_search(query: str, source: str = "all", lang: str = "en") -> list
 
     if source in ("arxiv", "all"):
         try:
-            results += search_arxiv(query, lang=lang)
+            results += arxiv_search(query)
         except Exception as e:
             print(f"⚠️ Ошибка поиска в arXiv: {str(e)}")
 
     if source in ("crossref", "all"):
         try:
-            results += search_crossref(query, lang=lang)
+            results += crossref_search(query)
         except Exception as e:
             print(f"⚠️ Ошибка поиска в Crossref: {str(e)}")
+
+    if source in ("openalex", "all"):
+        try:
+            results += openalex_search(query)
+        except Exception as e:
+            print(f"⚠️ Ошибка поиска в OpenAlex: {str(e)}")
 
     return results
