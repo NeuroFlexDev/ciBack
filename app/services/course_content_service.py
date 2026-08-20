@@ -178,6 +178,18 @@ class CourseContentService:
             )
             if course is None:
                 raise _course_not_found()
+            requested: dict[str, set[int]] = {}
+            for node in payload.nodes:
+                requested.setdefault(node.type, set()).add(int(node.id.split(":", 1)[1]))
+            expected_ids = {node.id for node in payload.nodes}
+            actual_ids = CourseContentRepository.valid_canvas_node_ids(
+                db, course_id=course.id, requested=requested
+            )
+            if actual_ids != expected_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Canvas contains a missing, deleted, or foreign course entity",
+                )
             current = course.current_graph
             current_version = (
                 current.version if current is not None and not current.is_deleted else 0

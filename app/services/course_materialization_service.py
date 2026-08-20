@@ -58,7 +58,13 @@ def _question_payload(test_node: dict) -> list[dict]:
         correct = str(item.get("correct_answer", item.get("correct", ""))).strip()
         if not question or not isinstance(answers, list):
             raise ValueError("generated test question is invalid")
-        result.append({"question": question, "answers": [str(answer) for answer in answers], "correct": correct})
+        result.append({
+            "logical_id": str(item.get("id") or f"{test_node['id']}:question:{len(result)}"),
+            "question": question,
+            "answers": [str(answer) for answer in answers],
+            "correct": correct,
+            "source_refs": list(item.get("source_refs") or test_node.get("source_refs") or []),
+        })
     return result
 
 
@@ -159,6 +165,9 @@ class CourseMaterializationService:
                 rubric.is_deleted = True
 
         materialized_modules: list[Module] = []
+        persisted_ids: dict[str, list[str]] = {}
+        canvas_nodes: list[dict] = []
+        canvas_edges: list[dict] = []
         lesson_count = 0
         test_count = 0
         task_count = 0
@@ -168,11 +177,23 @@ class CourseMaterializationService:
             module = Module(
                 course_id=course.id,
                 title=str(node.get("label") or module_id),
+                description=str(node.get("description") or ""),
                 position=module_position,
             )
             db.add(module)
             db.flush()
             materialized_modules.append(module)
+            module_canvas_id = f"module:{module.id}"
+            persisted_ids[module_id] = [module_canvas_id]
+            canvas_nodes.append({
+                "id": module_canvas_id,
+                "logical_id": module_id,
+                "type": "module",
+                "label": module.title,
+                "description": module.description,
+                "position": module.position,
+                "source_refs": list(node.get("source_refs") or []),
+            })
             ordered_lessons = [item for item in _ordered_ids(nodes, edges, "lesson") if item in contains[module_id]]
             for lesson_position, lesson_id in enumerate(ordered_lessons):
                 lesson_node = by_id[lesson_id]
@@ -184,8 +205,20 @@ class CourseMaterializationService:
                 )
                 db.add(lesson)
                 db.flush()
+                lesson_canvas_id = f"lesson:{lesson.id}"
+                persisted_ids[lesson_id] = [lesson_canvas_id]
                 content = str(lesson_node.get("content") or lesson_node.get("description") or "")
                 db.add(Theory(lesson_id=lesson.id, content=content))
+                canvas_nodes.append({
+                    "id": lesson_canvas_id,
+                    "logical_id": lesson_id,
+                    "type": "lesson",
+                    "label": lesson.title,
+                    "description": lesson.description or "",
+                    "content": content,
+                    "position": lesson.position,
+                    "source_refs": list(lesson_node.get("source_refs") or []),
+                })
                 assessment_items = [
                     ("practice", item) for item in lesson_node.get("practices", [])
                 ] + [("case", item) for item in lesson_node.get("cases", [])]
@@ -220,6 +253,22 @@ class CourseMaterializationService:
                     )
                     db.add(task)
                     db.flush()
+                    task_logical_id = str(item.get("id") or f"{lesson_id}:{kind}:{task.id}")
+                    task_canvas_id = f"task:{task.id}"
+                    persisted_ids[task_logical_id] = [task_canvas_id]
+                    canvas_nodes.append({
+                        "id": task_canvas_id,
+                        "logical_id": task_logical_id,
+                        "type": "task",
+                        "label": task.name,
+                        "description": task.description or "",
+                        "source_refs": list(item.get("source_ref_ids") or []),
+                    })
+                    canvas_edges.append({
+                        "source": lesson_canvas_id,
+                        "target": task_canvas_id,
+                        "relation": "contains",
+                    })
                     task_count += 1
                     rubric = item.get("rubric")
                     if rubric:
@@ -240,28 +289,80 @@ class CourseMaterializationService:
                 lesson_count += 1
             for test_node_id in module_tests[module_id]:
                 for position, question in enumerate(_question_payload(by_id[test_node_id])):
-                    db.add(Test(
+                    test = Test(
                         module_id=module.id,
                         assessment_scope="module",
                         position=position,
                         question=question["question"],
                         answers=json.dumps(question["answers"], ensure_ascii=False),
                         correct_answer=question["correct"],
-                    ))
+                    )
+                    db.add(test)
+                    db.flush()
+                    test_canvas_id = f"test:{test.id}"
+                    persisted_ids.setdefault(test_node_id, []).append(test_canvas_id)
+                    persisted_ids[question["logical_id"]] = [test_canvas_id]
+                    canvas_nodes.append({
+                        "id": test_canvas_id,
+                        "logical_id": question["logical_id"],
+                        "type": "test",
+                        "assessment_scope": "module",
+                        "label": question["question"],
+                        "question": question["question"],
+                        "answers": question["answers"],
+                        "correct_answer": question["correct"],
+                        "position": position,
+                        "source_refs": question["source_refs"],
+                    })
                     test_count += 1
 
         final_nodes = [node for node in nodes if node.get("type") == "test" and node.get("assessment_scope") == "final"]
         for final_node in final_nodes:
             for position, question in enumerate(_question_payload(final_node)):
-                db.add(Test(
+                test = Test(
                     course_id=course.id,
                     assessment_scope="final",
                     position=position,
                     question=question["question"],
                     answers=json.dumps(question["answers"], ensure_ascii=False),
                     correct_answer=question["correct"],
-                ))
+                )
+                db.add(test)
+                db.flush()
+                test_canvas_id = f"test:{test.id}"
+                logical_test_id = str(final_node["id"])
+                persisted_ids.setdefault(logical_test_id, []).append(test_canvas_id)
+                persisted_ids[question["logical_id"]] = [test_canvas_id]
+                canvas_nodes.append({
+                    "id": test_canvas_id,
+                    "logical_id": question["logical_id"],
+                    "type": "test",
+                    "assessment_scope": "final",
+                    "label": question["question"],
+                    "question": question["question"],
+                    "answers": question["answers"],
+                    "correct_answer": question["correct"],
+                    "position": position,
+                    "source_refs": question["source_refs"],
+                })
                 test_count += 1
+        for edge in edges:
+            sources = persisted_ids.get(str(edge["source"]), [])
+            targets = persisted_ids.get(str(edge["target"]), [])
+            for source in sources:
+                for target in targets:
+                    canvas_edges.append({
+                        "source": source,
+                        "target": target,
+                        "relation": edge.get("relation") or "contains",
+                    })
+        unique_edges = []
+        seen_edges = set()
+        for edge in canvas_edges:
+            key = (edge["source"], edge["target"], edge["relation"])
+            if key not in seen_edges:
+                seen_edges.add(key)
+                unique_edges.append(edge)
         db.flush()
         return {
             "module_ids": [module.id for module in materialized_modules],
@@ -270,4 +371,6 @@ class CourseMaterializationService:
             "test_question_count": test_count,
             "task_count": task_count,
             "rubric_count": rubric_count,
+            "canvas_nodes": canvas_nodes,
+            "canvas_edges": unique_edges,
         }

@@ -592,3 +592,91 @@ Workflow генерации (`status`) и состояние публикаци�
 `offset`. Ответ остаётся JSON-массивом для обратной совместимости, а `X-Total-Count`,
 `X-Limit` и `X-Offset` содержат метаданные пагинации. Каждый элемент включает
 `publication_status`, `module_count`, `lesson_count`, `updated_at` и `published_at`.
+
+### Step 5: review generated course
+
+После успешной генерации frontend получает сводку курса:
+
+```http
+GET /api/courses/{course_id}/structure
+```
+
+```json
+{
+  "course_id": 42,
+  "title": "Информационная безопасность",
+  "description": "Практический вводный курс",
+  "status": "ready",
+  "metrics": {
+    "modules_count": 2,
+    "lessons_count": 8,
+    "tests_count": 2,
+    "tasks_count": 3,
+    "estimated_time_minutes": 75
+  },
+  "modules_timeline": [
+    {
+      "module_id": 7,
+      "order": 1,
+      "title": "Вводный модуль",
+      "description": "Основные понятия",
+      "lessons_count": 4,
+      "tests_count": 1,
+      "tasks_count": 1,
+      "estimated_time_minutes": 35,
+      "status": "ready"
+    }
+  ]
+}
+```
+
+В REST API идентификаторы курса, модулей, уроков, вопросов и заданий являются
+целыми числами. `order` начинается с `1`, хотя внутренняя `position` начинается
+с `0`. Метрики и timeline учитывают только активные записи и исключают
+soft-deleted content. `tests_count` — количество плоских строк `Test`, включая
+финальные вопросы. Оценка времени равна сумме времени чтения уроков и двух минут
+на каждый вопрос; у заданий пока нет отдельной длительности.
+
+Публичный review status вычисляется отдельно от workflow генерации:
+
+- `published` — курс опубликован;
+- `ready` — генерация и materialization успешно завершены;
+- `draft` — курс ещё не готов.
+
+Статус модуля равен `published` для опубликованного курса, `ready` при наличии
+активного урока с непустым content и `draft` в остальных случаях. Значение
+`needs_review` зарезервировано для будущего human-review flow и сейчас backend
+его не возвращает.
+
+Полное содержимое модуля доступно отдельно:
+
+```http
+GET /api/modules/{module_id}
+```
+
+Ответ содержит description/status, lessons, плоский список tests и tasks.
+Отдельной persisted-сущности «тест с вопросами» пока нет: каждая запись `Test`
+является одним вопросом, а `answers` соответствует frontend options.
+
+### Persisted canvas IDs
+
+Agentic pipeline может использовать временные logical IDs до записи в БД. После
+materialization canvas хранит только namespaced ID реальных сущностей:
+
+```text
+module:7
+lesson:31
+test:15
+task:9
+```
+
+Поле `logical_id` внутри backend-generated node связывает persisted entity с
+agent artifacts и document lineage. Публичное поле `id` всегда использует
+числовой DB ID с prefix сущности.
+
+`PUT /api/courses/{course_id}/canvas` принимает только `module`, `lesson`,
+`test` и `task`. Prefix `id` обязан совпадать с `type`, числовая часть должна
+быть положительной, а сущность — существовать, принадлежать курсу и не быть
+soft-deleted. Все edge source/target должны присутствовать среди nodes одного
+payload. Произвольные persisted IDs и UUID не поддерживаются; UUID допустимы
+только для ещё не сохранённых локальных узлов frontend.

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,8 +30,16 @@ class CourseGraphOut(CourseGraphCreate):
 
 class CanvasNode(BaseModel):
     id: str = Field(min_length=1)
+    type: Literal["module", "lesson", "test", "task"]
 
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="after")
+    def validate_namespaced_id(self):
+        prefix, separator, raw_id = self.id.partition(":")
+        if separator != ":" or prefix != self.type or not raw_id.isdigit() or int(raw_id) <= 0:
+            raise ValueError("canvas id must match '<type>:<positive database id>'")
+        return self
 
 
 class CanvasEdge(BaseModel):

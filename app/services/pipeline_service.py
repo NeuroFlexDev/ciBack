@@ -669,8 +669,8 @@ class PipelineService:
             graph = CourseGraph(
                 course_id=course_id,
                 version=PipelineRepository.next_graph_version(db, course_id),
-                nodes=nodes,
-                edges=edges,
+                nodes=[],
+                edges=[],
                 created_by=owner_id,
                 status=CourseGraphStatus.DRAFT.value,
             )
@@ -685,6 +685,10 @@ class PipelineService:
             materialized = CourseMaterializationService.materialize(
                 db, course=locked_course, nodes=nodes, edges=edges
             )
+            persisted_nodes = materialized.pop("canvas_nodes")
+            persisted_edges = materialized.pop("canvas_edges")
+            graph.nodes = persisted_nodes
+            graph.edges = persisted_edges
             learning_map = (
                 CourseMaterializationService.materialize_learning_map(
                     db, course=locked_course, result=build.result
@@ -692,7 +696,7 @@ class PipelineService:
                 if build.result is not None
                 else {"competency_count": 0, "learning_objective_count": 0}
             )
-            link_payloads = graph_source_links(nodes, source_catalog)
+            link_payloads = graph_source_links(persisted_nodes, source_catalog)
             PipelineRepository.add_source_links(
                 db,
                 [
@@ -715,8 +719,8 @@ class PipelineService:
             run.output = {
                 "graph_id": graph.id,
                 "graph_version": graph.version,
-                "node_count": len(nodes),
-                "edge_count": len(edges),
+                "node_count": len(persisted_nodes),
+                "edge_count": len(persisted_edges),
                 "agentic_pipeline_version": "1.0",
                 "legacy_fallback": build.legacy_fallback,
                 "qa": build.qa_summary,

@@ -78,6 +78,7 @@ class CoursePublicationService:
                 module_id=module.id,
                 revision=module.revision,
                 title=module.title,
+                description=module.description,
                 position=module.position,
                 deleted=False,
                 created_by=owner_id,

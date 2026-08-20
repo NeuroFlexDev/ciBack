@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.course import Course
 from app.models.lesson import Lesson
 from app.models.module import Module
+from app.models.task import Task
 
 
 class CourseReviewRepository:
@@ -13,6 +14,7 @@ class CourseReviewRepository:
             .options(
                 selectinload(Course.modules).selectinload(Module.lessons).selectinload(Lesson.theory),
                 selectinload(Course.modules).selectinload(Module.tests),
+                selectinload(Course.modules).selectinload(Module.tasks),
                 selectinload(Course.final_tests),
             )
             .filter(
@@ -28,7 +30,12 @@ class CourseReviewRepository:
         return (
             db.query(Module)
             .join(Course, Module.course_id == Course.id)
-            .options(selectinload(Module.lessons).selectinload(Lesson.theory), selectinload(Module.tests))
+            .options(
+                selectinload(Module.lessons).selectinload(Lesson.theory),
+                selectinload(Module.tests),
+                selectinload(Module.tasks),
+                selectinload(Module.course),
+            )
             .filter(
                 Module.id == module_id,
                 Module.is_deleted.is_(False),

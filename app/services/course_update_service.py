@@ -91,6 +91,11 @@ class CourseUpdateService:
         graph_nodes = {
             str(item["id"]): item for item in course.current_graph.nodes
         }
+        logical_graph_nodes: dict[str, list[str]] = {}
+        for persisted_id, node in graph_nodes.items():
+            logical_id = node.get("logical_id")
+            if isinstance(logical_id, str):
+                logical_graph_nodes.setdefault(logical_id, []).append(persisted_id)
         affected_nodes = [
             graph_nodes[item]
             for item in affected_node_ids
@@ -183,7 +188,7 @@ class CourseUpdateService:
             },
             max_tokens=4096,
         )
-        known_node_ids = set(graph_nodes) | artifact_logical_ids
+        known_node_ids = set(graph_nodes) | set(logical_graph_nodes) | artifact_logical_ids
         invented = {
             item.affected_artifact_id
             for item in artifact.impacts
@@ -193,13 +198,16 @@ class CourseUpdateService:
             raise ValueError(
                 f"Update Agent referenced unknown course nodes: {sorted(invented)}"
             )
-        proposed_ids = sorted(
-            {
-                item.affected_artifact_id
-                for item in artifact.impacts
-                if item.proposed_action != "no_change"
-            }
-        )
+        proposed_ids: set[str] = set()
+        for item in artifact.impacts:
+            if item.proposed_action == "no_change":
+                continue
+            target = item.affected_artifact_id
+            matches = logical_graph_nodes.get(target, [])
+            if len(matches) > 1:
+                raise ValueError(f"Ambiguous logical course node reference: {target}")
+            proposed_ids.add(matches[0] if matches else target)
+        proposed_ids = sorted(proposed_ids)
         proposal = CourseUpdateProposal(
             course_id=course.id,
             document_id=document.id,
