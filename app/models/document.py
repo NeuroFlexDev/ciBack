@@ -1,5 +1,8 @@
+from uuid import uuid4
+
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     ForeignKey,
@@ -10,6 +13,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -32,8 +37,26 @@ class Document(Base, BaseModelMixin):
             name="ck_documents_status",
         ),
         UniqueConstraint("id", "version", name="uq_documents_id_version"),
+        UniqueConstraint(
+            "course_id",
+            "document_key",
+            "version",
+            name="uq_documents_course_key_version",
+        ),
+        UniqueConstraint(
+            "supersedes_document_id",
+            name="uq_documents_supersedes_document_id",
+        ),
         Index("ix_documents_content_hash", "content_hash"),
         Index("ix_documents_owner_course", "owner_id", "course_id"),
+        Index(
+            "uq_documents_current_lineage",
+            "course_id",
+            "document_key",
+            unique=True,
+            postgresql_where=text("is_current = true"),
+            sqlite_where=text("is_current = 1"),
+        ),
     )
 
     storage_key = Column(String(1024), nullable=False)
@@ -41,7 +64,22 @@ class Document(Base, BaseModelMixin):
     course_id = Column(
         Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    document_key = Column(
+        String(64), nullable=False, default=lambda: uuid4().hex
+    )
     version = Column(Integer, nullable=False, default=1)
+    is_current = Column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    supersedes_document_id = Column(
+        Integer,
+        ForeignKey(
+            "documents.id",
+            name="fk_documents_supersedes_document_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
     status = Column(
         String(32), nullable=False, default=DocumentStatus.UPLOADED.value
     )

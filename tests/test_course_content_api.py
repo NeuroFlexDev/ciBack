@@ -8,6 +8,7 @@ from app.core.security import create_access_token, hash_password
 from app.models.course_graph import CourseGraph
 from app.models.document import Document
 from app.models.user import User
+from app.models.module import Module
 from app.repositories.course_content import CourseContentRepository
 from app.services.course_content_service import CourseContentService
 from app.services.file_storage import LocalFileStorage, get_file_storage
@@ -35,6 +36,10 @@ def test_canvas_empty_versioned_and_conflict(
     client, db_session, auth_user, auth_headers
 ):
     course = make_course(db_session, owner_id=auth_user.id)
+    first_module = Module(course_id=course.id, title="First")
+    second_module = Module(course_id=course.id, title="Second")
+    db_session.add_all([first_module, second_module])
+    db_session.commit()
 
     response = client.get(
         f"/api/courses/{course.id}/canvas", headers=auth_headers
@@ -55,10 +60,10 @@ def test_canvas_empty_versioned_and_conflict(
     first_payload = {
         "version": 0,
         "nodes": [
-            {"id": "a", "position": {"x": 10, "y": 20}},
-            {"id": "b", "data": {"label": "B"}},
+            {"id": f"module:{first_module.id}", "type": "module", "position": {"x": 10, "y": 20}},
+            {"id": f"module:{second_module.id}", "type": "module", "data": {"label": "B"}},
         ],
-        "edges": [{"id": "a-b", "source": "a", "target": "b"}],
+        "edges": [{"id": "a-b", "source": f"module:{first_module.id}", "target": f"module:{second_module.id}"}],
     }
     response = client.put(
         f"/api/courses/{course.id}/canvas",
@@ -80,7 +85,7 @@ def test_canvas_empty_versioned_and_conflict(
 
     second = client.put(
         f"/api/courses/{course.id}/canvas",
-        json={"version": 1, "nodes": [{"id": "c"}], "edges": []},
+        json={"version": 1, "nodes": [{"id": f"module:{first_module.id}", "type": "module"}], "edges": []},
         headers=auth_headers,
     )
     assert second.status_code == 200
@@ -101,14 +106,16 @@ def test_canvas_validation_access_and_auth(
     client, db_session, auth_user, auth_headers
 ):
     course = make_course(db_session, owner_id=auth_user.id)
+    module = Module(course_id=course.id, title="M")
+    db_session.add(module); db_session.commit()
     other, other_headers = _other_headers(db_session)
 
     invalid = client.put(
         f"/api/courses/{course.id}/canvas",
         json={
             "version": 0,
-            "nodes": [{"id": "a"}],
-            "edges": [{"source": "a", "target": "missing"}],
+            "nodes": [{"id": f"module:{module.id}", "type": "module"}],
+            "edges": [{"source": f"module:{module.id}", "target": "module:999999"}],
         },
         headers=auth_headers,
     )
@@ -122,17 +129,44 @@ def test_canvas_validation_access_and_auth(
     )
 
 
+def test_canvas_rejects_wrong_prefix_foreign_and_deleted_entities(
+    client, db_session, auth_user, auth_headers
+):
+    course = make_course(db_session, owner_id=auth_user.id)
+    other_course = make_course(db_session, owner_id=auth_user.id)
+    owned = Module(course_id=course.id, title="Owned")
+    foreign = Module(course_id=other_course.id, title="Foreign")
+    deleted = Module(course_id=course.id, title="Deleted", is_deleted=True)
+    db_session.add_all([owned, foreign, deleted]); db_session.commit()
+
+    wrong_prefix = client.put(
+        f"/api/courses/{course.id}/canvas",
+        json={"version": 0, "nodes": [{"id": f"lesson:{owned.id}", "type": "module"}], "edges": []},
+        headers=auth_headers,
+    )
+    assert wrong_prefix.status_code == 422
+    for item in (foreign, deleted):
+        response = client.put(
+            f"/api/courses/{course.id}/canvas",
+            json={"version": 0, "nodes": [{"id": f"module:{item.id}", "type": "module"}], "edges": []},
+            headers=auth_headers,
+        )
+        assert response.status_code == 422
+
+
 def test_canvas_version_history_and_detail(
     client, db_session, auth_user, auth_headers
 ):
     course = make_course(db_session, owner_id=auth_user.id)
+    module = Module(course_id=course.id, title="M")
+    db_session.add(module); db_session.commit()
     empty = client.get(
         f"/api/courses/{course.id}/canvas/versions", headers=auth_headers
     )
     assert empty.status_code == 200
     assert empty.json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
 
-    first_nodes = [{"id": "first", "data": {"label": "First"}}]
+    first_nodes = [{"id": f"module:{module.id}", "type": "module", "data": {"label": "First"}}]
     assert (
         client.put(
             f"/api/courses/{course.id}/canvas",
@@ -144,7 +178,7 @@ def test_canvas_version_history_and_detail(
     assert (
         client.put(
             f"/api/courses/{course.id}/canvas",
-            json={"version": 1, "nodes": [{"id": "second"}], "edges": []},
+            json={"version": 1, "nodes": [{"id": f"module:{module.id}", "type": "module", "data": {"label": "Second"}}], "edges": []},
             headers=auth_headers,
         ).status_code
         == 200
@@ -187,9 +221,11 @@ def test_canvas_history_hides_deleted_and_foreign_versions(
     client, db_session, auth_user, auth_headers
 ):
     course = make_course(db_session, owner_id=auth_user.id)
+    module = Module(course_id=course.id, title="M")
+    db_session.add(module); db_session.commit()
     client.put(
         f"/api/courses/{course.id}/canvas",
-        json={"version": 0, "nodes": [{"id": "one"}], "edges": []},
+        json={"version": 0, "nodes": [{"id": f"module:{module.id}", "type": "module"}], "edges": []},
         headers=auth_headers,
     )
     graph = (

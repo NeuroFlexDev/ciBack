@@ -72,7 +72,7 @@ class CourseEditorService:
 
     @staticmethod
     def _module_snapshot(db: Session, item: Module, owner_id: int, deleted: bool = False) -> None:
-        db.add(ModuleVersion(module_id=item.id, revision=item.revision, title=item.title, position=item.position, deleted=deleted, created_by=owner_id))
+        db.add(ModuleVersion(module_id=item.id, revision=item.revision, title=item.title, description=item.description, position=item.position, deleted=deleted, created_by=owner_id))
 
     @staticmethod
     def _lesson_snapshot(db: Session, item: Lesson, owner_id: int, deleted: bool = False) -> None:
@@ -84,19 +84,20 @@ class CourseEditorService:
         db.add(TestVersion(test_id=item.id, revision=item.revision, assessment_scope=item.assessment_scope, module_id=item.module_id, course_id=item.course_id, question=item.question, answers=item.answers or "[]", correct_answer=item.correct_answer, position=item.position, deleted=deleted, created_by=owner_id))
 
     @staticmethod
-    def create_module(db: Session, course_id: int, owner_id: int, title: str) -> Module:
+    def create_module(db: Session, course_id: int, owner_id: int, title: str, description: str = "") -> Module:
         course = CourseEditorService._course(db, course_id, owner_id, True)
         CoursePublicationService.prepare_for_edit(course)
         position = db.query(func.coalesce(func.max(Module.position), -1)).filter(Module.course_id == course_id, Module.is_deleted.is_(False)).scalar() + 1
-        item = Module(course_id=course_id, title=title, position=position, revision=1)
+        item = Module(course_id=course_id, title=title, description=description, position=position, revision=1)
         db.add(item); db.flush(); CourseEditorService._module_snapshot(db, item, owner_id); db.commit(); db.refresh(item)
         return item
 
     @staticmethod
-    def update_module(db: Session, module_id: int, owner_id: int, title: str | None, expected: int) -> Module:
+    def update_module(db: Session, module_id: int, owner_id: int, title: str | None, description: str | None, expected: int) -> Module:
         item = CourseEditorService._module(db, module_id, owner_id, True); CourseEditorService._check(item, expected)
         CoursePublicationService.prepare_for_edit(item.course)
         if title is not None: item.title = title
+        if description is not None: item.description = description
         item.revision += 1; CourseEditorService._module_snapshot(db, item, owner_id); db.commit(); db.refresh(item); return item
 
     @staticmethod

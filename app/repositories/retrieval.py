@@ -26,6 +26,7 @@ class RetrievalRepository:
                 Document.course_id == course_id,
                 Document.owner_id == owner_id,
                 Document.status == DocumentStatus.INDEXED.value,
+                Document.is_current.is_(True),
                 Document.is_deleted.is_(False),
                 DocumentChunk.is_deleted.is_(False),
                 DocumentChunk.document_version == Document.version,

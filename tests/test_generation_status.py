@@ -34,11 +34,21 @@ def _run(db, owner, course, **overrides):
 @pytest.mark.parametrize(
     ("status", "stage", "progress", "expected"),
     [
-        ("queued", "queued", 0, ["pending", "pending", "pending"]),
-        ("running", "knowledge_extraction", 10, ["running", "pending", "pending"]),
-        ("running", "structure_building", 40, ["completed", "running", "pending"]),
-        ("running", "lesson_writing", 80, ["completed", "completed", "running"]),
-        ("completed", "completed", 100, ["completed", "completed", "completed"]),
+        ("queued", "queued", 0, ["pending"] * 7),
+        ("running", "ingestion", 5, ["running"] + ["pending"] * 6),
+        (
+            "running",
+            "course_architecture",
+            35,
+            ["completed", "completed", "running"] + ["pending"] * 4,
+        ),
+        (
+            "running",
+            "quality_assurance",
+            88,
+            ["completed"] * 5 + ["running", "pending"],
+        ),
+        ("completed", "completed", 100, ["completed"] * 7),
     ],
 )
 def test_generation_status_contract(
@@ -57,7 +67,13 @@ def test_generation_status_contract(
     assert body["id"] == body["run_id"] == run.id
     assert body["progress_percent"] == progress
     assert [item["code"] for item in body["stages"]] == [
-        "knowledge_extraction", "structure_building", "lesson_writing"
+        "ingestion",
+        "competency_mapping",
+        "course_architecture",
+        "lesson_writing",
+        "assessment_generation",
+        "quality_assurance",
+        "materialization",
     ]
     assert [item["status"] for item in body["stages"]] == expected
     assert body["status_error"] is None

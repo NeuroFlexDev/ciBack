@@ -15,12 +15,12 @@ router = APIRouter()
 
 
 def _out(item: Module) -> dict:
-    return {"id": item.id, "title": item.title, "course_id": item.course_id, "position": item.position, "revision": item.revision}
+    return {"id": item.id, "title": item.title, "description": item.description, "course_id": item.course_id, "position": item.position, "revision": item.revision}
 
 
 @router.post("/courses/{course_id}/modules/", status_code=201)
 def add_module(course_id: int, payload: ModuleCreateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return _out(CourseEditorService.create_module(db, course_id, current_user.id, payload.title))
+    return _out(CourseEditorService.create_module(db, course_id, current_user.id, payload.title, payload.description))
 
 
 @router.get("/courses/{course_id}/modules/")
@@ -43,7 +43,7 @@ def get_module(module_id: int, db: Session = Depends(get_db), current_user: User
 
 @router.put("/modules/{module_id}")
 def update_module(module_id: int, payload: ModuleUpdateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return _out(CourseEditorService.update_module(db, module_id, current_user.id, payload.title, payload.expected_revision))
+    return _out(CourseEditorService.update_module(db, module_id, current_user.id, payload.title, payload.description, payload.expected_revision))
 
 
 @router.delete("/modules/{module_id}")

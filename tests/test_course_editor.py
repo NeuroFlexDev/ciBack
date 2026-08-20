@@ -13,9 +13,24 @@ from tests.factories import make_course
 
 
 def _module(client, course_id, headers, title="M"):
-    response = client.post(f"/api/courses/{course_id}/modules/", json={"title": title}, headers=headers)
+    response = client.post(f"/api/courses/{course_id}/modules/", json={"title": title, "description": f"About {title}"}, headers=headers)
     assert response.status_code == 201
     return response.json()
+
+
+def test_module_description_is_versioned(client, db_session, auth_user, auth_headers):
+    course = make_course(db_session, owner_id=auth_user.id)
+    module = _module(client, course.id, auth_headers)
+    assert module["description"] == "About M"
+    response = client.put(
+        f"/api/modules/{module['id']}",
+        json={"description": "Updated description", "expected_revision": 1},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["description"] == "Updated description"
+    versions = db_session.query(ModuleVersion).filter_by(module_id=module["id"]).order_by(ModuleVersion.revision).all()
+    assert [item.description for item in versions] == ["About M", "Updated description"]
 
 
 def _lesson(client, course_id, module_id, headers, title="L"):
@@ -84,7 +99,7 @@ def test_module_delete_cascades_soft_delete_and_metrics(client, db_session, auth
     assert db_session.get(TestModel, question["id"]).is_deleted
     assert db_session.query(Task).filter_by(module_id=module["id"]).one().is_deleted
     structure = client.get(f"/api/courses/{course.id}/structure", headers=auth_headers).json()
-    assert structure["metrics"]["module_count"] == 0
+    assert structure["metrics"]["modules_count"] == 0
 
 
 def test_editor_and_versions_tenant_isolation(client, db_session, auth_user, auth_headers):

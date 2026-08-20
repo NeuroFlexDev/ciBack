@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 from app.models.base import BaseModelMixin
 from app.database.db import Base
@@ -15,6 +15,7 @@ class Module(Base, BaseModelMixin):
     )
 
     title = Column(String, nullable=False)
+    description = Column(Text, nullable=False, default="")
     course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"))
     position = Column(Integer, nullable=False, default=0)
     revision = Column(Integer, nullable=False, default=1)

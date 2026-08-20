@@ -1,4 +1,5 @@
 from .approval import Approval
+from .agent_artifact import AgentArtifact
 from .assessment_rubric import AssessmentRubric
 from .chat import Chat, ChatMessage
 from .competency import Competency
@@ -7,6 +8,8 @@ from .course_generation_settings import CourseGenerationSettings
 from .course_graph import CourseGraph
 from .course_modules import CourseModule
 from .course_structure import CourseStructure
+from .course_source_link import CourseSourceLink
+from .course_update_proposal import CourseUpdateProposal
 from .course_version import CourseVersion
 from .feedback import Feedback
 from .document import Document, DocumentChunk
@@ -25,6 +28,7 @@ from .user import User
 
 __all__ = [
     "Approval",
+    "AgentArtifact",
     "AssessmentRubric",
     "Chat",
     "ChatMessage",
@@ -34,6 +38,8 @@ __all__ = [
     "CourseGraph",
     "CourseModule",
     "CourseStructure",
+    "CourseSourceLink",
+    "CourseUpdateProposal",
     "CourseVersion",
     "Feedback",
     "Document",

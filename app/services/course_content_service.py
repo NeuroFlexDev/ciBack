@@ -178,6 +178,18 @@ class CourseContentService:
             )
             if course is None:
                 raise _course_not_found()
+            requested: dict[str, set[int]] = {}
+            for node in payload.nodes:
+                requested.setdefault(node.type, set()).add(int(node.id.split(":", 1)[1]))
+            expected_ids = {node.id for node in payload.nodes}
+            actual_ids = CourseContentRepository.valid_canvas_node_ids(
+                db, course_id=course.id, requested=requested
+            )
+            if actual_ids != expected_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Canvas contains a missing, deleted, or foreign course entity",
+                )
             current = course.current_graph
             current_version = (
                 current.version if current is not None and not current.is_deleted else 0
@@ -225,10 +237,22 @@ class CourseContentService:
         owner_id: int,
         upload: UploadFile,
         storage: FileStorage,
+        replace_document_id: int | None = None,
     ) -> Document:
         course = CourseContentRepository.get_owned_course(db, course_id, owner_id)
         if course is None:
             raise _course_not_found()
+
+        superseded = None
+        if replace_document_id is not None:
+            superseded = CourseContentRepository.get_current_owned_document(
+                db,
+                document_id=replace_document_id,
+                course_id=course_id,
+                owner_id=owner_id,
+            )
+            if superseded is None:
+                raise HTTPException(status_code=404, detail="Заменяемый документ не найден")
 
         original_name = "".join(
             character
@@ -259,7 +283,10 @@ class CourseContentService:
             storage_key=storage_key,
             owner_id=owner_id,
             course_id=course_id,
-            version=1,
+            document_key=(superseded.document_key if superseded else uuid4().hex),
+            version=(superseded.version + 1 if superseded else 1),
+            is_current=superseded is None,
+            supersedes_document_id=(superseded.id if superseded else None),
             status=DocumentStatus.UPLOADED.value,
             content_hash=stored.content_hash,
             source_type="upload",

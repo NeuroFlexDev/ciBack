@@ -1,9 +1,12 @@
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.agent_artifact import AgentArtifact
 from app.models.course import Course
 from app.models.course_graph import CourseGraph
 from app.models.course_generation_settings import CourseGenerationSettings
+from app.models.course_source_link import CourseSourceLink
+from app.models.course_update_proposal import CourseUpdateProposal
 from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
 
@@ -75,6 +78,7 @@ class PipelineRepository:
                 Document.course_id == course_id,
                 Document.owner_id == owner_id,
                 Document.status == "indexed",
+                Document.is_current.is_(True),
                 Document.is_deleted.is_(False),
             )
             .order_by(Document.id, Document.version)
@@ -92,6 +96,7 @@ class PipelineRepository:
                 Document.course_id == course_id,
                 Document.owner_id == owner_id,
                 Document.status == "indexed",
+                Document.is_current.is_(True),
                 Document.is_deleted.is_(False),
             )
             .order_by(Document.id)
@@ -102,10 +107,29 @@ class PipelineRepository:
     def documents_for_snapshot(
         db: Session, course_id: int, owner_id: int, snapshot: list[dict]
     ) -> list[Document]:
+        if not snapshot:
+            return []
         ids = [item["document_id"] for item in snapshot]
-        return PipelineRepository.selected_indexed_documents(
-            db, course_id, owner_id, ids
+        candidates = (
+            db.query(Document)
+            .filter(
+                Document.id.in_(ids),
+                Document.course_id == course_id,
+                Document.owner_id == owner_id,
+                Document.status == "indexed",
+                Document.is_deleted.is_(False),
+            )
+            .all()
         )
+        expected = {
+            (item["document_id"], item["version"], item["content_hash"])
+            for item in snapshot
+        }
+        return [
+            item
+            for item in candidates
+            if (item.id, item.version, item.content_hash) in expected
+        ]
 
     @staticmethod
     def active_graph_run(
@@ -173,7 +197,7 @@ class PipelineRepository:
                 GenerationRun.owner_id == owner_id,
                 GenerationRun.course_id == course_id,
                 GenerationRun.run_type == "graph_generation",
-                GenerationRun.status == "succeeded",
+                GenerationRun.status.in_(("succeeded", "completed")),
                 GenerationRun.input_fingerprint == fingerprint,
                 GenerationRun.is_deleted.is_(False),
             )
@@ -197,3 +221,99 @@ class PipelineRepository:
             .scalar()
         )
         return (current or 0) + 1
+
+    @staticmethod
+    def get_agent_artifact(
+        db: Session, *, run_id: int, agent: str, sequence: int
+    ) -> AgentArtifact | None:
+        return (
+            db.query(AgentArtifact)
+            .filter(
+                AgentArtifact.run_id == run_id,
+                AgentArtifact.agent == agent,
+                AgentArtifact.sequence == sequence,
+                AgentArtifact.is_deleted.is_(False),
+            )
+            .first()
+        )
+
+    @staticmethod
+    def add_agent_artifact(db: Session, artifact: AgentArtifact) -> AgentArtifact:
+        db.add(artifact)
+        db.flush()
+        return artifact
+
+    @staticmethod
+    def list_agent_artifacts(
+        db: Session, *, run_id: int, owner_id: int
+    ) -> list[AgentArtifact] | None:
+        if PipelineRepository.get_owned_run(db, run_id, owner_id) is None:
+            return None
+        return (
+            db.query(AgentArtifact)
+            .filter(
+                AgentArtifact.run_id == run_id,
+                AgentArtifact.is_deleted.is_(False),
+            )
+            .order_by(AgentArtifact.created_at, AgentArtifact.id)
+            .all()
+        )
+
+    @staticmethod
+    def source_links_for_document(
+        db: Session,
+        *,
+        course_id: int,
+        graph_id: int,
+        document_ids: list[int],
+    ) -> list[CourseSourceLink]:
+        if not document_ids:
+            return []
+        return (
+            db.query(CourseSourceLink)
+            .filter(
+                CourseSourceLink.course_id == course_id,
+                CourseSourceLink.graph_id == graph_id,
+                CourseSourceLink.document_id.in_(document_ids),
+                CourseSourceLink.is_deleted.is_(False),
+            )
+            .order_by(CourseSourceLink.node_id, CourseSourceLink.ref_id)
+            .all()
+        )
+
+    @staticmethod
+    def add_source_links(
+        db: Session, links: list[CourseSourceLink]
+    ) -> None:
+        db.add_all(links)
+
+    @staticmethod
+    def add_update_proposal(
+        db: Session, proposal: CourseUpdateProposal
+    ) -> CourseUpdateProposal:
+        db.add(proposal)
+        db.flush()
+        return proposal
+
+    @staticmethod
+    def list_update_proposals(
+        db: Session,
+        *,
+        course_id: int,
+        owner_id: int,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[CourseUpdateProposal], int]:
+        if PipelineRepository.get_owned_course(db, course_id, owner_id) is None:
+            return [], -1
+        query = db.query(CourseUpdateProposal).filter(
+            CourseUpdateProposal.course_id == course_id,
+            CourseUpdateProposal.is_deleted.is_(False),
+        )
+        return (
+            query.order_by(CourseUpdateProposal.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all(),
+            query.count(),
+        )

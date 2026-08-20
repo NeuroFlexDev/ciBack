@@ -3,10 +3,12 @@ from pydantic import BaseModel, Field, model_validator
 
 class ModuleCreateEditor(BaseModel):
     title: str = Field(min_length=1)
+    description: str = ""
 
 
 class ModuleUpdateEditor(BaseModel):
     title: str | None = Field(default=None, min_length=1)
+    description: str | None = None
     expected_revision: int = Field(gt=0)
 
 

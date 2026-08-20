@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.user import User
 from app.schemas.document import DocumentListItem, document_list_item
+from app.schemas.agent_artifact import AgentArtifactOut
+from app.schemas.course_update import CourseUpdateProposalList
 from app.schemas.generation_run import GenerationRunAccepted, GenerationRunCreate, GenerationRunOut, GenerationRunStatusOut
 from app.services.course_generation_settings_service import CourseGenerationSettingsService
 from app.services.job_queue import enqueue_generation
@@ -11,6 +13,7 @@ from app.repositories.pipeline import PipelineRepository
 from app.services.auth_service import get_current_user
 from app.services.file_storage import FileStorage, get_file_storage
 from app.services.pipeline_service import PipelineRunFailed, PipelineService
+from app.services.course_update_service import CourseUpdateService
 
 
 router = APIRouter()
@@ -116,6 +119,41 @@ def get_generation_run(
     current_user: User = Depends(get_current_user),
 ):
     return PipelineService.get_run_status(db, run_id, current_user.id)
+
+
+@router.get(
+    "/generation-runs/{run_id}/artifacts",
+    response_model=list[AgentArtifactOut],
+)
+def get_generation_run_artifacts(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return PipelineService.get_run_artifacts(db, run_id, current_user.id)
+
+
+@router.get(
+    "/courses/{course_id}/update-proposals",
+    response_model=CourseUpdateProposalList,
+)
+def list_course_update_proposals(
+    course_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    items, total = CourseUpdateService.list_proposals(
+        db,
+        course_id=course_id,
+        owner_id=current_user.id,
+        limit=limit,
+        offset=offset,
+    )
+    return CourseUpdateProposalList(
+        items=items, total=total, limit=limit, offset=offset
+    )
 
 
 @router.post(
