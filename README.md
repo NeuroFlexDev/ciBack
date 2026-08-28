@@ -131,6 +131,9 @@ Docker Compose читает локальный `.env` для подстанов�
 `JWT_SECRET` и остальных настроек. Значения из `.env.example` необходимо
 заменить перед запуском.
 
+Профиль развёртывания frontend и backend на `dev.platform.lernium.ru`
+находится в [`deploy/dev-platform`](deploy/dev-platform/README.md).
+
 ---
 
 ## 🧪 Тестирование

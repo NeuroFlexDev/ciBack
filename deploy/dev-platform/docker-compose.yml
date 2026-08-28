@@ -1,0 +1,173 @@
+name: lernium
+
+x-backend-environment: &backend-environment
+  ENV: prod
+  DEBUG: "false"
+  LOG_LEVEL: INFO
+  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}
+  JWT_SECRET: ${JWT_SECRET}
+  JWT_ALG: HS256
+  ACCESS_TOKEN_TTL_MINUTES: "15"
+  REFRESH_TOKEN_TTL_MINUTES: "1440"
+  CORS_ORIGINS: https://dev.platform.lernium.ru
+  UPLOAD_DIR: /data/uploads
+  MAX_DOCUMENT_SIZE_MB: "25"
+  DOCUMENT_CHUNK_CHARS: "2000"
+  DOCUMENT_CHUNK_OVERLAP_CHARS: "200"
+  GRAPH_CONTEXT_MAX_CHARS: "60000"
+  EMBEDDING_MODEL: all-MiniLM-L6-v2
+  REDIS_URL: redis://127.0.0.1:6379/0
+  GENERATION_QUEUE_NAME: generation
+  JOB_EAGER: "false"
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASS: ${SMTP_PASS:-}
+  HF_TOKEN: ${HF_TOKEN:-}
+  HF_MODEL: ${HF_MODEL:-}
+  HF_MODEL_CANDIDATES: ${HF_MODEL_CANDIDATES:-}
+  HF_API_URL: ${HF_API_URL:-}
+  GIGA_CLIENT_ID: ${GIGA_CLIENT_ID:-}
+  GIGA_CLIENT_SECRET: ${GIGA_CLIENT_SECRET:-}
+  GIGA_SCOPE: ${GIGA_SCOPE:-GIGACHAT_API_PERS}
+
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+  frontend:
+    image: lernium-frontend:latest
+    build:
+      context: ../../../ciFront
+      network: host
+      args:
+        VITE_API_BASE_URL: /api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./frontend-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    image: lernium-backend:latest
+    build:
+      context: ../..
+      network: host
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    command:
+      - uvicorn
+      - main:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    environment: *backend-environment
+    volumes:
+      - uploads_data:/data/uploads
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/healthz', timeout=5)
+      interval: 15s
+      timeout: 7s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: lernium-backend:latest
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    command:
+      - rq
+      - worker
+      - generation
+      - --url
+      - redis://127.0.0.1:6379/0
+    environment: *backend-environment
+    volumes:
+      - uploads_data:/data/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  migrate:
+    image: lernium-backend:latest
+    command:
+      - alembic
+      - upgrade
+      - head
+    environment: *backend-environment
+    restart: "no"
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  caddy_data:
+  caddy_config:
+  db_data:
+  redis_data:
+  uploads_data:

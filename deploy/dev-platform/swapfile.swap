@@ -1,0 +1,9 @@
+[Unit]
+Description=Swap file for Lernium container builds
+Before=swap.target
+
+[Swap]
+What=/swapfile
+
+[Install]
+WantedBy=swap.target
