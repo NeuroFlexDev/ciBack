@@ -6,6 +6,21 @@ dev.platform.lernium.ru {
         reverse_proxy 127.0.0.1:8000
     }
 
+    @landing path / /index.html
+    handle @landing {
+        root * /srv/landing
+        rewrite * /index.html
+        header Cache-Control "no-cache, no-store, must-revalidate"
+        file_server
+    }
+
+    @landingAssets path /styles.css /script.js /assets/fonts/* /assets/icons/* /assets/hero-* /assets/cta-*
+    handle @landingAssets {
+        root * /srv/landing
+        header Cache-Control "public, max-age=300"
+        file_server
+    }
+
     handle {
         reverse_proxy 127.0.0.1:8080
     }

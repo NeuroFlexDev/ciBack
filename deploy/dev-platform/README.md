@@ -8,11 +8,15 @@ It runs Caddy, the React frontend, FastAPI, an RQ worker, PostgreSQL and Redis.
 ```text
 /opt/lernium/
 ├── ciBack/
-└── ciFront/
+├── ciFront/
+└── landing/
 ```
 
 The compose file lives in `ciBack/deploy/dev-platform` and uses the sibling
-frontend checkout as its build context.
+frontend checkout as its build context. The `landing` directory is deployed
+from the separate canonical landing project and is mounted read-only into
+Caddy. Caddy serves it only for `/` and its static files; application routes
+remain on `ciFront`.
 
 ## Prerequisites
 
