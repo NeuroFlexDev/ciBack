@@ -15,5 +15,5 @@ langchain-core
 PyJWT>=2.10,<3
 pydantic-settings
 alembic==1.17.2
-rq>=2.1,<3
+rq>=2.11.0,<3
 redis>=5,<7
