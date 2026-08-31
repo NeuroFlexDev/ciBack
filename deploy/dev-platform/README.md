@@ -44,11 +44,13 @@ remain backward-compatible with the previous application image.
 
 Each repository uses a `staging` environment with:
 
-- variables `STAGING_HOST` and `STAGING_USER`;
+- variables `STAGING_HOST`, `STAGING_USER`, `STAGING_BASTION_HOST`, and
+  `STAGING_BASTION_USER`;
 - secrets `STAGING_SSH_KEY` and `STAGING_KNOWN_HOSTS`.
 
 The workflow passes its short-lived `GITHUB_TOKEN` to the deploy command through
-stdin. No long-lived registry token is stored on the server.
+stdin. The SSH bastion key is restricted to forwarding only the staging SSH
+endpoint. No long-lived registry token is stored on either server.
 
 ## Manual checks
 
