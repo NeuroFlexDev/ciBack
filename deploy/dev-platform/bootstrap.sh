@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-deployment_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+deployment_dir="/opt/lernium/deploy"
+[[ ${EUID} -eq 0 ]] || { printf 'bootstrap.sh must run as root\n' >&2; exit 1; }
+
+install -d -m 0755 "${deployment_dir}"
+install -m 0644 "${source_dir}/docker-compose.yml" "${deployment_dir}/docker-compose.yml"
+install -m 0644 "${source_dir}/Caddyfile" "${deployment_dir}/Caddyfile"
+install -m 0644 "${source_dir}/frontend-nginx.conf" "${deployment_dir}/frontend-nginx.conf"
 cd "${deployment_dir}"
 umask 077
 
@@ -27,7 +34,14 @@ if [[ ! -f .env ]]; then
         'GIGA_SCOPE=GIGACHAT_API_PERS' > .env
 fi
 
-chmod 600 .env
+if [[ ! -f .images.env ]]; then
+    printf '%s\n' \
+        'BACKEND_IMAGE=ghcr.io/neuroflexdev/ciback:main' \
+        'FRONTEND_IMAGE=ghcr.io/neuroflexdev/cifront:main' \
+        'LANDING_IMAGE=ghcr.io/neuroflexdev/cilanding:main' > .images.env
+fi
+
+chmod 600 .env .images.env
 
 if [[ ! -e /swapfile ]]; then
     fallocate -l 4G /swapfile
@@ -35,10 +49,11 @@ if [[ ! -e /swapfile ]]; then
     mkswap /swapfile
 fi
 
-install -m 0644 swapfile.swap /etc/systemd/system/swapfile.swap
+install -m 0644 "${source_dir}/swapfile.swap" /etc/systemd/system/swapfile.swap
+install -m 0755 "${source_dir}/lernium-deploy" /usr/local/sbin/lernium-deploy
 systemctl daemon-reload
 systemctl enable --now swapfile.swap
 
-docker compose config --quiet
-COMPOSE_PROGRESS=plain docker compose build --pull
-docker compose up -d --remove-orphans
+docker compose --env-file .env --env-file .images.env config --quiet
+docker compose --env-file .env --env-file .images.env pull
+docker compose --env-file .env --env-file .images.env up -d --remove-orphans

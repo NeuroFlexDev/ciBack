@@ -1,63 +1,59 @@
 # dev.platform.lernium.ru deployment
 
-Production-like Docker Compose profile for the Lernium development platform.
-It runs Caddy, the React frontend, FastAPI, an RQ worker, PostgreSQL and Redis.
+Docker Compose profile for the Lernium staging platform. Application images
+are built by GitHub Actions and published to GHCR; the server never builds from
+a working tree.
 
-## Expected checkout layout
+## Services
 
-```text
-/opt/lernium/
-├── ciBack/
-├── ciFront/
-└── landing/
-```
+- `ciback` powers `backend`, `worker`, and one-shot `migrate` containers.
+- `cifront` serves the React application on `127.0.0.1:8080`.
+- `cilanding` serves the canonical landing page on `127.0.0.1:8081`.
+- Caddy terminates TLS and routes landing, application, and API requests.
+- PostgreSQL, Redis, uploads, and Caddy state live in named Docker volumes.
 
-The compose file lives in `ciBack/deploy/dev-platform` and uses the sibling
-frontend checkout as its build context. The `landing` directory is deployed
-from the separate canonical landing project and is mounted read-only into
-Caddy. Caddy serves it only for `/` and its static files; application routes
-remain on `ciFront`.
+## Server bootstrap
 
-## Prerequisites
-
-- Ubuntu server with Docker Engine and Docker Compose v2
-- DNS `A` record for `dev.platform.lernium.ru` pointing at the server
-- inbound TCP 80 and 443 allowed by the provider firewall
-- at least 4 GB RAM, or permission to create the included 4 GB swap file
-
-## First deployment
+The bootstrap script installs the runtime profile to `/opt/lernium/deploy`, so
+deployments do not depend on a mutable Git checkout. Authenticate Docker to
+GHCR, then run it from a checkout:
 
 ```bash
 cd /opt/lernium/ciBack/deploy/dev-platform
-chmod +x bootstrap.sh
+chmod +x bootstrap.sh lernium-deploy
 sudo ./bootstrap.sh
 ```
 
-The script creates `.env` with random PostgreSQL and JWT secrets when it is
-missing. Add the required AI provider and SMTP credentials directly on the
-server, then restart the application services:
+`bootstrap.sh` creates `.env` and `.images.env` when they do not exist. Add AI
+provider and SMTP credentials to `.env`; never commit either environment file.
 
-```bash
-docker compose up -d --force-recreate backend worker
+Install a dedicated, unprivileged SSH user for GitHub Actions. Grant that user
+only this command via sudo:
+
+```text
+deploy ALL=(root) NOPASSWD: /usr/local/sbin/lernium-deploy *
 ```
 
-Do not commit `.env`. The tracked `.env.example` contains placeholders only.
+The deploy script validates component names and immutable GHCR image references,
+serializes concurrent deployments with `flock`, snapshots PostgreSQL before a
+backend migration, runs migrations, checks service health, and restores the
+previous image when a service does not become healthy. Database migrations must
+remain backward-compatible with the previous application image.
 
-## Updating
+## GitHub environment
 
-Pull both repositories and rebuild from the deployment directory:
+Each repository uses a `staging` environment with:
+
+- variables `STAGING_HOST` and `STAGING_USER`;
+- secrets `STAGING_SSH_KEY` and `STAGING_KNOWN_HOSTS`.
+
+The workflow passes its short-lived `GITHUB_TOKEN` to the deploy command through
+stdin. No long-lived registry token is stored on the server.
+
+## Manual checks
 
 ```bash
-git -C /opt/lernium/ciBack pull --ff-only
-git -C /opt/lernium/ciFront pull --ff-only
-cd /opt/lernium/ciBack/deploy/dev-platform
-COMPOSE_PROGRESS=plain docker compose build --pull
-docker compose up -d --remove-orphans
-```
-
-Check the services and application health:
-
-```bash
-docker compose ps -a
+docker compose --env-file .env --env-file .images.env ps -a
 curl --fail https://dev.platform.lernium.ru/api/healthz
+curl --fail https://dev.platform.lernium.ru/
 ```

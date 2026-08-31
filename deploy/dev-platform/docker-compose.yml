@@ -38,7 +38,6 @@ services:
     network_mode: host
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../../../landing:/srv/landing:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -46,14 +45,11 @@ services:
         condition: service_healthy
       frontend:
         condition: service_started
+      landing:
+        condition: service_started
 
   frontend:
-    image: lernium-frontend:latest
-    build:
-      context: ../../../ciFront
-      network: host
-      args:
-        VITE_API_BASE_URL: /api
+    image: ${FRONTEND_IMAGE:-ghcr.io/neuroflexdev/cifront:main}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"
@@ -63,11 +59,14 @@ services:
       backend:
         condition: service_healthy
 
+  landing:
+    image: ${LANDING_IMAGE:-ghcr.io/neuroflexdev/cilanding:main}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+
   backend:
-    image: lernium-backend:latest
-    build:
-      context: ../..
-      network: host
+    image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
     restart: unless-stopped
     init: true
     network_mode: host
@@ -100,7 +99,7 @@ services:
         condition: service_healthy
 
   worker:
-    image: lernium-backend:latest
+    image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
     restart: unless-stopped
     init: true
     network_mode: host
@@ -120,7 +119,7 @@ services:
         condition: service_healthy
 
   migrate:
-    image: lernium-backend:latest
+    image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
     command:
       - alembic
       - upgrade

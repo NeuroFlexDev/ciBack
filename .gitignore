@@ -16,6 +16,7 @@ env/
 .env
 .env.*
 !.env.example
+.images.env
 *.pem
 *.key
 *.p12

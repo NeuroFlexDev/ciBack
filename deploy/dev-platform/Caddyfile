@@ -8,17 +8,15 @@ dev.platform.lernium.ru {
 
     @landing path / /index.html
     handle @landing {
-        root * /srv/landing
         rewrite * /index.html
         header Cache-Control "no-cache, no-store, must-revalidate"
-        file_server
+        reverse_proxy 127.0.0.1:8081
     }
 
     @landingAssets path /styles.css /script.js /assets/fonts/* /assets/icons/* /assets/hero-* /assets/cta-*
     handle @landingAssets {
-        root * /srv/landing
         header Cache-Control "public, max-age=300"
-        file_server
+        reverse_proxy 127.0.0.1:8081
     }
 
     handle {

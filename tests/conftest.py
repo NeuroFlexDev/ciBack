@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
 # are set before importing application modules because the engine is created at
 # import time.
 os.environ["ENV"] = "test"
+os.environ["DEBUG"] = "false"
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-only-jwt-secret-at-least-32-bytes"
 

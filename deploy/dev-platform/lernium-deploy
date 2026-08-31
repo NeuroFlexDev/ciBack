@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly deployment_dir="/opt/lernium/deploy"
+readonly images_file="${deployment_dir}/.images.env"
+readonly backup_dir="/opt/lernium/backups"
+
+fail() {
+    printf 'Deployment failed: %s\n' "$*" >&2
+    exit 1
+}
+
+[[ ${EUID} -eq 0 ]] || fail "must run as root"
+[[ $# -eq 3 ]] || fail "usage: lernium-deploy <backend|frontend|landing> <image> <ghcr-user>"
+
+component="$1"
+image="$2"
+ghcr_user="$3"
+
+case "${component}" in
+    backend)
+        image_variable="BACKEND_IMAGE"
+        expected_repository="ciback"
+        ;;
+    frontend)
+        image_variable="FRONTEND_IMAGE"
+        expected_repository="cifront"
+        ;;
+    landing)
+        image_variable="LANDING_IMAGE"
+        expected_repository="cilanding"
+        ;;
+    *)
+        fail "unknown component ${component}"
+        ;;
+esac
+
+[[ "${image}" =~ ^ghcr\.io/neuroflexdev/${expected_repository}:sha-[0-9a-f]{40}$ ]] || fail "invalid image reference"
+[[ "${ghcr_user}" =~ ^[A-Za-z0-9-]+$ ]] || fail "invalid GHCR user"
+[[ -d "${deployment_dir}" ]] || fail "deployment directory is missing"
+[[ -f "${deployment_dir}/.env" ]] || fail "deployment environment is missing"
+
+ghcr_token=""
+IFS= read -r ghcr_token || true
+[[ -n "${ghcr_token}" ]] || fail "GHCR token was not provided on stdin"
+
+install -d -m 0700 "${backup_dir}"
+touch "${images_file}"
+chmod 0600 "${images_file}"
+
+ensure_image_variable() {
+    local variable="$1"
+    local default_value="$2"
+    if ! grep -q "^${variable}=" "${images_file}"; then
+        printf '%s=%s\n' "${variable}" "${default_value}" >> "${images_file}"
+    fi
+}
+
+ensure_image_variable BACKEND_IMAGE lernium-backend:latest
+ensure_image_variable FRONTEND_IMAGE lernium-frontend:latest
+ensure_image_variable LANDING_IMAGE lernium-landing:latest
+
+previous_image="$(sed -n "s/^${image_variable}=//p" "${images_file}" | tail -n 1)"
+[[ -n "${previous_image}" ]] || fail "could not determine the current image"
+
+set_image() {
+    local variable="$1"
+    local value="$2"
+    local temporary_file
+    temporary_file="$(mktemp "${deployment_dir}/.images.env.XXXXXX")"
+    awk -F= -v key="${variable}" -v replacement="${value}" '
+        BEGIN { updated = 0 }
+        $1 == key { print key "=" replacement; updated = 1; next }
+        { print }
+        END { if (!updated) print key "=" replacement }
+    ' "${images_file}" > "${temporary_file}"
+    chmod 0600 "${temporary_file}"
+    mv -f "${temporary_file}" "${images_file}"
+}
+
+compose() {
+    docker compose \
+        --file "${deployment_dir}/docker-compose.yml" \
+        --project-directory "${deployment_dir}" \
+        --env-file "${deployment_dir}/.env" \
+        --env-file "${images_file}" \
+        "$@"
+}
+
+wait_for_url() {
+    local url="$1"
+    local attempts="${2:-40}"
+    local delay="${3:-3}"
+    local attempt
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if curl --fail --silent --show-error --max-time 5 "${url}" >/dev/null; then
+            return 0
+        fi
+        sleep "${delay}"
+    done
+    return 1
+}
+
+deploy_current_image() {
+    case "${component}" in
+        backend)
+            compose pull backend worker migrate
+            compose up -d db redis
+            compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+                > "${backup_dir}/database-$(date -u +%Y%m%dT%H%M%SZ).dump"
+            compose run --rm --no-deps migrate
+            compose up -d --no-deps --force-recreate backend worker
+            wait_for_url http://127.0.0.1:8000/api/healthz
+            ;;
+        frontend)
+            compose pull frontend
+            compose up -d --no-deps --force-recreate frontend
+            wait_for_url http://127.0.0.1:8080/
+            ;;
+        landing)
+            compose pull landing
+            compose up -d --no-deps --force-recreate landing
+            wait_for_url http://127.0.0.1:8081/
+            compose up -d --no-deps --force-recreate caddy
+            wait_for_url https://dev.platform.lernium.ru/
+            ;;
+    esac
+}
+
+rollback() {
+    printf 'Health check failed; rolling %s back to %s\n' "${component}" "${previous_image}" >&2
+    set_image "${image_variable}" "${previous_image}"
+    case "${component}" in
+        backend)
+            compose up -d --no-deps --force-recreate backend worker
+            ;;
+        frontend)
+            compose up -d --no-deps --force-recreate frontend
+            ;;
+        landing)
+            compose up -d --no-deps --force-recreate landing caddy
+            ;;
+    esac
+}
+
+exec 9>"/opt/lernium/.deploy.lock"
+flock -w 600 9 || fail "another deployment is still running"
+
+docker_config="$(mktemp -d /tmp/lernium-docker-config.XXXXXX)"
+cleanup() {
+    ghcr_token=""
+    rm -rf -- "${docker_config}"
+}
+trap cleanup EXIT
+export DOCKER_CONFIG="${docker_config}"
+printf '%s\n' "${ghcr_token}" | docker login ghcr.io --username "${ghcr_user}" --password-stdin >/dev/null
+ghcr_token=""
+
+set_image "${image_variable}" "${image}"
+if ! deploy_current_image; then
+    rollback
+    fail "${component} did not become healthy"
+fi
+
+printf 'Deployed %s as %s\n' "${component}" "${image}"
