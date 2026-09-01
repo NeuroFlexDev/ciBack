@@ -12,7 +12,7 @@ PyMuPDF
 faiss-cpu
 sentence-transformers
 langchain-core
-PyJWT>=2.10,<3
+PyJWT>=2.13.0,<3
 pydantic-settings
 alembic==1.17.2
 rq>=2.1,<3
