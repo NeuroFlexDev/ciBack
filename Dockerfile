@@ -17,7 +17,7 @@ ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir torch --index-url "${PYTORCH_INDEX_URL}" \
     && pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --upgrade --force-reinstall \
-        "wheel>=0.46.2" "jaraco.context>=6.1.0"
+        "setuptools==84.0.0" "wheel>=0.46.2" "jaraco.context>=6.1.0"
 
 # Скопируем весь код внутрь контейнера
 COPY . .
