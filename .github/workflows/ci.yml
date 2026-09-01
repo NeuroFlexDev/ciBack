@@ -156,12 +156,23 @@ jobs:
       - name: Pull immutable image
         run: docker pull "${IMAGE}"
 
-      - name: Scan image for critical vulnerabilities
+      - name: Write vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}
           format: sarif
           output: trivy-results.sarif
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Enforce vulnerability threshold
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          scanners: vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
@@ -176,6 +187,7 @@ jobs:
         if: always()
         run: |
           docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
             -v "${RUNNER_TEMP}:/out" \
             anchore/syft@sha256:c15fa8af4c25edd72c0daf026d095fe51adbcfc7ad5d79a66e93d88f249e5abb \
             "${IMAGE}" \
