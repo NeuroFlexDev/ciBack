@@ -23,6 +23,28 @@
 * **OpenAPI** (Swagger UI) с примерами запросов
 * Автоматизация: **CI/CD на GitHub Actions**, Docker Compose, staging-сервер с TLS
 
+### CI/CD и production promotion
+
+Workflow `.github/workflows/ci.yml` проверяет тесты и миграции на каждом PR,
+собирает и публикует образ с commit SHA, сканирует именно его на HIGH/CRITICAL
+уязвимости, сохраняет SPDX SBOM и после этого выкатывает staging. Деплой делает
+резервную копию PostgreSQL, применяет миграции, выполняет health-check и
+откатывает предыдущий образ при ошибке.
+
+Production выпускается вручную через `.github/workflows/promote.yml`: укажите
+SHA-тег успешного запуска `main` и HTTPS origin для проверки. В GitHub
+Environment `production` настройте required reviewers, переменные
+`PRODUCTION_HOST`, `PRODUCTION_USER` (опционально пару
+`PRODUCTION_BASTION_HOST`/`PRODUCTION_BASTION_USER`) и секреты
+`PRODUCTION_SSH_KEY`, `PRODUCTION_KNOWN_HOSTS`. На сервере должен быть
+установлен профиль `deploy/dev-platform` и ограниченное правило sudo на
+`/usr/local/sbin/lernium-deploy *`.
+Для staging в профиле используется `PUBLIC_HOST=dev.platform.lernium.ru`; для
+канонического landing production укажите в `.env` `PUBLIC_HOST=lernium.ru`.
+
+Секреты и пароли не хранятся в Git. Любые значения, ранее опубликованные в
+чатах или коммитах, нужно отозвать и заменить.
+
 ---
 
 ## 📦 Установка

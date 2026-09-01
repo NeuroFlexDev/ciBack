@@ -36,6 +36,8 @@ services:
     image: caddy:2.10-alpine
     restart: unless-stopped
     network_mode: host
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:-dev.platform.lernium.ru}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -44,7 +46,7 @@ services:
       backend:
         condition: service_healthy
       frontend:
-        condition: service_started
+        condition: service_healthy
       landing:
         condition: service_started
 
@@ -58,6 +60,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   landing:
     image: ${LANDING_IMAGE:-ghcr.io/neuroflexdev/cilanding:main}

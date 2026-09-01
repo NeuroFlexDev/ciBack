@@ -26,6 +26,8 @@ sudo ./bootstrap.sh
 
 `bootstrap.sh` creates `.env` and `.images.env` when they do not exist. Add AI
 provider and SMTP credentials to `.env`; never commit either environment file.
+Set `PUBLIC_HOST` to the canonical hostname served by this profile (the default
+is `dev.platform.lernium.ru`; production can use `lernium.ru`).
 
 Install a dedicated, unprivileged SSH user for GitHub Actions. Grant that user
 only this command via sudo:
@@ -36,9 +38,11 @@ deploy ALL=(root) NOPASSWD: /usr/local/sbin/lernium-deploy *
 
 The deploy script validates component names and immutable GHCR image references,
 serializes concurrent deployments with `flock`, snapshots PostgreSQL before a
-backend migration, runs migrations, checks service health, and restores the
-previous image when a service does not become healthy. Database migrations must
-remain backward-compatible with the previous application image.
+backend migration, runs migrations, checks both the local container and the
+public health URL, and restores the previous image when a service does not
+become healthy. Database migrations must remain backward-compatible with the
+previous application image. After changing this script, rerun `bootstrap.sh`
+on each target server so the installed sudo command is updated.
 
 ## GitHub environment
 

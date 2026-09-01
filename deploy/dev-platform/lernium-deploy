@@ -11,11 +11,12 @@ fail() {
 }
 
 [[ ${EUID} -eq 0 ]] || fail "must run as root"
-[[ $# -eq 3 ]] || fail "usage: lernium-deploy <backend|frontend|landing> <image> <ghcr-user>"
+[[ $# -eq 3 || $# -eq 4 ]] || fail "usage: lernium-deploy <backend|frontend|landing> <image> <ghcr-user> [health-url]"
 
 component="$1"
 image="$2"
 ghcr_user="$3"
+health_url="${4:-https://dev.platform.lernium.ru}"
 
 case "${component}" in
     backend)
@@ -37,6 +38,7 @@ esac
 
 [[ "${image}" =~ ^ghcr\.io/neuroflexdev/${expected_repository}:sha-[0-9a-f]{40}$ ]] || fail "invalid image reference"
 [[ "${ghcr_user}" =~ ^[A-Za-z0-9-]+$ ]] || fail "invalid GHCR user"
+[[ "${health_url}" =~ ^https://[A-Za-z0-9.-]+$ ]] || fail "invalid health URL"
 [[ -d "${deployment_dir}" ]] || fail "deployment directory is missing"
 [[ -f "${deployment_dir}/.env" ]] || fail "deployment environment is missing"
 
@@ -111,18 +113,20 @@ deploy_current_image() {
             compose run --rm --no-deps migrate
             compose up -d --no-deps --force-recreate backend worker
             wait_for_url http://127.0.0.1:8000/api/healthz
+            wait_for_url "${health_url}/api/healthz"
             ;;
         frontend)
             compose pull frontend
             compose up -d --no-deps --force-recreate frontend
-            wait_for_url http://127.0.0.1:8080/
+            wait_for_url http://127.0.0.1:8080/healthz
+            wait_for_url "${health_url}/auth"
             ;;
         landing)
             compose pull landing
             compose up -d --no-deps --force-recreate landing
-            wait_for_url http://127.0.0.1:8081/
+            wait_for_url http://127.0.0.1:8081/healthz
             compose up -d --no-deps --force-recreate caddy
-            wait_for_url https://dev.platform.lernium.ru/
+            wait_for_url "${health_url}/"
             ;;
     esac
 }

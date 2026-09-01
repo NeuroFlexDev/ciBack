@@ -1,0 +1,96 @@
+name: Promote backend image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag (sha-<40 hex characters>)"
+        required: true
+        type: string
+      health_url:
+        description: "Public HTTPS origin used for the post-deploy health check"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lernium-production-backend
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/neuroflexdev/ciback
+
+jobs:
+  deploy:
+    name: Deploy approved image to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: ${{ inputs.health_url }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Deploy immutable image
+        env:
+          DEPLOY_HOST: ${{ vars.PRODUCTION_HOST }}
+          DEPLOY_USER: ${{ vars.PRODUCTION_USER }}
+          BASTION_HOST: ${{ vars.PRODUCTION_BASTION_HOST }}
+          BASTION_USER: ${{ vars.PRODUCTION_BASTION_USER }}
+          DEPLOY_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PRODUCTION_KNOWN_HOSTS }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          HEALTH_URL: ${{ inputs.health_url }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          test -n "${DEPLOY_HOST}"
+          test -n "${DEPLOY_USER}"
+          test -n "${DEPLOY_KEY}"
+          test -n "${KNOWN_HOSTS}"
+          [[ "${DEPLOY_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "${IMAGE_TAG}" =~ ^sha-[0-9a-f]{40}$ ]]
+          [[ "${HEALTH_URL}" =~ ^https://[A-Za-z0-9.-]+$ ]]
+          [[ "${ACTOR}" =~ ^[A-Za-z0-9-]+$ ]]
+          if [[ -n "${BASTION_HOST}" || -n "${BASTION_USER}" ]]; then
+            test -n "${BASTION_HOST}"
+            test -n "${BASTION_USER}"
+            [[ "${BASTION_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
+            [[ "${BASTION_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          fi
+
+          install -d -m 0700 "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_KEY}" > "${HOME}/.ssh/id_ed25519"
+          printf '%s\n' "${KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 0600 "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/known_hosts"
+          printf -v REMOTE_COMMAND 'sudo /usr/local/sbin/lernium-deploy backend %q %q %q' \
+            "${IMAGE}" "${ACTOR}" "${HEALTH_URL}"
+
+          if [[ -n "${BASTION_HOST}" ]]; then
+            printf '%s\n' "${GHCR_TOKEN}" | ssh \
+              -o BatchMode=yes \
+              -o ConnectTimeout=15 \
+              -o IdentitiesOnly=yes \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=4 \
+              -o StrictHostKeyChecking=yes \
+              -o "ProxyCommand=ssh -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -i ${HOME}/.ssh/id_ed25519 -W %h:%p ${BASTION_USER}@${BASTION_HOST}" \
+              -i "${HOME}/.ssh/id_ed25519" \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" "${REMOTE_COMMAND}"
+          else
+            printf '%s\n' "${GHCR_TOKEN}" | ssh \
+              -o BatchMode=yes \
+              -o ConnectTimeout=15 \
+              -o IdentitiesOnly=yes \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=4 \
+              -o StrictHostKeyChecking=yes \
+              -i "${HOME}/.ssh/id_ed25519" \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" "${REMOTE_COMMAND}"
+          fi

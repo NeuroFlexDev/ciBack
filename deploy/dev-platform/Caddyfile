@@ -1,4 +1,4 @@
-dev.platform.lernium.ru {
+{$PUBLIC_HOST:dev.platform.lernium.ru} {
     encode zstd gzip
 
     @backend path /api/* /docs* /openapi.json

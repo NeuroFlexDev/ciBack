@@ -21,6 +21,7 @@ if [[ ! -f .env ]]; then
         "POSTGRES_PASSWORD=${postgres_password}" \
         'POSTGRES_DB=cidb' \
         "JWT_SECRET=${jwt_secret}" \
+        'PUBLIC_HOST=dev.platform.lernium.ru' \
         'SMTP_HOST=' \
         'SMTP_PORT=587' \
         'SMTP_USER=' \

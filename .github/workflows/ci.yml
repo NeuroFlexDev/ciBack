@@ -58,6 +58,25 @@ jobs:
       - name: Compile application
         run: python -m compileall -q app main.py
 
+      - name: Validate deployment scripts
+        run: bash -n deploy/dev-platform/bootstrap.sh deploy/dev-platform/lernium-deploy
+
+      - name: Validate Caddy configuration
+        run: |
+          docker run --rm \
+            --env PUBLIC_HOST=dev.platform.lernium.ru \
+            --volume "${PWD}/deploy/dev-platform/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine \
+            caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Validate deployment compose file
+        run: |
+          docker compose \
+            --file deploy/dev-platform/docker-compose.yml \
+            --project-directory deploy/dev-platform \
+            --env-file deploy/dev-platform/.env.example \
+            config --quiet
+
       - name: Run tests
         run: python -m pytest -q
 
@@ -79,6 +98,7 @@ jobs:
       packages: write
     outputs:
       image: ghcr.io/neuroflexdev/ciback:sha-${{ github.sha }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,6 +123,7 @@ jobs:
             type=raw,value=main
 
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -112,10 +133,67 @@ jobs:
           cache-from: type=gha,scope=ciback
           cache-to: type=gha,mode=max,scope=ciback
 
+  image-security:
+    name: Scan image and publish SBOM
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    env:
+      IMAGE: ghcr.io/neuroflexdev/ciback@${{ needs.image.outputs.digest }}
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull immutable image
+        run: docker pull "${IMAGE}"
+
+      - name: Scan image for critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload vulnerability report
+        if: always()
+        uses: github/codeql-action/upload-sarif@b1722c1245f90604c2c348f9d1624af97ea8fc6e # v3.29.0
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Generate SPDX SBOM
+        if: always()
+        run: |
+          docker run --rm \
+            -v "${RUNNER_TEMP}:/out" \
+            anchore/syft@sha256:c15fa8af4c25edd72c0daf026d095fe51adbcfc7ad5d79a66e93d88f249e5abb \
+            "${IMAGE}" \
+            -o "spdx-json=/out/ciback-${GITHUB_SHA}.spdx.json"
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ciback-${{ github.sha }}-sbom
+          path: ${{ runner.temp }}/ciback-${{ github.sha }}.spdx.json
+          if-no-files-found: error
+          retention-days: 30
+
   deploy:
     name: Deploy to staging
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: image
+    needs: [image, image-security]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
