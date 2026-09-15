@@ -18,8 +18,7 @@ class GigaEngine(ChatEngine):
         **kwargs,
     ) -> dict[str, Any]:
         text = self.client.generate(  # метод generate внутри GigaChatClient
-            [{"role": m["role"], "content": m["content"]} for m in messages],
-            model=self.model,
+            "\n".join(f"{m['role']}: {m['content']}" for m in messages),
             max_tokens=max_tokens,
         )
         if expect_json:

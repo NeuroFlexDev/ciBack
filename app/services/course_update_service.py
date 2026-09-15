@@ -144,6 +144,7 @@ class CourseUpdateService:
             course_id=course.id,
             generate=generate,
         )
+        runtime.register_sources([*[item.model_dump(mode="json") for item in previous_sources.values()], *current_catalog])
         artifact = runtime.execute(
             agent="update",
             artifact="update_proposal",

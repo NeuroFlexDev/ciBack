@@ -12,12 +12,13 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
 # import time.
 os.environ["ENV"] = "test"
 os.environ["DEBUG"] = "false"
+os.environ["VSELLM_API_KEY"] = ""
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-only-jwt-secret-at-least-32-bytes"
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.database.db import Base, get_db
@@ -36,6 +37,12 @@ def tmpdir():
 def engine():
     # чистый sqlite в памяти
     eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    @event.listens_for(eng, "connect")
+    def explicit_transactions(connection, _):
+        connection.isolation_level = None
+    @event.listens_for(eng, "begin")
+    def begin(connection):
+        connection.exec_driver_sql("BEGIN")
     Base.metadata.create_all(eng)
     return eng
 
@@ -44,7 +51,7 @@ def engine():
 def db_session(engine) -> Generator:
     connection = engine.connect()
     trans = connection.begin()
-    SessionLocal = sessionmaker(bind=connection)
+    SessionLocal = sessionmaker(bind=connection, join_transaction_mode="create_savepoint")
     session = SessionLocal()
     try:
         yield session

@@ -1,4 +1,5 @@
 from .approval import Approval
+from .ai_state import AICall, AIResponseCache, ChatMemory, ChunkEmbedding, CanvasWorkspace
 from .agent_artifact import AgentArtifact
 from .assessment_rubric import AssessmentRubric
 from .chat import Chat, ChatMessage

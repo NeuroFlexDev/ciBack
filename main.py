@@ -11,6 +11,8 @@ from app.routes import versioning
 from app.services.auth_service import get_current_user
 
 app = FastAPI(title="Lernium API")
+from app.routes import ai_workspace
+app.include_router(ai_workspace.router, prefix="/api", tags=["AI Workspace"])
 
 cors_origins = os.getenv(
     "CORS_ORIGINS",

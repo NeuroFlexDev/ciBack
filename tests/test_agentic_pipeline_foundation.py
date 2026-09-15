@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+import pytest
 
 from app.models.agent_artifact import AgentArtifact
 from app.models.document import Document, DocumentChunk
@@ -130,8 +131,9 @@ def test_source_catalog_is_round_robin_and_graph_refs_are_durable(
     assert len(links[0]["excerpt_hash"]) == 64
 
 
+@pytest.mark.parametrize("invented_knowledge", [False, True])
 def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
-    db_session, auth_user
+    db_session, auth_user, invented_knowledge
 ):
     course = make_course(db_session, owner_id=auth_user.id)
     run = GenerationRun(
@@ -402,6 +404,14 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
 
     def generate(template_name, **kwargs):
         calls.append(template_name)
+        if invented_knowledge and template_name == "competency_mapper_prompt.j2":
+            if calls.count(template_name) == 1:
+                import copy
+                invalid = copy.deepcopy(scripts[template_name])
+                invalid["source_knowledge_item_ids"] = ["kn:invented_fact"]
+                invalid["knowledge"][0]["source_knowledge_item_ids"] = ["kn:invented_fact"]
+                return invalid
+            assert "Unknown source_knowledge_item_ids" in kwargs["repair_feedback"]
         return scripts[template_name]
 
     runtime = AgentRuntime(
@@ -428,7 +438,10 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
         source_catalog=[source],
     )
 
-    assert calls == list(scripts)
+    expected_calls = list(scripts)
+    if invented_knowledge:
+        expected_calls.insert(2, "competency_mapper_prompt.j2")
+    assert calls == expected_calls
     assert [item[0] for item in checkpoints] == [
         "ingestion",
         "competency_mapping",

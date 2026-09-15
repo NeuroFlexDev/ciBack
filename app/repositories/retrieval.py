@@ -10,7 +10,7 @@ class RetrievalRepository:
     def get_owned_course(db: Session, course_id: int, owner_id: int) -> Course | None:
         return (
             db.query(Course)
-            .filter(Course.id == course_id, Course.owner_id == owner_id)
+            .filter(Course.id == course_id, Course.owner_id == owner_id, Course.is_deleted.is_(False))
             .first()
         )
 

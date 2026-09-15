@@ -741,7 +741,7 @@ class AssessmentRubric(AgenticContract):
         total_weight = sum(item.weight for item in self.criteria)
         if abs(total_weight - 1.0) > 0.001:
             raise ValueError(f"rubric {self.id} criterion weights must sum to 1.0")
-        maximum_score = sum(max(level.score for level in item.levels) for item in self.criteria)
+        maximum_score = sum(item.weight * max(level.score for level in item.levels) for item in self.criteria)
         if self.passing_score > maximum_score:
             raise ValueError(
                 f"rubric {self.id} passing_score exceeds maximum {maximum_score}"
@@ -874,7 +874,7 @@ class QAIssue(AgenticContract):
         "case",
         "rubric",
     ]
-    artifact_id: GenericLogicalId | None = None
+    artifact_id: GenericLogicalId | KnowledgeItemId | None = None
     message: str = Field(min_length=1, max_length=4000)
     evidence_source_ref_ids: list[SourceRefId] = Field(default_factory=list)
     suggested_fix: str = Field(min_length=1, max_length=4000)
@@ -884,7 +884,7 @@ class QAIssue(AgenticContract):
 class QAArtifact(AgenticContract):
     artifact_version: Literal["1.0"] = "1.0"
     source_refs: list[SourceRef] = Field(min_length=1)
-    checked_artifact_ids: list[GenericLogicalId] = Field(min_length=1)
+    checked_artifact_ids: list[GenericLogicalId | KnowledgeItemId] = Field(min_length=1)
     issues: list[QAIssue] = Field(default_factory=list)
     verdict: Literal["pass", "revise", "fail"]
     coverage_score: float = Field(ge=0, le=1)
@@ -919,6 +919,10 @@ class QAArtifact(AgenticContract):
             raise ValueError("revise verdict requires revision_required_for")
         if self.verdict == "pass" and self.revision_required_for:
             raise ValueError("pass verdict cannot require revisions")
+        from app.core.config import settings
+        if self.verdict == "pass" and min(self.coverage_score, self.grounding_score,
+                                           self.difficulty_score, self.assessment_quality_score) < settings.AI_QA_MIN_SCORE:
+            raise ValueError("pass requires every QA score to meet the configured minimum")
         return self
 
 

@@ -325,7 +325,7 @@ def load_modules(
     return {"modules": modules_payload}
 
 
-@router.post("/courses/{course_id}/save_modules", summary="Сохранение полной структуры курса")
+@router.post("/courses/{course_id}/save_modules", deprecated=True, summary="Сохранение полной структуры курса")
 def save_modules(
     course_id: int,
     payload: ModulesSaveRequest,
@@ -344,53 +344,4 @@ def save_modules(
     if not course:
         raise HTTPException(status_code=404, detail="Курс не найден")
 
-    CoursePublicationService.prepare_for_edit(course)
-
-    for module in list(course.modules):
-        db.delete(module)
-
-    db.flush()
-
-    for module_payload in payload.modules:
-        new_module = Module(title=module_payload.title, course_id=course_id)
-        db.add(new_module)
-        db.flush()
-
-        for lesson_payload in module_payload.lessons:
-            db.add(
-                Lesson(
-                    title=lesson_payload.lesson,
-                    description=lesson_payload.description,
-                    module_id=new_module.id,
-                )
-            )
-
-        for test_payload in module_payload.tests:
-            answers: list[str] = []
-            correct_answer = ""
-            description = test_payload.description
-            if "Варианты:" in description and "(Правильный:" in description:
-                parts = description.split("Варианты:", maxsplit=1)[1].split("(Правильный:", maxsplit=1)
-                answers = [answer.strip() for answer in parts[0].split(",") if answer.strip()]
-                correct_answer = parts[1].replace(")", "").strip()
-
-            db.add(
-                Test(
-                    module_id=new_module.id,
-                    question=test_payload.test,
-                    answers=json.dumps(answers, ensure_ascii=False),
-                    correct_answer=correct_answer,
-                )
-            )
-
-        for task_payload in module_payload.tasks:
-            db.add(
-                Task(
-                    module_id=new_module.id,
-                    name=task_payload.name,
-                    description=task_payload.description,
-                )
-            )
-
-    db.commit()
-    return {"message": "Модули успешно сохранены"}
+    raise HTTPException(status_code=410, detail="Bulk replacement is retired to protect lesson content. Use versioned module and lesson endpoints.")

@@ -162,8 +162,23 @@ def _extract_docx(content: bytes) -> list[ExtractedBlock]:
 
 def _pdf_blocks(document) -> list[_PdfBlock]:
     blocks: list[_PdfBlock] = []
+    ocr_pages = 0
     for page_number, page in enumerate(document, start=1):
         payload = page.get_text("dict", sort=True)
+        if not page.get_text("text").strip() and page.get_images():
+            from app.core.config import settings
+            if not settings.AI_OCR_ENABLED:
+                raise ValueError("Scanned PDF requires OCR; enable AI_OCR_ENABLED")
+            ocr_pages += 1
+            if ocr_pages > settings.AI_OCR_MAX_PAGES:
+                raise ValueError("Scanned PDF exceeds AI_OCR_MAX_PAGES; split the document")
+            # Local OCR avoids shipping whole documents to a vision model and
+            # preserves page provenance. Missing language packs fail explicitly.
+            try:
+                textpage = page.get_textpage_ocr(language="rus+eng", dpi=150, full=True)
+                payload = page.get_text("dict", textpage=textpage, sort=True)
+            except Exception as exc:
+                raise ValueError("OCR unavailable: install Tesseract with rus+eng language data") from exc
         page_height = float(page.rect.height)
         for raw_block in payload.get("blocks", []):
             if raw_block.get("type", 0) != 0:

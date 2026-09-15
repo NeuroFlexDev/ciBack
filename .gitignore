@@ -19,6 +19,8 @@ env/
 .images.env
 *.pem
 *.key
+creeds
+creeds.*
 *.p12
 *.pfx
 *.log

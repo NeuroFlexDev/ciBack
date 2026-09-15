@@ -7,7 +7,7 @@ from app.database.db import get_db
 from app.models.chat import Chat
 from app.models.user import User
 from app.repositories.chat import ChatRepository
-from app.schemas.chat import ChatCreate, ChatOut, MessageIn, MessageOut, ModelPatch
+from app.schemas.chat import ChatCreate, ChatRename, ChatOut, MessageIn, MessageOut, ModelPatch
 from app.services.auth_service import get_current_user
 from app.services.chat_service import chat_generate, convert_messages, list_available_models
 
@@ -82,6 +82,19 @@ def delete_chat_route(
         raise HTTPException(404, "Chat not found")
 
 
+@router.patch("/{chat_id}", response_model=ChatOut)
+def rename_chat_route(chat_id: int, payload: ChatRename, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        chat = ChatRepository._active_chat(db, chat_id, user.id)
+        if not payload.name.strip():
+            raise HTTPException(422, "Название чата не может быть пустым")
+        chat.title = payload.name.strip()
+        db.commit()
+        return _chat_out(chat)
+    except KeyError:
+        raise HTTPException(404, "Chat not found")
+
+
 @router.patch("/{chat_id}/model", response_model=dict)
 def patch_model(
     chat_id: int,
@@ -111,7 +124,7 @@ def send_route(
             chat_id=chat_id,
             user_id=user.id,
             text=msg.text,
-            engine_name=msg.engine or "lc_giga",
+            engine_name=msg.engine,
             model=msg.model,
             expect_json=False,
             db=db,
@@ -119,4 +132,6 @@ def send_route(
         messages = ChatRepository.get_history(db, chat_id, user.id)
     except KeyError:
         raise HTTPException(404, "Chat not found")
+    except ValueError:
+        raise HTTPException(422, "Сообщение или история превышают размер контекста AI. Сократите сообщение.") from None
     return convert_messages(messages)

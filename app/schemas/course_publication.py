@@ -13,7 +13,7 @@ class CoursePublishResponse(BaseModel):
 
 class CourseListItem(BaseModel):
     id: int
-    title: str
+    title: str | None
     description: str | None
     level: int
     language: int

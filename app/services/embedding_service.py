@@ -19,7 +19,7 @@ metadata = []
 def get_model():
     global model
     if model is not None:
-        return model
+        return model if model is not False else None
 
     try:
         from sentence_transformers import SentenceTransformer
@@ -35,8 +35,14 @@ def get_model():
 document_vector_store = FaissVectorStore(get_model)
 
 
-def get_vector_store() -> VectorStore:
-    return document_vector_store
+from fastapi import Depends
+from app.database.db import get_db
+from sqlalchemy.orm import Session
+
+
+def get_vector_store(db: Session = Depends(get_db)) -> VectorStore:
+    from app.ai.retrieval import PersistentVectorStore
+    return PersistentVectorStore(db)
 
 def embed_and_add(lesson_id: int, obj_type: str, text: str):
     active_model = get_model()

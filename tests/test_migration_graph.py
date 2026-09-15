@@ -36,6 +36,7 @@ BASE_TABLES = {
     "users",
 }
 EXPECTED_TABLES = BASE_TABLES | {
+    "ai_calls", "ai_response_cache", "chat_memory", "chunk_embeddings", "canvas_workspaces",
     "agent_artifacts",
     "course_source_links",
     "course_update_proposals",
@@ -131,7 +132,7 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         text=True,
         env=env,
     )
-    assert set(json.loads(result.stdout)) == EXPECTED_TABLES | {"alembic_version"}
+    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - {"ai_calls", "ai_response_cache", "chat_memory", "chunk_embeddings", "canvas_workspaces"}) | {"alembic_version"}
 
     for arguments in (("upgrade", "head"), ("check",), ("downgrade", "base")):
         subprocess.run(

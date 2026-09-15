@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.ai.version import runtime_signature
+
 import hashlib
 import json
 import logging
@@ -56,8 +58,8 @@ def _elapsed_ms(started: float) -> int:
 
 
 def _safe_error(exc: Exception) -> str:
-    message = str(exc).strip() or exc.__class__.__name__
-    return message[:4000]
+    from app.ai.gateway import safe_error
+    return safe_error(exc)
 
 
 def _safe_document_error(exc: Exception) -> str:
@@ -188,7 +190,7 @@ class PipelineService:
             (
                 json.dumps(docs_snapshot, sort_keys=True)
                 + json.dumps(settings_snapshot, sort_keys=True)
-                + "agentic-pipeline-v1"
+                + "agentic-pipeline-v2:" + runtime_signature()
             ).encode()
         ).hexdigest()
         now = datetime.utcnow()
@@ -200,7 +202,7 @@ class PipelineService:
             current_stage="queued",
             progress_percent=0,
             queued_at=now,
-            prompt="agentic-pipeline-v1",
+            prompt="agentic-pipeline-v2:" + runtime_signature(),
             model=DEFAULT_ENGINE,
             input_docs=docs_snapshot,
             input_documents_snapshot=docs_snapshot,
@@ -454,9 +456,12 @@ class PipelineService:
                 }
                 for chunk_model in chunk_models
             ]
-            embedding_ids = replace_document_embeddings(
-                document.id, document.version, vector_chunks
-            )
+            from app.ai import gateway
+            if gateway.configured():
+                from app.ai.retrieval import persist_embeddings
+                embedding_ids = persist_embeddings(db, chunk_models)
+            else:
+                embedding_ids = replace_document_embeddings(document.id, document.version, vector_chunks)
             for chunk_model, embedding_id in zip(
                 chunk_models, embedding_ids, strict=True
             ):
@@ -584,7 +589,7 @@ class PipelineService:
             documents_fingerprint
             + "|"
             + json.dumps(settings_snapshot, ensure_ascii=False, sort_keys=True)
-            + "|agentic-pipeline-v1"
+            + "|agentic-pipeline-v2:" + runtime_signature()
         )
         fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
         if not force:
@@ -606,7 +611,7 @@ class PipelineService:
             course_id=course_id,
             run_type=GenerationRunType.GRAPH_GENERATION.value,
             status=GenerationRunStatus.QUEUED.value,
-            prompt="agentic-pipeline-v1",
+            prompt="agentic-pipeline-v2:" + runtime_signature(),
             model=DEFAULT_ENGINE,
             input_docs=input_docs,
             settings_snapshot=settings_snapshot,
@@ -623,9 +628,10 @@ class PipelineService:
         try:
             run.status = GenerationRunStatus.RUNNING.value
             run.started_at = datetime.utcnow()
-            source_catalog = build_source_catalog(
-                documents, max_chars=settings.GRAPH_CONTEXT_MAX_CHARS
-            )
+            source_chars = sum(len(str(chunk.text or "").strip()) for document in documents for chunk in document.chunks)
+            if source_chars > settings.AI_MAX_SOURCE_CHARS:
+                raise ValueError("Source corpus exceeds AI_MAX_SOURCE_CHARS; split it into courses")
+            source_catalog = build_source_catalog(documents, max_chars=settings.AI_MAX_SOURCE_CHARS)
             if not source_catalog:
                 raise ValueError("В документах нет доступных фрагментов для генерации")
             runtime = AgentRuntime(
@@ -721,7 +727,7 @@ class PipelineService:
                 "graph_version": graph.version,
                 "node_count": len(persisted_nodes),
                 "edge_count": len(persisted_edges),
-                "agentic_pipeline_version": "1.0",
+                "agentic_pipeline_version": "2.0-langgraph",
                 "legacy_fallback": build.legacy_fallback,
                 "qa": build.qa_summary,
                 "source_link_count": len(link_payloads),
@@ -744,6 +750,12 @@ class PipelineService:
                 failed_run.error_code = "generation_failed"
                 failed_run.error_message = "Не удалось сгенерировать курс"
                 failed_run.retryable = True
+                if isinstance(exc, HTTPException) and exc.status_code in {402, 413, 422}:
+                    failed_run.error_code = {402: "ai_budget_exhausted", 413: "ai_context_exceeded", 422: "ai_request_rejected"}[exc.status_code]
+                    failed_run.error_message = {402: "Исчерпан лимит AI-запуска. Уменьшите курс или измените бюджет в настройках сервера.",
+                        413: "Превышен размер контекста AI. Разделите материалы на несколько курсов.",
+                        422: "AI-сервис отклонил запрос. Измените материалы или параметры генерации."}[exc.status_code]
+                    failed_run.retryable = False
                 failed_run.finished_at = datetime.utcnow()
                 failed_run.latency_ms = _elapsed_ms(started)
             if failed_course is not None:

@@ -84,6 +84,7 @@ jobs:
         run: |
           python -m alembic upgrade head
           python -m alembic check
+          python scripts/check_ai_persistence.py
           python -m alembic downgrade -1
           python -m alembic upgrade head
 

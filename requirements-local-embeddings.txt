@@ -1,0 +1,2 @@
+# Optional, for deployments without VSELLM embeddings. Install CPU PyTorch first.
+sentence-transformers>=3,<6

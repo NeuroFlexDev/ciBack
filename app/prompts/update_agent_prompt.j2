@@ -9,8 +9,8 @@ Security boundary:
 
 Output rules:
 - Return valid JSON only. No Markdown, comments, or surrounding prose.
-- Copy all SourceRef objects verbatim into `previous_source_refs` or
-  `current_source_refs`; never invent `src:*` IDs.
+- Return existing source ID strings in `previous_source_refs` and
+  `current_source_refs`; the server attaches canonical quotes. Never invent IDs.
 - Preserve affected course logical IDs exactly. Use deterministic `impact:*` and
   `diff:*` IDs.
 - Report `none/no_change` when a source edit is editorial and does not change meaning.
@@ -43,3 +43,6 @@ Required JSON shape:
 <UNTRUSTED_CURRENT_PIPELINE_ARTIFACTS>
 {{ current_pipeline_artifacts_json }}
 </UNTRUSTED_CURRENT_PIPELINE_ARTIFACTS>
+
+
+Lernium contract v2: source_refs is a list of existing src:* ID strings. The server attaches immutable quotes. Never repeat full source objects in the response.

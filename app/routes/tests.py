@@ -40,6 +40,13 @@ def get_tests(module_id: int, db: Session = Depends(get_db), current_user: User 
     return [_out(x) for x in db.query(Test).filter(Test.module_id == module_id, Test.is_deleted.is_(False)).order_by(Test.position, Test.id)]
 
 
+@router.get("/courses/{course_id}/tests/")
+def get_final_tests(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    CourseEditorService._course(db, course_id, current_user.id)
+    return [_out(x) for x in db.query(Test).filter(Test.course_id == course_id, Test.assessment_scope == "final",
+                Test.is_deleted.is_(False)).order_by(Test.position, Test.id)]
+
+
 @router.put("/modules/{module_id}/tests/order")
 def reorder_tests(module_id: int, payload: OrderUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     CourseEditorService._module(db, module_id, current_user.id, True)

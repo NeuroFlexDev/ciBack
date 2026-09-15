@@ -1,9 +1,14 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class ChatCreate(BaseModel):
     name: str = "Новый чат"
     course_id: int | None = None
+
+
+class ChatRename(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
 
 
 class ChatOut(BaseModel):
@@ -23,8 +28,8 @@ class MessageOut(BaseModel):
 
 class MessageIn(BaseModel):
     chat_id: int | None = None
-    text: str
-    engine: str | None = "lc_giga"
+    text: str = Field(min_length=1, max_length=12000)
+    engine: Literal["vsellm", "lc_giga", "lc_hf", "raw_giga", "raw_hf"] | None = None
     model: str | None = None
 
 

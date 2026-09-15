@@ -23,15 +23,15 @@ class HFClientWrapper(LLMClient):
 
     def generate(self, prompt: str, max_tokens: int = 1024) -> str:
         return self.inner.text_generation(
-            prompt, max_new_tokens=max_tokens, timeout=DISCOVERY_TIMEOUT + 4
+            prompt, max_new_tokens=max_tokens
         )
 
 
 # -------------------- Helpers --------------------
 def _build_client(model: str, token: str, api_url: str | None) -> InferenceClient:
     if api_url:
-        return InferenceClient(api_url=api_url, token=token)
-    return InferenceClient(model=model, token=token)
+        return InferenceClient(base_url=api_url, token=token, timeout=30)
+    return InferenceClient(model=model, token=token, timeout=30)
 
 
 def _hf_list_text_gen_models(token: str, limit: int) -> list[str]:
@@ -62,7 +62,7 @@ def _hf_list_text_gen_models(token: str, limit: int) -> list[str]:
 def _probe_model(model: str, token: str, api_url_env: str | None) -> bool:
     try:
         client = _build_client(model, token, api_url_env)
-        client.text_generation(PING_PROMPT, max_new_tokens=4, timeout=DISCOVERY_TIMEOUT)
+        client.text_generation(PING_PROMPT, max_new_tokens=4)
         return True
     except Exception as e:
         logger.debug("Probe fail %s: %s", model, e)

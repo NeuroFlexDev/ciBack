@@ -51,6 +51,9 @@ class LangChainEngine:
         model: str | None = None,
         expect_json: bool = False,
     ) -> dict[str, Any]:
-        question = history[-1]["content"] if history else ""
-        text = self.chain.invoke({"question": question})
+        from langchain_core.prompt_values import ChatPromptValue
+        text = (self.llm | StrOutputParser()).invoke(ChatPromptValue(messages=[
+            SystemMessage(content="Ты помощник Лерниум. Учитывай всю историю диалога. Не выдумывай факты."),
+            *_lc_messages(history),
+        ]))
         return {"text": text}

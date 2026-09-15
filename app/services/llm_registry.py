@@ -25,6 +25,8 @@ def _wrap_client_as_runnable(client: LLMClient, max_tokens: int = 1024):
         if isinstance(inp, dict):
             # популярные ключи
             prompt = inp.get("question") or inp.get("input") or inp.get("prompt") or ""
+        elif hasattr(inp, "to_string"):
+            prompt = inp.to_string()
         else:
             prompt = str(inp)
         raw = client.generate(prompt, max_tokens=max_tokens)
@@ -59,4 +61,8 @@ def get_llm(model: str | None = None, engine: str | None = None):
 
 def list_models() -> list[str]:
     """Отдать список всех доступных моделей (HF + GigaChat)."""
+    from app.ai import gateway
+    from app.ai.models import model_policy
+    if gateway.configured():
+        return sorted({model_policy(role).model for role in ("ingestion", "chat", "critic_qa", "course_architect")})
     return get_available_hf_models() + get_available_giga_models()
