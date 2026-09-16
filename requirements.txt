@@ -11,7 +11,7 @@ python-docx
 PyMuPDF
 faiss-cpu
 langchain-core
-PyJWT>=2.10,<3
+PyJWT>=2.14.0,<3
 pydantic-settings
 alembic==1.17.2
 rq>=2.1,<3
