@@ -1,5 +1,5 @@
 # Используем легкий Python образ
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 # Указываем рабочую директорию в контейнере
 WORKDIR /app
