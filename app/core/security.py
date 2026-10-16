@@ -30,32 +30,43 @@ def hash_password(password: str) -> str:
         "sha256",
         password.encode("utf-8"),
         salt.encode("utf-8"),
-        120000,
+        600000,
     ).hex()
-    return f"{salt}${password_hash}"
+    return f"pbkdf2_sha256$600000${salt}${password_hash}"
 
 
 def verify_password(password: str, encoded_password: str) -> bool:
     try:
-        salt, expected_hash = encoded_password.split("$", maxsplit=1)
-    except (AttributeError, ValueError):
+        parts = encoded_password.split("$")
+        if len(parts) == 2:
+            salt, expected_hash = parts
+            iterations = 120000
+        else:
+            algorithm, work, salt, expected_hash = parts
+            if algorithm != "pbkdf2_sha256":
+                return False
+            iterations = int(work)
+            if not 100000 <= iterations <= 2000000:
+                return False
+    except (AttributeError, ValueError, TypeError):
         return False
 
     password_hash = hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),
         salt.encode("utf-8"),
-        120000,
+        iterations,
     ).hex()
     return hmac.compare_digest(password_hash, expected_hash)
 
 
-def create_access_token(user_id: int) -> str:
+def create_access_token(user_id: int, version: int = 0) -> str:
     issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + timedelta(minutes=settings.ACCESS_TOKEN_TTL_MINUTES)
     payload = {
         "sub": str(user_id),
         "type": "access",
+        "ver": version,
         "iat": issued_at,
         "exp": expires_at,
     }

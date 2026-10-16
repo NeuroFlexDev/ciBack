@@ -11,6 +11,10 @@ from app.routes import versioning
 from app.services.auth_service import get_current_user
 
 app = FastAPI(title="Lernium API")
+from app.core.http_security import SecurityMiddleware
+from app.routes import account
+app.add_middleware(SecurityMiddleware)
+app.include_router(account.router, prefix="/api", tags=["Account"])
 from app.routes import ai_workspace
 app.include_router(ai_workspace.router, prefix="/api", tags=["AI Workspace"])
 

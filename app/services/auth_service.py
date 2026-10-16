@@ -13,6 +13,7 @@ from app.core.security import (
 from app.database.db import get_db
 from app.models.user import User
 from app.repositories.user import UserRepository
+from app.core.config import settings
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -29,6 +30,8 @@ def _credentials_exception(detail: str = "Не удалось проверить
 class AuthService:
     @staticmethod
     def register(db: Session, email: str, password: str) -> tuple[User, str]:
+        if not settings.REGISTRATION_ENABLED:
+            raise HTTPException(403, "Регистрация закрыта. Обратитесь к администратору.")
         normalized_email = normalize_email(email)
         if UserRepository.get_by_email(db, normalized_email):
             raise HTTPException(
@@ -46,9 +49,12 @@ class AuthService:
     @staticmethod
     def authenticate(db: Session, email: str, password: str) -> tuple[User, str]:
         user = UserRepository.get_by_email(db, normalize_email(email))
-        if not user or not verify_password(password, user.password_hash):
+        if not user or not user.is_active or not verify_password(password, user.password_hash):
             raise _credentials_exception("Неверный email или пароль")
-        return user, create_access_token(user.id)
+        if not user.password_hash.startswith("pbkdf2_sha256$600000$"):
+            user.password_hash = hash_password(password)
+            db.flush()
+        return user, create_access_token(user.id, user.auth_version)
 
     @staticmethod
     def get_user_from_token(db: Session, token: str) -> User:
@@ -59,8 +65,10 @@ class AuthService:
             raise _credentials_exception() from exc
 
         user = UserRepository.get_by_id(db, user_id)
-        if user is None:
+        if user is None or not user.is_active:
             raise _credentials_exception("Пользователь не найден")
+        if payload.get("ver", 0) != user.auth_version:
+            raise _credentials_exception("Сеанс завершён. Войдите снова.")
         return user
 
     @staticmethod
@@ -71,6 +79,7 @@ class AuthService:
                 detail="Неверный текущий пароль",
             )
         user.password_hash = hash_password(new_password)
+        user.auth_version += 1
         db.flush()
         return user
 

@@ -3,7 +3,8 @@ FROM python:3.11-slim
 
 # Указываем рабочую директорию в контейнере
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1

@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     JWT_ALG: Literal["HS256"] = "HS256"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_MINUTES: int = 1440
+    REGISTRATION_ENABLED: bool = True
+    PUBLIC_APP_URL: str = "http://localhost:5173"
+    AUTH_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=1, le=1000)
+    AUTH_RATE_LIMIT_ENABLED: bool = True
+    SMTP_FROM: str = ""
+    SMTP_STARTTLS: bool = True
 
     CORS_ORIGINS: str = "http://localhost"
     APP_HOST: str = "0.0.0.0"
