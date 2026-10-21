@@ -4,7 +4,7 @@
     # A demo must remain crawlable for crawlers to observe the noindex header.
     @nonProduction not host lernium.ru
     header @nonProduction X-Robots-Tag "noindex, nofollow, noarchive"
-    @privatePages path /auth /auth/* /admin /admin/* /invite /invite/* /dashboard /dashboard/* /account /account/* /forgot-password /reset-password /courses /courses/* /employees /analytics /express /templates /ai-helper
+    @privatePages path /auth /auth/* /admin /admin/* /invite /invite/* /dashboard /dashboard/* /account /account/* /forgot-password /reset-password /courses /courses/* /employees /analytics /express /templates /ai-helper /learning /learning/* /reviews /reviews/* /course-reviews /groups /groups/* /assignments /programs /programs/* /team-settings /learning-analytics /integrations /integrations/* /billing
     header @privatePages X-Robots-Tag "noindex, nofollow"
     @demoRobots {
         path /robots.txt

@@ -1,8 +1,10 @@
 from sqlalchemy import update
+import pytest
 from app.models.generation_run import GenerationRun
 from app.models.user import User
 from app.models.learning import OrganizationLearningSettings, LearningAssignment
 from app.services.generation_authorization import generation_access_active
+from app.services.generation_control import check_cancelled, GenerationCancelled
 from test_learning_runtime import world, publish, headers
 
 
@@ -45,9 +47,12 @@ def test_running_generation_uses_current_access_not_stale_worker_identity(client
     db_session.add(run)
     db_session.commit()
     assert generation_access_active(db_session,run.id)
+    check_cancelled(db_session,run.id)
     db_session.execute(update(User).where(User.id == author.id).values(is_active=False).execution_options(synchronize_session=False))
     assert author.is_active  # Worker still holds the stale in-memory object.
     assert not generation_access_active(db_session,run.id)
+    with pytest.raises(GenerationCancelled, match='Доступ автора отозван'):
+        check_cancelled(db_session,run.id)
     db_session.execute(update(User).where(User.id == author.id).values(is_active=True,organization_role='member').execution_options(synchronize_session=False))
     assert not generation_access_active(db_session,run.id)
     db_session.execute(update(User).where(User.id == author.id).values(organization_role='author',organization_id=world['other_org'].id).execution_options(synchronize_session=False))
