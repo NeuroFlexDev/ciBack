@@ -2,6 +2,8 @@
 import logging
 import signal
 import time
+import tempfile
+from pathlib import Path
 from app.database.db import SessionLocal
 import app.models  # Register all models without creating tables.
 from app.services.outbox_service import process_one
@@ -19,6 +21,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     while running:
         try:
+            (Path(tempfile.gettempdir()) / "lernium-outbox-heartbeat").touch()
             with SessionLocal() as db:
                 processed = process_one(db)
             if not processed:

@@ -203,6 +203,12 @@ services:
     init: true
     network_mode: host
     command: ["python", "-m", "app.workers.outbox"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; import time; assert time.time()-Path('/tmp/lernium-outbox-heartbeat').stat().st_mtime<120"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment: *backend-environment
     depends_on:
       migrate:

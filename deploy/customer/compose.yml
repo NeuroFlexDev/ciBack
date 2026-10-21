@@ -51,6 +51,12 @@ services:
   worker:
     <<: *app
     command: ["rq", "worker", "generation", "--with-scheduler", "--url", "redis://redis:6379/0"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from redis import Redis; from rq import Worker; from datetime import datetime,timezone; ws=Worker.all(connection=Redis.from_url('redis://redis:6379/0')); assert any(w.last_heartbeat and (datetime.now(timezone.utc)-w.last_heartbeat).total_seconds()<180 for w in ws)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -58,6 +64,12 @@ services:
   outbox:
     <<: *app
     command: ["python", "-m", "app.workers.outbox"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; import time; assert time.time()-Path('/tmp/lernium-outbox-heartbeat').stat().st_mtime<120"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       migrate: {condition: service_completed_successfully}
 

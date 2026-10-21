@@ -13,7 +13,7 @@ def write_private(path,content):
 
 
 def configure(args):
-    if not re.fullmatch(r"(?=.{4,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])",args.domain) or "." not in args.domain:
+    if len(args.domain)>253 or "." not in args.domain or not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?",label) for label in args.domain.split(".")):
         raise ValueError("Use a DNS hostname, without scheme, port or path")
     images={key.upper()+"_IMAGE":getattr(args,key) for key in ("backend","frontend","postgres","redis","caddy")}
     if any(not re.fullmatch(r"[a-zA-Z0-9./_-]+@sha256:[a-f0-9]{64}",image) for image in images.values()):
