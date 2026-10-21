@@ -278,12 +278,14 @@ def assessment_for(db, assignment, key):
 
 
 def public_snapshot(db, assignment):
+    from app.services.public_assessment_text import public_assessment_text
     data = deepcopy(snapshot_for(db, assignment.course_version_id))
     for item in assessments(data):
         # Explicit whitelist avoids leaking future private metadata fields.
         safe = {k: v for k, v in item.items() if k in {'id', 'revision', 'question', 'description', 'question_type', 'answers', 'max_points', 'criteria', 'grading_mode'}}
         item.clear()
         item.update(safe)
+        item['description'] = public_assessment_text(item.get('description', ''))
         item['criteria'] = [{k: v for k, v in c.items() if k in {'id', 'title', 'description', 'max_points', 'levels'}} for c in item.get('criteria', []) if isinstance(c, dict)]
     return data
 
