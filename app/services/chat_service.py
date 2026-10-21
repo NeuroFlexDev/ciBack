@@ -28,6 +28,9 @@ def convert_messages(messages: list[ChatMessage]) -> list[MessageOut]:
             author="bot" if message.role == "assistant" else "user",
             text=message.content,
             is_deleted=message.is_deleted,
+            request_id=(message.message_metadata or {}).get("request_id"),
+            status=(message.message_metadata or {}).get("request_status"),
+            error_code=(message.message_metadata or {}).get("error_code"),
         )
         for message in messages
     ]
@@ -53,8 +56,12 @@ def chat_generate(
     *, chat_id: int, user_id: int, text: str, db: Session,
     engine_name: str | None = None, model: str | None = None,
     expect_json: bool = False, max_tokens: int = 1024,
+    existing_user_message: ChatMessage | None = None,
 ) -> dict[str, Any]:
     from app.ai import gateway
+    from app.services.feature_access import require_feature
+    from app.models.user import User
+    require_feature(db, db.get(User, user_id).organization_id, "assistant")
     chat = ChatRepository._active_chat(db, chat_id, user_id)
     engine_name = engine_name or chat.engine or "vsellm"
     model = model or chat.model
@@ -75,13 +82,18 @@ def chat_generate(
             citations = retrieved.citations
             system += "\nОтвечай по материалам курса. Ссылайся на фрагменты в формате [chunk:ID]. Если подтверждения нет, прямо скажи об этом.\nИсточники:\n" + json.dumps(retrieved.model_dump(mode="json"), ensure_ascii=False)
         try:
-            context = conversation_context(db, chat_id, user_id, text)
+            context = conversation_context(db, chat_id, user_id, text, exclude_message_id=existing_user_message.id if existing_user_message else None)
             from app.services.scoped_ai import tracked_completion
             response = tracked_completion(db, user_id, chat.course_id, "chat", [{"role": "system", "content": system}, *context], model=model)
         except AIUnavailable:
             response = source_answer(text, citations)
+        if chat.course_id is not None:
+            import re
+            cited_ids = {int(value) for value in re.findall(r"\[chunk:(\d+)\]", response["text"])}
+            if cited_ids - {item.chunk_id for item in citations}:
+                response = source_answer(text, citations)
         usage = _usage_from_response(response)
-        user_message = ChatMessage(chat_id=chat_id, role="user", content=text)
+        user_message = existing_user_message or ChatMessage(chat_id=chat_id, role="user", content=text)
         assistant_message = ChatMessage(chat_id=chat_id, role="assistant", content=response["text"],
             model=response["model"], message_metadata={"engine": "routed",
                 "provider": response.get("provider"), "degraded": response.get("degraded", False)}, **usage)
@@ -91,7 +103,9 @@ def chat_generate(
     history = ChatRepository.get_recent_history(
         db, chat_id, user_id, settings.CHAT_HISTORY_MESSAGES
     )
-    user_message = ChatRepository.add_message(db, chat_id, "user", text)
+    if existing_user_message:
+        history = [message for message in history if message.id != existing_user_message.id]
+    user_message = existing_user_message or ChatRepository.add_message(db, chat_id, "user", text)
     llm_history = [
         {"role": message.role, "content": message.content} for message in history
     ]

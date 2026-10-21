@@ -120,6 +120,8 @@ def local_canvas_response():
 
 @router.post("/courses/{course_id}/ai/actions", response_model=CanvasProposal)
 def canvas_action(course_id: int, payload: CanvasAction, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from app.services.feature_access import require_feature
+    require_feature(db, user.organization_id, "assistant")
     course = owned_course(db, course_id, user.id)
     raw_context = json.dumps(payload.selected_nodes, ensure_ascii=False)
     if len(raw_context) > 30000:

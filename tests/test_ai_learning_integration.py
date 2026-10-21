@@ -22,6 +22,14 @@ def test_coauthor_images_keep_tenant_after_owner_transfer(client, db_session, wo
     assert client.get(item['content_url'], headers=headers(world['author'])).status_code == 404
     assert used_disk_bytes(db_session, [], organization_id=world['org'].id) >= item['size_bytes']
     assert used_disk_bytes(db_session, [], organization_id=world['other_org'].id) == 0
+    config = settings_for(db_session, world['org'].id)
+    config.features = {**config.features, 'images': False, 'assistant': False}; db_session.commit()
+    assert client.get(item['content_url'], headers=headers(world['second'])).status_code == 200
+    assert client.get(f'/api/courses/{course.id}/images', headers=headers(world['second'])).status_code == 200
+    assert client.post(f'/api/courses/{course.id}/images', headers=headers(world['second']), files={'file': ('image.png', png(), 'image/png')}).status_code == 403
+    assert client.post(f'/api/courses/{course.id}/images/generate', headers=headers(world['second']), json={'prompt': 'Blocked generator', 'request_id': 'feature-block-123'}).status_code == 403
+    chat = client.post('/api/chat/', headers=headers(world['second']), json={'name': 'Disabled AI', 'course_id': course.id}).json()
+    assert client.post('/api/chat/send', headers=headers(world['second']), json={'chat_id': chat['id'], 'text': 'No AI execution', 'request_id': 'disabled-ai-123'}).status_code == 403
 
 
 def test_ai_grade_proposal_is_scoped_idempotent_and_never_final(client, db_session, world, monkeypatch):

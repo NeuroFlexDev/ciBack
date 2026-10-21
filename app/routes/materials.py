@@ -7,19 +7,21 @@ from app.core.config import settings
 from app.models.materials import CourseImage
 from app.services.auth_service import get_current_user, require_admin
 from app.services import image_service as images
+from app.services.feature_access import require_feature, feature_enabled
 
 router = APIRouter()
 
 
 @router.get("/materials/capabilities")
-def material_capabilities(user=Depends(get_current_user)):
+def material_capabilities(db: Session = Depends(get_db), user=Depends(get_current_user)):
     from app.ai import providers
     provider = providers.registry().get(settings.IMAGE_PROVIDER)
     return {"document_formats": ["pdf", "docx", "txt", "md"], "document_max_bytes": settings.max_document_bytes,
             "source_characters_limit": settings.AI_MAX_SOURCE_CHARS,
             "image_formats": ["png", "jpg", "jpeg"], "image_max_bytes": settings.IMAGE_MAX_BYTES,
             "image_max_pixels": settings.IMAGE_MAX_PIXELS,
-            "image_generation_available": bool(provider and providers.available(provider) and settings.IMAGE_MODEL),
+            "image_library_available": feature_enabled(db, user.organization_id, "images"),
+            "image_generation_available": bool(feature_enabled(db, user.organization_id, "images") and provider and providers.available(provider) and settings.IMAGE_MODEL),
             "image_monthly_limit": settings.IMAGE_MONTHLY_LIMIT,
             "course_modules_limit": settings.MAX_COURSE_MODULES, "course_lessons_limit": settings.MAX_COURSE_LESSONS,
             "lesson_content_characters_limit": settings.MAX_LESSON_CONTENT_CHARS,
@@ -47,6 +49,7 @@ def list_images(course_id: int, limit: int = Query(20, ge=1, le=100), offset: in
 
 @router.post("/courses/{course_id}/images", status_code=201)
 def upload_image(course_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    require_feature(db, user.organization_id, "images")
     images.course_access(db, user, course_id)
     content = file.file.read(settings.IMAGE_MAX_BYTES + 1)
     content, _, _, _ = images.normalize_image(content)
@@ -102,6 +105,7 @@ def image_content(image_id: int, db: Session = Depends(get_db), user=Depends(get
 
 @router.post("/images/{image_id}/review")
 def review_image(image_id: int, payload: ImageReview, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    require_feature(db, user.organization_id, "images")
     item = images.image_access(db, user, image_id, author_only=True)
     if item.status != "pending_review":
         raise HTTPException(409, "Результат уже проверен или ещё не готов. Для новой версии загрузите новую иллюстрацию.")

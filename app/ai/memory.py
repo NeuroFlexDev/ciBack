@@ -7,12 +7,14 @@ from app.models.chat import ChatMessage
 from app.repositories.chat import ChatRepository
 
 
-def conversation_context(db, chat_id: int, owner_id: int, latest: str) -> list[dict]:
+def conversation_context(db, chat_id: int, owner_id: int, latest: str, *, exclude_message_id: int | None = None) -> list[dict]:
     chat = ChatRepository._active_chat(db, chat_id, owner_id)
     memory = db.get(ChatMemory, chat_id)
     if memory is not None and memory.owner_id != owner_id:
         raise KeyError("chat_not_found")
     query = db.query(ChatMessage).filter(ChatMessage.chat_id == chat_id, ChatMessage.is_deleted.is_(False))
+    if exclude_message_id is not None:
+        query = query.filter(ChatMessage.id != exclude_message_id)
     if memory:
         query = query.filter(ChatMessage.id > memory.through_message_id)
     pending = query.order_by(ChatMessage.id).all()

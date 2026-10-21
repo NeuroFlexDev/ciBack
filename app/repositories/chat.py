@@ -32,27 +32,32 @@ class ChatRepository:
         return chat
 
     @staticmethod
-    def list_chats(db: Session, user_id: int) -> list[Chat]:
-        return db.query(Chat).filter(
+    def list_chats(db: Session, user_id: int, *, limit=50, offset=0, course_id=None) -> list[Chat]:
+        query = db.query(Chat).filter(
             Chat.owner_id == user_id,
             (Chat.course_id.is_(None) | related_course_access(Chat.course_id, user_id)),
             Chat.status == "active",
             Chat.is_deleted.is_(False),
-        ).order_by(Chat.created_at.desc(), Chat.id.desc()).all()
+        )
+        if course_id is not None:
+            query = query.filter(Chat.course_id == course_id)
+        return query.order_by(Chat.created_at.desc(), Chat.id.desc()).offset(offset).limit(limit).all()
 
     @staticmethod
     def get_history(
-        db: Session, chat_id: int, user_id: int, *, limit: int | None = None, offset: int = 0
+        db: Session, chat_id: int, user_id: int, *, limit: int | None = None, offset: int = 0, newest: bool = False
     ) -> list[ChatMessage]:
         ChatRepository._active_chat(db, chat_id, user_id)
         query = db.query(ChatMessage).filter(
             ChatMessage.chat_id == chat_id, ChatMessage.is_deleted.is_(False)
-        ).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+        )
+        query = query.order_by(ChatMessage.id.desc() if newest else ChatMessage.id.asc())
         if offset:
             query = query.offset(offset)
         if limit is not None:
             query = query.limit(limit)
-        return query.all()
+        result = query.all()
+        return list(reversed(result)) if newest else result
 
     @staticmethod
     def get_recent_history(

@@ -89,6 +89,8 @@ def image_access(db, user, image_id, *, author_only=False):
 
 
 def prepare_generation(db, user, course_id, prompt, request_id):
+    from app.services.feature_access import require_feature
+    require_feature(db, user.organization_id, "images")
     course_access(db, user, course_id)
     # A user row serializes quotas even for personal accounts; organization row
     # serializes across its members. Failed/uncertain provider calls consume quota.

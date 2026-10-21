@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 def _chat_out(chat: Chat) -> ChatOut:
     return ChatOut(
         id=chat.id,
+        course_id=chat.course_id,
         name=chat.title,
         model=chat.model,
         engine=chat.engine,
@@ -49,21 +50,25 @@ def create_chat_route(
 def get_chats_route(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    course_id: int | None = Query(default=None, gt=0),
 ):
-    return [_chat_out(chat) for chat in ChatRepository.list_chats(db, user.id)]
+    return [_chat_out(chat) for chat in ChatRepository.list_chats(db, user.id, limit=limit, offset=offset, course_id=course_id)]
 
 
-@router.get("/{chat_id}/messages", response_model=list[MessageOut])
+@router.get("/{chat_id}/messages", response_model=list[MessageOut], response_model_exclude_none=True)
 def get_msgs_route(
     chat_id: int,
     limit: int | None = Query(default=None, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    newest: bool = Query(default=False),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
         messages = ChatRepository.get_history(
-            db, chat_id, user.id, limit=limit, offset=offset
+            db, chat_id, user.id, limit=limit, offset=offset, newest=newest
         )
     except KeyError:
         raise HTTPException(404, "Chat not found")
@@ -110,12 +115,15 @@ def patch_model(
         raise HTTPException(404, "Chat not found")
 
 
-@router.post("/send", response_model=list[MessageOut])
+@router.post("/send", response_model=list[MessageOut], response_model_exclude_none=True)
 def send_route(
     msg: MessageIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if msg.request_id:
+        from app.services.chat_receipts import send_once
+        return send_once(db, user, msg)
     chat_id = msg.chat_id
     if not chat_id or chat_id <= 0:
         chat_id = ChatRepository.create_chat(db, user.id, "Новый чат").id
@@ -135,3 +143,12 @@ def send_route(
     except ValueError:
         raise HTTPException(422, "Сообщение или история превышают размер контекста AI. Сократите сообщение.") from None
     return convert_messages(messages)
+
+
+@router.get("/requests/{request_id}")
+def request_status(request_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.chat_receipts import find_receipt, receipt_out
+    receipt = find_receipt(db, user.id, request_id)
+    if receipt is None:
+        raise HTTPException(404, "Запрос ещё не получен сервером")
+    return receipt_out(db, user.id, receipt)
