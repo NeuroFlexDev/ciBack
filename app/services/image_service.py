@@ -99,11 +99,12 @@ def image_access(db, user, image_id, *, author_only=False):
 
 def prepare_generation(db, user, course_id, prompt, request_id):
     from app.services.feature_access import require_feature
+    from app.services.organization_access import lock_member
+    user = lock_member(db, user.id, expected_auth_version=user.auth_version)
     require_feature(db, user.organization_id, "images")
     course_access(db, user, course_id)
     # A user row serializes quotas even for personal accounts; organization row
     # serializes across its members. Failed/uncertain provider calls consume quota.
-    db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
     owner_ids = [user.id]
     if user.organization_id:
         from app.services.organization_access import lock_org, member_ids

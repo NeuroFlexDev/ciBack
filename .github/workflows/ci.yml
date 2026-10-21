@@ -40,6 +40,7 @@ jobs:
       ENV: test
       DEBUG: "false"
       DATABASE_URL: postgresql+psycopg2://ciuser:cipassword@localhost:5432/cidb
+      TEST_POSTGRES_DSN: postgresql+psycopg2://ciuser:cipassword@localhost:5432/cidb
       JWT_SECRET: test-only-jwt-secret-at-least-32-bytes
     steps:
       - name: Check out repository

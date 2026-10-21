@@ -88,11 +88,11 @@ def launch_generation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from sqlalchemy import select
+    from app.services.organization_access import lock_member
     from app.models.generation_run import GenerationRun
+    current_user = lock_member(db, current_user.id, expected_auth_version=current_user.auth_version)
     if PipelineRepository.get_owned_course(db, course_id, current_user.id) is None:
         raise HTTPException(404, "Курс не найден")
-    db.execute(select(User).where(User.id == current_user.id).with_for_update()).scalar_one()
     if payload.request_id:
         previous = db.query(GenerationRun).filter_by(owner_id=current_user.id, request_id=payload.request_id).first()
         if previous:

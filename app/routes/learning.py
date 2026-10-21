@@ -16,7 +16,7 @@ from app.models.user import User
 from app.models.learning import *
 from app.schemas.learning import *
 from app.services.auth_service import get_current_user, require_admin
-from app.services.organization_access import audit, lock_org
+from app.services.organization_access import audit, lock_org, lock_member, lock_members
 from app.services import learning_service as svc
 
 router = APIRouter()
@@ -295,8 +295,8 @@ def get_roles(user_id: int, db: Session = Depends(get_db), user: User = Depends(
 @router.post('/team/members/{user_id}/roles', status_code=201)
 def grant_role(user_id: int, payload: RoleInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.require_manager(db, user)
-    lock_org(db, org_id)
-    target = svc.member(db, org_id, user_id)
+    user, target = lock_team_members(db, user, org_id, user_id)
+    svc.require_manager(db, user)
     if target.id == user.id or target.is_admin:
         raise HTTPException(403, 'Нельзя изменять собственные права или права оператора')
     if payload.role == 'admin' and user.organization_role != 'owner':
@@ -327,7 +327,8 @@ def grant_role(user_id: int, payload: RoleInput, db: Session = Depends(get_db), 
 @router.delete('/team/members/{user_id}/roles/{grant_id}')
 def revoke_role(user_id: int, grant_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.require_manager(db, user)
-    target = svc.member(db, org_id, user_id, active=False)
+    user, target = lock_team_members(db, user, org_id, user_id, allow_inactive=True)
+    svc.require_manager(db, user)
     row = db.query(LearningRoleGrant).filter_by(id=grant_id, user_id=user_id, organization_id=org_id).first()
     if not row:
         raise HTTPException(404, 'Назначение роли не найдено')
@@ -340,13 +341,23 @@ def revoke_role(user_id: int, grant_id: int, db: Session = Depends(get_db), user
     return {'ok': True}
 
 
+def lock_team_members(db, user, org_id, target_id, *, allow_inactive=False):
+    # Check tenant before probing locks; recheck both refreshed identities after
+    # waiting. No transfer or role mutation may follow a member into another org.
+    svc.member(db, org_id, target_id, active=not allow_inactive)
+    members = lock_members(db, [user.id, target_id], extra_org_ids=(org_id,),
+        allow_inactive=allow_inactive, expected_auth_versions={user.id: user.auth_version})
+    if any(member.organization_id != org_id for member in members.values()):
+        raise HTTPException(409, 'Организация участника изменилась. Обновите данные.')
+    return members[user.id], members[target_id]
+
+
 @router.post('/team/ownership-transfers', status_code=201)
 def start_transfer(payload: OwnerTransferInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
-    lock_org(db, org_id)
+    user, target = lock_team_members(db, user, org_id, payload.user_id)
     if user.organization_role != 'owner' or payload.user_id == user.id:
         raise HTTPException(403, 'Передать владение может действующий владелец другому участнику')
-    target = svc.member(db, org_id, payload.user_id)
     if target.is_admin:
         raise HTTPException(403, 'Оператор не может стать владельцем организации через передачу')
     db.query(OrganizationOwnershipTransfer).filter_by(organization_id=org_id, from_user_id=user.id, accepted_at=None, cancelled_at=None).update({'cancelled_at': datetime.utcnow()})
@@ -368,11 +379,15 @@ def transfers(db: Session = Depends(get_db), user: User = Depends(get_current_us
 @router.post('/team/ownership-transfers/{transfer_id}/accept')
 def accept_transfer(transfer_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
-    lock_org(db, org_id)
     row = db.query(OrganizationOwnershipTransfer).filter_by(id=transfer_id, organization_id=org_id, to_user_id=user.id).first()
     if not row or row.accepted_at or row.cancelled_at or row.expires_at <= datetime.utcnow():
         raise HTTPException(410, 'Предложение передачи уже использовано, отменено или истекло')
-    old = svc.member(db, org_id, row.from_user_id)
+    user, old = lock_team_members(db, user, org_id, row.from_user_id)
+    db.refresh(row)
+    if row.accepted_at or row.cancelled_at or row.expires_at <= datetime.utcnow():
+        raise HTTPException(410, 'Предложение передачи уже использовано, отменено или истекло')
+    if user.is_admin:
+        raise HTTPException(403, 'Оператор не может стать владельцем организации через передачу')
     if old.organization_role != 'owner':
         raise HTTPException(409, 'Инициатор больше не владелец организации')
     user.organization_role, old.organization_role = 'owner', 'admin'
@@ -388,6 +403,9 @@ def accept_transfer(transfer_id: int, db: Session = Depends(get_db), user: User 
 @router.delete('/team/ownership-transfers/{transfer_id}')
 def cancel_transfer(transfer_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
+    user = lock_member(db, user.id, extra_org_ids=(org_id,), expected_auth_version=user.auth_version)
+    if user.organization_id != org_id:
+        raise HTTPException(409, 'Организация участника изменилась. Обновите данные.')
     row = db.query(OrganizationOwnershipTransfer).filter_by(id=transfer_id, organization_id=org_id).first()
     if not row or user.id not in {row.from_user_id, row.to_user_id}:
         raise HTTPException(404, 'Предложение не найдено')
