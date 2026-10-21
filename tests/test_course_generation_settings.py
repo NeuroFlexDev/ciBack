@@ -1,3 +1,4 @@
+from tests.generated_graph_fixture import concrete_graph
 import pytest
 
 from app.core.security import create_access_token, hash_password
@@ -202,15 +203,7 @@ def test_generation_uses_snapshot_and_settings_in_prompt(
 
     def fake_generate(*args, **kwargs):
         captured.update(kwargs)
-        return {
-            "nodes": [
-                {"id": "module-1", "label": "Module", "type": "module"},
-                {"id": "lesson-1", "label": "Lesson", "type": "lesson"},
-            ],
-            "edges": [
-                {"source": "module-1", "target": "lesson-1", "relation": "contains"}
-            ],
-        }
+        return concrete_graph()
 
     monkeypatch.setattr("app.services.pipeline_service.generate_from_prompt", fake_generate)
     run = PipelineService.generate_graph(
@@ -245,13 +238,7 @@ def test_settings_change_generation_fingerprint(
     db_session.commit()
     monkeypatch.setattr(
         "app.services.pipeline_service.generate_from_prompt",
-        lambda *args, **kwargs: {
-            "nodes": [
-                {"id": "module", "type": "module"},
-                {"id": "lesson", "type": "lesson"},
-            ],
-            "edges": [{"source": "module", "target": "lesson"}],
-        },
+        lambda *args, **kwargs: concrete_graph(),
     )
     first = PipelineService.generate_graph(
         db_session, course_id=course.id, owner_id=auth_user.id, force=False

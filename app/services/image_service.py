@@ -81,6 +81,10 @@ def image_access(db, user, image_id, *, author_only=False):
         raise HTTPException(404, "Иллюстрация не найдена")
     if db.query(Course).filter(Course.id == item.course_id, course_access_filter(user.id), Course.is_deleted.is_(False)).first():
         return item
+    from app.services.learning_service import can_scope
+    course = db.get(Course, item.course_id)
+    if course and not course.is_deleted and course.organization_id is not None and course.organization_id == user.organization_id and can_scope(db, user, "reviewer", course_id=course.id):
+        return item
     if not author_only and item.status == "approved":
         from app.services.learning_service import authorized_learning_image
         if authorized_learning_image(db, user, image_id):

@@ -67,3 +67,17 @@ def test_ai_grade_proposal_is_scoped_idempotent_and_never_final(client, db_sessi
     assert 'ai_proposal' not in json.dumps(results)
     config.features = {**config.features, 'ai_grading': False}; db_session.commit()
     assert client.post(path, headers=headers(world['reviewer']), json={**request, 'request_id': 'new-proposal-key'}).status_code == 403
+
+
+def test_independent_reviewer_can_inspect_and_approve_draft_image(client, db_session, world, monkeypatch, tmp_path):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, 'UPLOAD_DIR', tmp_path)
+    course, *_ = publish(client, db_session, world['author'])
+    uploaded = client.post(f'/api/courses/{course.id}/images', headers=headers(world['author']), files={'file': ('image.png', png(), 'image/png')}).json()
+    grant(client, world, 'reviewer', 'reviewer', 'course', course.id)
+    config = settings_for(db_session, world['org'].id)
+    config.rules = {**config.rules, 'require_independent_approval': True}; db_session.commit()
+    assert client.get(uploaded['content_url'], headers=headers(world['reviewer'])).status_code == 200
+    path = f'/api/images/{uploaded["id"]}/review'
+    assert client.post(path, headers=headers(world['author']), json={'decision': 'approved'}).status_code == 403
+    assert client.post(path, headers=headers(world['reviewer']), json={'decision': 'approved'}).status_code == 200

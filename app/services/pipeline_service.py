@@ -69,56 +69,20 @@ def _safe_document_error(exc: Exception) -> str:
     return "Не удалось обработать документ"
 
 
-def _unique_node_id(existing: set[str], base: str) -> str:
-    candidate = base
-    suffix = 2
-    while candidate in existing:
-        candidate = f"{base}-{suffix}"
-        suffix += 1
-    existing.add(candidate)
-    return candidate
-
-
-def _apply_assessment_settings(
-    nodes: list[dict], edges: list[dict], snapshot: dict
-) -> tuple[list[dict], list[dict]]:
-    existing = {str(node["id"]) for node in nodes}
-    modules = [node for node in nodes if node.get("type") == "module"]
-    language = snapshot["language"]
-
+def _apply_assessment_settings(nodes: list[dict], edges: list[dict], snapshot: dict) -> tuple[list[dict], list[dict]]:
+    # Legacy imports must contain real questions. Never manufacture empty tests
+    # merely to make a diagram match a requested test-count setting.
+    removed = {node["id"] for node in nodes if node.get("type") == "test" and not snapshot[
+        "final_test_enabled" if node.get("assessment_scope") == "final" else "module_tests_enabled"]}
+    nodes = [node for node in nodes if node["id"] not in removed]
+    edges = [edge for edge in edges if edge["source"] not in removed and edge["target"] not in removed]
+    tests = {node["id"]: node for node in nodes if node.get("type") == "test"}
     if snapshot["module_tests_enabled"]:
-        for index, module in enumerate(modules, start=1):
-            test_id = _unique_node_id(existing, f"module-test-{module['id']}")
-            nodes.append(
-                {
-                    "id": test_id,
-                    "label": (
-                        f"Тест модуля {index}"
-                        if language == "ru"
-                        else f"Module {index} test"
-                    ),
-                    "type": "test",
-                    "assessment_scope": "module",
-                }
-            )
-            edges.append(
-                {"source": module["id"], "target": test_id, "relation": "contains"}
-            )
-
-    if snapshot["final_test_enabled"]:
-        final_id = _unique_node_id(existing, "final-test")
-        nodes.append(
-            {
-                "id": final_id,
-                "label": "Итоговый тест" if language == "ru" else "Final test",
-                "type": "test",
-                "assessment_scope": "final",
-            }
-        )
-        for module in modules:
-            edges.append(
-                {"source": module["id"], "target": final_id, "relation": "precedes"}
-            )
+        for module in (node for node in nodes if node.get("type") == "module"):
+            if not any(edge["source"] == module["id"] and edge["target"] in tests and tests[edge["target"]].get("assessment_scope") == "module" for edge in edges):
+                raise ValueError("generated module has no real assessment")
+    if snapshot["final_test_enabled"] and not any(node.get("assessment_scope") == "final" for node in tests.values()):
+        raise ValueError("generated course has no real final assessment")
     return nodes, edges
 
 

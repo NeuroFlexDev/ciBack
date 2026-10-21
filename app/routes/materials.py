@@ -107,6 +107,13 @@ def image_content(image_id: int, db: Session = Depends(get_db), user=Depends(get
 def review_image(image_id: int, payload: ImageReview, db: Session = Depends(get_db), user=Depends(get_current_user)):
     require_feature(db, user.organization_id, "images")
     item = images.image_access(db, user, image_id, author_only=True)
+    if user.organization_id and payload.decision == "approved":
+        from app.services.learning_service import settings_for, can_scope
+        from app.models.course import Course
+        course = db.get(Course, item.course_id)
+        if settings_for(db, user.organization_id).rules.get("require_independent_approval") and (
+            user.id in {item.owner_id, course.owner_id} or not can_scope(db, user, "reviewer", course_id=course.id)):
+            raise HTTPException(403, "Иллюстрацию должен утвердить независимый проверяющий курса")
     if item.status != "pending_review":
         raise HTTPException(409, "Результат уже проверен или ещё не готов. Для новой версии загрузите новую иллюстрацию.")
     item.status, item.review_comment, item.reviewed_by = payload.decision, payload.comment, user.id

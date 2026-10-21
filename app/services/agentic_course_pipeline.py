@@ -659,7 +659,10 @@ class AgenticCoursePipeline:
                     {
                         "id": question.id,
                         "question": question.prompt,
+                        "kind": question.kind,
                         "answers": [item.text for item in question.options],
+                        "correct_answers": [option_by_id[item] for item in question.correct_option_ids] if question.correct_option_ids else [question.expected_answer],
+                        "expected_answer": question.expected_answer,
                         "correct_answer": correct,
                         "explanation": question.explanation,
                         "objective_ids": question.objective_ids,
