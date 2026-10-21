@@ -23,6 +23,8 @@ def callback_url():return settings.PUBLIC_APP_URL.rstrip("/")+"/api/auth/oidc/ca
 
 
 def begin(db,provider,link_user_id=None):
+    from app.services.integration_access import ensure_integrations_enabled
+    ensure_integrations_enabled(db, provider.organization_id)
     raw_state,nonce,browser,verifier=(secrets.token_urlsafe(32) for _ in range(4))
     row=OIDCSession(state_hash=digest(raw_state),provider_id=provider.id,nonce_hash=digest(nonce),browser_hash=digest(browser),
         verifier_encrypted=seal(verifier),link_user_id=link_user_id,expires_at=datetime.utcnow()+timedelta(minutes=10))
@@ -54,6 +56,8 @@ def verify_id_token(encoded,provider,nonce_hash):
 
 
 def resolve_identity(db,provider,claims,link_user_id=None):
+    from app.services.integration_access import ensure_integrations_enabled
+    ensure_integrations_enabled(db, provider.organization_id)
     org=lock_org(db,provider.organization_id)
     if not org.is_active:raise HTTPException(403,"Доступ организации приостановлен")
     identity=db.query(ExternalIdentity).filter_by(provider_id=provider.id,subject=claims["sub"]).first()

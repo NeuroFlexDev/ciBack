@@ -17,6 +17,9 @@ def enqueue_event(db, organization_id, event_type, event_id, data):
     """Use an immutable domain event ID, within the same transaction as the domain mutation."""
     if event_type not in EVENT_TYPES:
         raise ValueError("Unsupported integration event")
+    from app.services.integration_access import integration_enabled
+    if not integration_enabled(db, organization_id):
+        return
     event = {"id": str(event_id), "type": event_type, "version": "1", "organization_id": organization_id,
              "occurred_at": datetime.now(timezone.utc).isoformat(), "data": data}
     for endpoint in db.query(WebhookEndpoint).filter_by(organization_id=organization_id, enabled=True):
@@ -52,6 +55,10 @@ def claim(db):
 def deliver(db, row):
     if row.expires_at and row.expires_at <= datetime.utcnow():
         return "expired"
+    if row.kind != "mail":
+        from app.services.integration_access import integration_enabled
+        if not integration_enabled(db, row.organization_id):
+            return "cancelled"
     payload = unseal(row.payload_encrypted)
     if row.kind == "mail":
         mail_service.send_account_mail(payload["recipient"], payload["subject"], payload["text"], row.id)

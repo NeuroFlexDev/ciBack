@@ -113,6 +113,8 @@ def exchange(payload:ExchangeInput,request:Request,db:Session=Depends(get_db)):
         raise HTTPException(400,"Сеанс входа недействителен. Повторите вход")
     user=db.get(User,row.authenticated_user_id)
     provider=db.get(OIDCProvider,row.provider_id)
+    from app.services.integration_access import ensure_integrations_enabled
+    ensure_integrations_enabled(db, provider.organization_id)
     if not user or not user.is_active or not provider.enabled or user.organization_id!=provider.organization_id:raise HTTPException(403,"Доступ отозван")
     ensure_organization_active(user)
     claimed=db.execute(update(OIDCSession).where(OIDCSession.state_hash==row.state_hash,OIDCSession.exchanged_at.is_(None)).values(exchanged_at=datetime.utcnow()))

@@ -13,9 +13,23 @@ from app.services.organization_access import audit
 SCOPES = {"courses:read", "members:read", "assignments:read", "assignments:write", "results:read"}
 
 
-def integration_owner(user=Depends(get_current_user)):
+def integration_enabled(db, organization_id):
+    from app.models.learning import OrganizationLearningSettings
+    row = db.get(OrganizationLearningSettings, organization_id)
+    return row is None or (row.features or {}).get("integrations", True) is not False
+
+
+def ensure_integrations_enabled(db, organization_id):
+    if not integration_enabled(db, organization_id):
+        raise HTTPException(403, "Интеграции отключены в конфигурации вашей организации")
+
+
+def integration_owner(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user.organization_id or user.organization_role != "owner":
         raise HTTPException(403, "Управление интеграциями доступно владельцу организации")
+    # Keep history, billing and revocation available when a delivery option is disabled.
+    if request.url.path.startswith("/api/integrations/") and request.method not in {"GET", "DELETE"}:
+        ensure_integrations_enabled(db, user.organization_id)
     return user
 
 
@@ -38,6 +52,7 @@ def require_scope(scope):
         org = db.get(Organization, key.organization_id)
         if not org or not org.is_active or scope not in key.scopes:
             raise HTTPException(403, "Ключ не разрешает это действие")
+        ensure_integrations_enabled(db, org.id)
         if scope.endswith(":write"):
             from app.services.billing_service import ensure_write_access
             ensure_write_access(db, key.organization_id)

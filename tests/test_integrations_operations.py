@@ -73,6 +73,25 @@ def test_expired_revoked_and_suspended_keys_fail_closed(client,db_session,owner,
     assert client.get('/api/v1/members',headers={'Authorization':'Bearer '+result['key']}).status_code==403
 
 
+def test_disabled_delivery_option_blocks_keys_and_federation_but_preserves_history_and_billing(client,db_session,owner,auth_headers):
+    from app.models.learning import OrganizationLearningSettings
+    result=client.post('/api/integrations/keys',headers=auth_headers,json=key_payload()).json()
+    db_session.add(OrganizationLearningSettings(organization_id=owner.organization_id,features={"integrations":False}))
+    db_session.commit()
+    assert client.get('/api/v1/members',headers={'Authorization':'Bearer '+result['key']}).status_code==403
+    assert client.post('/api/integrations/keys',headers=auth_headers,json=key_payload()).status_code==403
+    assert client.get('/api/integrations/keys',headers=auth_headers).status_code==200
+    assert client.get('/api/billing',headers=auth_headers).status_code==200
+    assert client.delete('/api/integrations/keys/'+str(result['id']),headers=auth_headers).status_code==200
+    from types import SimpleNamespace
+    provider=SimpleNamespace(organization_id=owner.organization_id)
+    for action in (lambda:oidc_service.begin(db_session,provider),lambda:lti_service.begin(db_session,provider,'learner')):
+        with pytest.raises(HTTPException) as exc:action()
+        assert exc.value.status_code==403
+    outbox_service.enqueue_event(db_session,owner.organization_id,'course.published','disabled-event',{})
+    assert not db_session.query(OutboundMessage).count()
+
+
 def test_mail_queue_survives_failure_retries_and_erases_token_after_delivery(db_session,monkeypatch):
     monkeypatch.setattr(mail_service,'configured',lambda:True)
     row=mail_service.queue_reset(db_session,'learner@example.org','https://example.org/reset#token=private-token','hash','en')

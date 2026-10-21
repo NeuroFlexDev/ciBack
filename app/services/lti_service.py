@@ -26,6 +26,8 @@ def launch_url(platform):return settings.PUBLIC_APP_URL.rstrip("/")+f"/api/lti/{
 
 
 def begin(db,platform,login_hint,message_hint=""):
+    from app.services.integration_access import ensure_integrations_enabled
+    ensure_integrations_enabled(db, platform.organization_id)
     state,nonce,browser=(secrets.token_urlsafe(32) for _ in range(3))
     db.add(LTISession(state_hash=digest(state),platform_id=platform.id,nonce_hash=digest(nonce),browser_hash=digest(browser),expires_at=datetime.utcnow()+timedelta(minutes=10)))
     db.commit()
@@ -51,6 +53,8 @@ def resolve_user(db,platform,claims):
 
 
 def complete(db,platform,raw_state,id_token,browser):
+    from app.services.integration_access import ensure_integrations_enabled
+    ensure_integrations_enabled(db, platform.organization_id)
     row=db.get(LTISession,digest(raw_state))
     now=datetime.utcnow()
     if not row or row.platform_id!=platform.id or row.consumed_at or row.expires_at<=now or not browser or not secrets.compare_digest(row.browser_hash,digest(browser)):

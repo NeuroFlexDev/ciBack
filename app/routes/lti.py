@@ -74,6 +74,17 @@ class ResourceInput(BaseModel):
     course_version_id:int=Field(gt=0)
 
 
+@router.get("/integrations/lti/{platform_id}/mappings")
+def mappings(platform_id:int,db:Session=Depends(get_db),user=Depends(integration_owner)):
+    from app.models.course_version import CourseVersion
+    platform=db.query(LTIPlatform).filter_by(id=platform_id,organization_id=user.organization_id).first()
+    if not platform:raise HTTPException(404,"LMS не найдена")
+    resources=db.query(LTIResource,CourseVersion.name).join(CourseVersion,CourseVersion.id==LTIResource.course_version_id).filter(LTIResource.platform_id==platform_id).all()
+    identities=db.query(LTIIdentity,User).join(User,User.id==LTIIdentity.user_id).filter(LTIIdentity.platform_id==platform_id,User.organization_id==user.organization_id).all()
+    return {"resources":[{"id":row.id,"resource_link_id":row.resource_link_id,"course_version_id":row.course_version_id,"title":title} for row,title in resources],
+        "identities":[{"id":row.id,"subject":row.subject,"user_id":member.id,"name":member.full_name or member.email} for row,member in identities]}
+
+
 @router.post("/integrations/lti/{platform_id}/resources",status_code=201)
 def set_resource(platform_id:int,payload:ResourceInput,db:Session=Depends(get_db),user=Depends(integration_owner)):
     platform=db.query(LTIPlatform).filter_by(id=platform_id,organization_id=user.organization_id).first()
@@ -146,6 +157,8 @@ def exchange(payload:ExchangeInput,request:Request,db:Session=Depends(get_db)):
     if not row or row.expires_at<=datetime.utcnow() or row.exchanged_at or row.exchange_code_hash!=digest(payload.code) or not browser or not secrets.compare_digest(row.browser_hash,digest(browser)):
         raise HTTPException(400,"Сеанс LMS недействителен. Откройте курс из LMS заново")
     platform=db.get(LTIPlatform,row.platform_id);user=db.get(User,row.authenticated_user_id)
+    from app.services.integration_access import ensure_integrations_enabled
+    ensure_integrations_enabled(db, platform.organization_id)
     if not platform.enabled or not user or not user.is_active or user.organization_id!=platform.organization_id:raise HTTPException(403,"Доступ отозван")
     ensure_organization_active(user)
     claimed=db.execute(update(LTISession).where(LTISession.state_hash==row.state_hash,LTISession.exchanged_at.is_(None)).values(exchanged_at=datetime.utcnow()))
