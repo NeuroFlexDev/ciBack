@@ -147,6 +147,7 @@ def execute_image_generation(image_id):
     db = SessionLocal()
     item = None
     claimed = False
+    request_started = False
     try:
         item = db.query(CourseImage).filter_by(id=image_id).with_for_update().first()
         if item is None or item.status != "queued":
@@ -155,6 +156,12 @@ def execute_image_generation(image_id):
         claimed = claim(db, f"image:{image_id}")
         if not claimed:
             return
+        from app.services.ai_access_boundary import principal_stamp, author_result_access
+        owner = db.get(User, item.owner_id)
+        if owner is None:
+            raise RuntimeError("image_owner_unavailable")
+        owner_id, course_id, stamp = owner.id, item.course_id, principal_stamp(owner)
+        author_result_access(db, owner_id, stamp, course_id, "images")
         provider = providers.registry().get(item.provider)
         if not provider or not providers.available(provider):
             raise RuntimeError("provider_unavailable")
@@ -162,8 +169,10 @@ def execute_image_generation(image_id):
         db.commit()  # At-most-once submission: a killed worker never blindly bills again.
         client = OpenAI(api_key=providers.credential(provider), base_url=str(provider.base_url),
                         timeout=provider.timeout_seconds, max_retries=0)
+        request_started = True
         result = client.images.generate(model=item.model, prompt=item.prompt, n=1, size="1024x1024",
                                         response_format="b64_json")
+        author_result_access(db, owner_id, stamp, course_id, "images")
         encoded = result.data[0].b64_json if result.data else None
         if not encoded or len(encoded) > settings.IMAGE_MAX_BYTES * 4 // 3 + 16:
             raise RuntimeError("invalid_image_response")
@@ -186,12 +195,12 @@ def execute_image_generation(image_id):
             item = db.get(CourseImage, image_id)
             item.status = "failed"
             item.size_bytes = 0
-            item.error_code = "image_generation_failed"
+            item.error_code = "image_access_revoked" if isinstance(exc, HTTPException) and exc.status_code in {403, 404} else "image_generation_failed"
             db.commit()
     finally:
         if claimed:
             from app.services.ai_resources import finish
-            finish(db, f"image:{image_id}", failed=db.get(CourseImage, image_id).status == "failed")
+            finish(db, f"image:{image_id}", unsent=not request_started, failed=db.get(CourseImage, image_id).status == "failed")
         db.close()
 
 

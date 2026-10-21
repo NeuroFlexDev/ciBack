@@ -143,7 +143,15 @@ def get_image(image_id: int, db: Session = Depends(get_db), user=Depends(get_cur
         db.commit()
         from app.services.ai_resources import finish
         finish(db, f"image:{item.id}", failed=True)
-    return images.image_out(item)
+    result = images.image_out(item)
+    try:
+        images.course_access(db, user, item.course_id, allow_reviewer=True)
+    except HTTPException:
+        # Assignment access permits viewing the approved illustration, never
+        # the teacher's generation prompt or private review discussion.
+        result = {key: value for key, value in result.items() if key in {
+            "id", "status", "mime_type", "size_bytes", "width", "height", "content_url"}}
+    return result
 
 
 @router.get("/images/{image_id}/content")

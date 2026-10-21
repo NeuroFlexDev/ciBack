@@ -28,6 +28,9 @@ def author_result_access(db, user_id, stamp, course_id, role):
     user = refresh_principal(db, user_id, stamp)
     if role in {"chat", "canvas", "memory"}:
         require_feature(db, user.organization_id, "assistant")
+    if role == "images":
+        require_feature(db, user.organization_id, "images")
+        require_feature(db, user.organization_id, "authoring")
     if course_id is not None and not db.query(Course.id).filter(Course.id == course_id,
             Course.is_deleted.is_(False), course_access_filter(user_id)).first():
         raise HTTPException(403, {"code": "ai_access_revoked", "message": "Доступ к курсу отозван во время запроса"})

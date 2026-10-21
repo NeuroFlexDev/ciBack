@@ -81,3 +81,63 @@ def test_reviewer_revoked_while_grading_cannot_receive_proposal(client, db_sessi
     assert response.grading_metadata['ai_proposal']['error_code'] == 'ai_access_revoked'
     assert 'criteria_scores' not in response.grading_metadata['ai_proposal']
     assert db_session.query(AIResourceUsage).one().status == 'completed'
+
+
+@pytest.mark.parametrize('when', ['before', 'during'])
+def test_queued_image_rechecks_access_and_only_releases_proven_unsent_cost(client, db_session, world, monkeypatch, tmp_path, when):
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from app.core.config import settings, AIProvider
+    from app.models.materials import CourseImage
+    from app.services.image_service import execute_image_generation
+    monkeypatch.setattr(settings, 'UPLOAD_DIR', tmp_path)
+    monkeypatch.setattr(settings, 'AI_PROVIDERS', [AIProvider(id='images', base_url='https://example.invalid/v1')])
+    monkeypatch.setattr(settings, 'IMAGE_PROVIDER', 'images')
+    monkeypatch.setattr(settings, 'IMAGE_MODEL', 'test-image')
+    monkeypatch.setattr(settings, 'IMAGE_PRICE_RUB', Decimal('2'))
+    monkeypatch.setattr('app.ai.providers.available', lambda _: True)
+    monkeypatch.setattr('app.ai.providers.credential', lambda _: 'test-only-no-network')
+    monkeypatch.setattr('app.services.image_service.enqueue_image', lambda _: None)
+    course, *_ = publish(client, db_session, world['author'], assessment=False, practice=False)
+    result = client.post(f'/api/courses/{course.id}/images/generate', headers=headers(world['author']), json={'request_id': 'revoked-image-123', 'prompt': 'Create a diagram'})
+    assert result.status_code == 202, result.text
+    item_id = result.json()['id']
+    def revoke():
+        world['author'].organization_role = 'member'
+        db_session.query(LearningRoleGrant).filter_by(user_id=world['author'].id).delete(synchronize_session=False)
+        db_session.commit()
+    calls = []
+    def generate(**kwargs):
+        calls.append(True)
+        revoke()
+        return SimpleNamespace(data=[SimpleNamespace(b64_json='not-decoded-after-revocation')])
+    if when == 'before': revoke()
+    monkeypatch.setattr('openai.OpenAI', lambda **kwargs: SimpleNamespace(images=SimpleNamespace(generate=generate)))
+    monkeypatch.setattr('app.database.db.SessionLocal', lambda: db_session)
+    monkeypatch.setattr(db_session, 'close', lambda: None)
+    execute_image_generation(item_id)
+    item = db_session.get(CourseImage, item_id)
+    usage = db_session.query(AIResourceUsage).filter_by(key=f'image:{item_id}').one()
+    assert item.status == 'failed' and item.error_code == 'image_access_revoked' and item.storage_key is None
+    assert calls == ([] if when == 'before' else [True])
+    assert usage.status == ('unavailable' if when == 'before' else 'unknown')
+    assert usage.cost_rub == (0 if when == 'before' else Decimal('2'))
+
+
+def test_assigned_image_metadata_never_exposes_teacher_prompt_or_review(client, db_session, world, monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.models.materials import CourseImage
+    from tests.test_materials_release import png
+    monkeypatch.setattr(settings, 'UPLOAD_DIR', tmp_path)
+    course, _, lesson, *_ = publish(client, db_session, world['author'], assessment=False, practice=False)
+    uploaded = client.post(f'/api/courses/{course.id}/images', headers=headers(world['author']), files={'file': ('diagram.png', png(), 'image/png')}).json()
+    item = db_session.get(CourseImage, uploaded['id'])
+    item.prompt = 'PRIVATE answer key for the teacher'; db_session.commit()
+    assert client.post(f'/api/images/{item.id}/review', headers=headers(world['author']), json={'decision': 'approved', 'comment': 'PRIVATE reviewer note'}).status_code == 200
+    assert client.put(f'/api/lessons/{lesson.id}', headers=headers(world['author']), json={'content': f'![Diagram](/api/images/{item.id}/content)', 'expected_revision': lesson.revision}).status_code == 200
+    assert client.post(f'/api/courses/{course.id}/publish', headers=headers(world['author'])).status_code == 200
+    assign(client, world, course)
+    result = client.get(f'/api/images/{item.id}', headers=headers(world['learner']))
+    assert result.status_code == 200 and result.json()['content_url']
+    assert 'PRIVATE' not in result.text and 'prompt' not in result.json() and 'review_comment' not in result.json()
+    assert client.get(f'/api/images/{item.id}', headers=headers(world['author'])).json()['prompt'] == item.prompt
