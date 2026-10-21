@@ -3,6 +3,7 @@ from app.models.feedback import Feedback
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.schemas.feedback import FeedbackInput
 
 class FeedbackRepository:
@@ -15,7 +16,7 @@ class FeedbackRepository:
             .filter(
                 Lesson.id == feedback_input.lesson_id,
                 Lesson.is_deleted.is_(False),
-                Course.owner_id == user_id,
+                course_access_filter(user_id),
             )
             .first()
         )

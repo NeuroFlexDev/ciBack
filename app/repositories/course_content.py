@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.models.course import Course
+from app.services.course_access import course_access_filter, related_course_access
 from app.models.course_graph import CourseGraph
 from app.models.document import Document
 from app.models.lesson import Lesson
@@ -51,7 +52,7 @@ class CourseContentRepository:
     ) -> Course | None:
         query = db.query(Course).filter(
             Course.id == course_id,
-            Course.owner_id == owner_id,
+            course_access_filter(owner_id),
             Course.is_deleted.is_(False),
         )
         if for_update:
@@ -106,7 +107,7 @@ class CourseContentRepository:
             .filter(
                 Document.id == document_id,
                 Document.course_id == course_id,
-                Document.owner_id == owner_id,
+                related_course_access(Document.course_id, owner_id),
                 Document.is_current.is_(True),
                 Document.is_deleted.is_(False),
             )
@@ -128,7 +129,7 @@ class CourseContentRepository:
     ) -> tuple[list[Document], int]:
         query = db.query(Document).filter(
             Document.course_id == course_id,
-            Document.owner_id == owner_id,
+            related_course_access(Document.course_id, owner_id),
             Document.is_current.is_(True),
             Document.is_deleted.is_(False),
             Document.status != "archived",

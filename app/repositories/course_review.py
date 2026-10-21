@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.task import Task
@@ -19,7 +20,7 @@ class CourseReviewRepository:
             )
             .filter(
                 Course.id == course_id,
-                Course.owner_id == owner_id,
+                course_access_filter(owner_id),
                 Course.is_deleted.is_(False),
             )
             .first()
@@ -39,7 +40,7 @@ class CourseReviewRepository:
             .filter(
                 Module.id == module_id,
                 Module.is_deleted.is_(False),
-                Course.owner_id == owner_id,
+                course_access_filter(owner_id),
                 Course.is_deleted.is_(False),
             )
             .first()

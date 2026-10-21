@@ -29,6 +29,10 @@ from .test import Test
 from .test_version import TestVersion
 from .theory import Theory
 from .user import User
+from .learning import (OrganizationLearningSettings, LearningRoleGrant, LearningDepartment, LearningPerson,
+    LearningGroup, LearningGroupMember, PublishedLearningContent, AssessmentDefinition, LearningAssignment,
+    LearningGroupEnrollment, LearningResponse, LearningGradeEvent, LearningProgram,
+    LearningProgramEnrollment, OrganizationOwnershipTransfer, LearningPublicationApproval)
 
 __all__ = [
     "LegalReceipt",

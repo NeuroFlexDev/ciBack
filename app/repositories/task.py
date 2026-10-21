@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from app.models.module import Module
 from app.models.task import Task
 from typing import Optional, List
+from fastapi import HTTPException
 
 class TaskRepository:
     @staticmethod
@@ -28,8 +29,11 @@ class TaskRepository:
 
     @staticmethod
     def update_task(db: Session, task: Task, payload) -> Task:
+        if task.revision != payload.expected_revision:
+            raise HTTPException(409, {'message': 'Условия задания изменены другим редактором', 'current_revision': task.revision})
         task.name = payload.name
         task.description = payload.description
+        task.revision += 1
         db.commit()
         db.refresh(task)
         return task
@@ -37,5 +41,6 @@ class TaskRepository:
     @staticmethod
     def delete_task(db: Session, task: Task):
         task.is_deleted = True
+        task.revision += 1
         # db.delete(task)
         db.commit()

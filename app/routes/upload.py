@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.user import User
 from app.services.generation_service import generate_from_prompt
 from app.services.auth_service import get_current_user
@@ -26,7 +27,7 @@ def upload_and_update_description(
     # Проверка курса
     course = db.query(Course).filter(
         Course.id == course_id,
-        Course.owner_id == current_user.id,
+        course_access_filter(current_user.id),
         Course.is_deleted.is_(False),
     ).first()
     if not course:

@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String, event, select
 from sqlalchemy.orm import relationship
 from app.database.db import Base
 from app.models.base import BaseModelMixin
@@ -26,6 +26,7 @@ class Course(Base, BaseModelMixin):
     level = Column(String, nullable=True)
     language = Column(String, nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     status = Column(
         String(32), nullable=False, default=CourseStatus.READY.value, index=True
     )
@@ -84,3 +85,10 @@ class Course(Base, BaseModelMixin):
         "AssessmentRubric", back_populates="course", cascade="all, delete-orphan"
     )
     learning_events = relationship("LearningEvent", back_populates="course")
+
+
+@event.listens_for(Course, 'before_insert')
+def bind_course_organization(mapper, connection, target):
+    if target.organization_id is None and target.owner_id:
+        from app.models.user import User
+        target.organization_id = connection.execute(select(User.organization_id).where(User.id == target.owner_id)).scalar()

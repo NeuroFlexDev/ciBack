@@ -48,6 +48,14 @@ EXPECTED_TABLES = BASE_TABLES | {
     "legal_requests",
 }
 
+LEARNING_TABLES = {
+    "organization_learning_settings", "learning_role_grants", "learning_departments", "learning_people",
+    "learning_groups", "learning_group_members", "published_learning_content", "learning_assessment_definitions",
+    "learning_assignments", "learning_group_enrollments", "learning_responses", "learning_grade_events",
+    "learning_programs", "learning_program_enrollments", "organization_ownership_transfers", "learning_publication_approvals",
+}
+EXPECTED_TABLES |= LEARNING_TABLES
+
 def test_alembic_revision_graph_has_one_connected_head():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     revisions = list(script.walk_revisions())
@@ -138,8 +146,8 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         text=True,
         env=env,
     )
-    # Rolling back legal receipts removes only the two new legal tables.
-    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - {"organizations", "invitations", "admin_events"}) | {"alembic_version"}
+    # Rolling back the learning feature keeps the pre-existing administration and legal data.
+    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - LEARNING_TABLES) | {"alembic_version"}
     column_code = (
         "import json; from sqlalchemy import create_engine, inspect; "
         f"engine = create_engine({env['DATABASE_URL']!r}); "

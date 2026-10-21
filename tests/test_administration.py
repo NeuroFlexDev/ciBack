@@ -83,7 +83,10 @@ def test_revocation_expiry_and_suspended_organization(client,db_session,admin):
 def test_invitation_cannot_take_over_existing_account(client,db_session,admin,auth_user):
     o=org(db_session)
     r=client.post('/api/admin/invitations',headers=headers(admin),json={'email':auth_user.email,'organization_id':o.id})
-    assert r.status_code==409
+    assert r.status_code==201
+    token=r.json()['url'].split('#token=')[1]
+    # Receiving an invitation never mutates an existing account or its password.
+    assert client.post('/api/auth/invitations/accept',json=acceptance(token)).status_code==409
     assert auth_user.organization_id is None
 
 
@@ -120,7 +123,7 @@ def test_suspend_org_revokes_member_access_without_deleting_data(client,db_sessi
 
 
 def test_real_course_quota_and_generation_zero(client,db_session,admin):
-    o=org(db_session,course_limit=1,generation_limit=0);u=member(db_session,o)
+    o=org(db_session,course_limit=1,generation_limit=0);u=member(db_session,o,role='author')
     assert client.post('/api/courses/drafts',headers=headers(u)).status_code==201
     assert client.post('/api/courses/drafts',headers=headers(u)).status_code==409
     assert client.post('/api/courses/',headers=headers(u),json={'title':'Bypass','description':'No','level':1,'language':1}).status_code==409
@@ -155,7 +158,7 @@ def test_source_quota_allows_replacement_and_frees_deleted_source(client, db_ses
     from main import app
     app.dependency_overrides[get_file_storage] = lambda: LocalFileStorage(tmp_path, 1024 * 1024)
     o = org(db_session, source_limit=1)
-    u = member(db_session, o)
+    u = member(db_session, o, role='author')
     course_id = client.post('/api/courses/drafts', headers=headers(u)).json()['id']
     path = f'/api/courses/{course_id}/documents'
     source = {'file': ('source.txt', b'Source material for quota check', 'text/plain')}
@@ -192,7 +195,7 @@ def test_synchronous_graph_endpoint_cannot_bypass_monthly_limit(client, db_sessi
     from tests.test_upload_pipeline import _course_and_document
     from app.models.generation_run import GenerationRun
     o = org(db_session, generation_limit=0)
-    u = member(db_session, o)
+    u = member(db_session, o, role='author')
     course, document, _ = _course_and_document(db_session, u)
     document.status = 'indexed'
     db_session.commit()

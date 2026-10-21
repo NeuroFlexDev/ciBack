@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.domain_enums import CourseStatus
 
 
@@ -20,7 +21,7 @@ class CourseDraftRepository:
         return (
             db.query(Course)
             .filter(
-                Course.owner_id == owner_id,
+                course_access_filter(owner_id),
                 Course.status == CourseStatus.DRAFT.value,
                 Course.is_deleted.is_(False),
             )

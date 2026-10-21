@@ -8,6 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.lesson_version import LessonVersion
 from app.models.module import Module
@@ -30,7 +31,7 @@ def _conflict(expected: int, current: int) -> HTTPException:
 class CourseEditorService:
     @staticmethod
     def _course(db: Session, course_id: int, owner_id: int, lock: bool = False) -> Course:
-        query = db.query(Course).filter(Course.id == course_id, Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Course).filter(Course.id == course_id, course_access_filter(owner_id), Course.is_deleted.is_(False))
         course = (query.with_for_update() if lock else query).first()
         if course is None:
             raise _not_found("Course")
@@ -40,7 +41,7 @@ class CourseEditorService:
 
     @staticmethod
     def _module(db: Session, module_id: int, owner_id: int, lock: bool = False) -> Module:
-        query = db.query(Module).join(Course).filter(Module.id == module_id, Module.is_deleted.is_(False), Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Module).join(Course).filter(Module.id == module_id, Module.is_deleted.is_(False), course_access_filter(owner_id), Course.is_deleted.is_(False))
         module = (query.with_for_update() if lock else query).first()
         if module is None:
             raise _not_found("Module")
@@ -49,7 +50,7 @@ class CourseEditorService:
 
     @staticmethod
     def _lesson(db: Session, lesson_id: int, owner_id: int, lock: bool = False) -> Lesson:
-        query = db.query(Lesson).join(Module).join(Course).filter(Lesson.id == lesson_id, Lesson.is_deleted.is_(False), Module.is_deleted.is_(False), Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Lesson).join(Module).join(Course).filter(Lesson.id == lesson_id, Lesson.is_deleted.is_(False), Module.is_deleted.is_(False), course_access_filter(owner_id), Course.is_deleted.is_(False))
         lesson = (query.with_for_update() if lock else query).first()
         if lesson is None:
             raise _not_found("Lesson")
@@ -58,7 +59,7 @@ class CourseEditorService:
 
     @staticmethod
     def _test(db: Session, test_id: int, owner_id: int, lock: bool = False) -> Test:
-        query = db.query(Test).outerjoin(Module, Test.module_id == Module.id).join(Course, func.coalesce(Module.course_id, Test.course_id) == Course.id).filter(Test.id == test_id, Test.is_deleted.is_(False), Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Test).outerjoin(Module, Test.module_id == Module.id).join(Course, func.coalesce(Module.course_id, Test.course_id) == Course.id).filter(Test.id == test_id, Test.is_deleted.is_(False), course_access_filter(owner_id), Course.is_deleted.is_(False))
         test = (query.with_for_update() if lock else query).first()
         if test is None:
             raise _not_found("Test")

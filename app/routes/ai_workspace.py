@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.course import Course
+from app.services.course_access import course_access_filter, related_course_access
 from app.models.user import User
 from app.models.ai_state import CanvasWorkspace, AICall
 from app.models.generation_run import GenerationRun
@@ -18,7 +19,7 @@ router = APIRouter()
 
 
 def owned_course(db, course_id, user_id, lock=False):
-    query = db.query(Course).filter(Course.id == course_id, Course.owner_id == user_id, Course.is_deleted.is_(False))
+    query = db.query(Course).filter(Course.id == course_id, course_access_filter(user_id), Course.is_deleted.is_(False))
     if lock:
         query = query.with_for_update()
     course = query.first()
@@ -153,7 +154,7 @@ def canvas_action(course_id: int, payload: CanvasAction, db: Session = Depends(g
 
 @router.get("/generation-runs/{run_id}/usage")
 def get_usage(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    run = db.query(GenerationRun).filter(GenerationRun.id == run_id, GenerationRun.owner_id == user.id).first()
+    run = db.query(GenerationRun).filter(GenerationRun.id == run_id, related_course_access(GenerationRun.course_id, user.id)).first()
     if run is None:
         raise HTTPException(404, "Run not found")
     calls = db.query(AICall).filter(AICall.run_id == run_id).all()

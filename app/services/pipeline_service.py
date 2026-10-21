@@ -491,7 +491,7 @@ class PipelineService:
                     "source": document.original_filename,
                     "source_type": document.source_type,
                     "owner_id": document.owner_id,
-                    "organization_id": None,
+                    "organization_id": document.course.organization_id,
                     "course_id": document.course_id,
                 }
                 for chunk_model in chunk_models

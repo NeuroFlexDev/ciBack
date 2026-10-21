@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, ConfigDict
 from app.database.db import get_db
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.module import Module
 from app.models.lesson import Lesson
 from app.models.test import Test
@@ -195,7 +196,7 @@ def update_course(
             db.query(Course)
             .filter(
                 Course.id == course_id,
-                Course.owner_id == current_user.id,
+                course_access_filter(current_user.id),
                 Course.is_deleted.is_(False),
             )
             .first()
@@ -246,7 +247,7 @@ def delete_course(
             db.query(Course)
             .filter(
                 Course.id == course_id,
-                Course.owner_id == current_user.id,
+                course_access_filter(current_user.id),
                 Course.is_deleted.is_(False),
             )
             .first()
@@ -276,7 +277,7 @@ def load_modules(
         db.query(Course)
         .filter(
             Course.id == course_id,
-            Course.owner_id == current_user.id,
+            course_access_filter(current_user.id),
             Course.is_deleted.is_(False),
         )
         .first()
@@ -338,7 +339,7 @@ def save_modules(
         db.query(Course)
         .filter(
             Course.id == course_id,
-            Course.owner_id == current_user.id,
+            course_access_filter(current_user.id),
             Course.is_deleted.is_(False),
         )
         .first()

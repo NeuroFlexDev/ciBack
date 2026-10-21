@@ -29,6 +29,7 @@ class RetrievalService:
                     owner_id=owner_id,
                     course_id=course_id,
                     allowed_chunk_ids=frozenset(chunks_by_id),
+                    allowed_owner_ids=frozenset(chunk.document.owner_id for chunk in chunks),
                 ),
                 limit,
             )

@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.course import Course
+from app.services.course_access import course_access_filter, related_course_access
 from app.models.document import Document, DocumentChunk
 from app.models.domain_enums import DocumentStatus
 
@@ -10,7 +11,7 @@ class RetrievalRepository:
     def get_owned_course(db: Session, course_id: int, owner_id: int) -> Course | None:
         return (
             db.query(Course)
-            .filter(Course.id == course_id, Course.owner_id == owner_id, Course.is_deleted.is_(False))
+            .filter(Course.id == course_id, course_access_filter(owner_id), Course.is_deleted.is_(False))
             .first()
         )
 
@@ -24,7 +25,7 @@ class RetrievalRepository:
             .options(joinedload(DocumentChunk.document))
             .filter(
                 Document.course_id == course_id,
-                Document.owner_id == owner_id,
+                related_course_access(Document.course_id, owner_id),
                 Document.status == DocumentStatus.INDEXED.value,
                 Document.is_current.is_(True),
                 Document.is_deleted.is_(False),

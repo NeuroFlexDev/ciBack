@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.user import User
@@ -28,7 +29,7 @@ def semantic_search(
         for row in db.query(Lesson.id)
         .join(Module, Lesson.module_id == Module.id)
         .join(Course, Module.course_id == Course.id)
-        .filter(Course.owner_id == current_user.id)
+        .filter(course_access_filter(current_user.id))
         .all()
     }
     results = search(q, allowed_lesson_ids=lesson_ids)

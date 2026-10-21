@@ -128,6 +128,8 @@ class CoursePublicationService:
                 deleted=False,
                 created_by=owner_id,
             ))
+        from app.services.learning_service import create_publication_snapshot
+        create_publication_snapshot(db, course, version, modules)
         return version
 
     @staticmethod
@@ -137,13 +139,26 @@ class CoursePublicationService:
             if course is None:
                 raise HTTPException(status_code=404, detail="Course not found")
             if course.publication_status == "published":
-                return {
-                    "id": course.id,
-                    "publication_status": "published",
-                    "published_at": course.published_at,
-                    "revision": course.content_revision,
-                }
+                from app.models.learning import PublishedLearningContent
+                if db.get(PublishedLearningContent, db.query(CourseVersion.id).filter_by(course_id=course.id, revision=course.content_revision).scalar() or 0) is None:
+                    # Republish legacy content as a new immutable complete revision;
+                    # keep every old version and historical result intact.
+                    course.content_revision += 1
+                    course.publication_status = 'draft'
+                else:
+                    return {
+                        "id": course.id,
+                        "publication_status": "published",
+                        "published_at": course.published_at,
+                        "revision": course.content_revision,
+                    }
             modules, _ = CoursePublicationService._validate(course, db)
+            from app.services.learning_service import validate_publication_approval
+            validate_publication_approval(db, course, modules)
+            import importlib.util
+            if importlib.util.find_spec('app.services.image_service'):
+                from app.services.image_service import validate_course_images
+                validate_course_images(db, course)
             published_at = datetime.utcnow()
             CoursePublicationService._snapshot(db, course, owner_id, published_at, modules)
             course.publication_status = "published"

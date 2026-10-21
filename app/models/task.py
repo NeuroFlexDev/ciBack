@@ -9,6 +9,7 @@ class Task(Base, BaseModelMixin):
 
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    revision = Column(Integer, nullable=False, default=1, server_default='1')
     module_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"))
 
     # Обратная связь с Module

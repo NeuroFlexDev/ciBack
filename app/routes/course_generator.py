@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.module import Module
 from app.models.lesson import Lesson
 from app.models.course_structure import CourseStructure
@@ -27,7 +28,7 @@ def generate_and_save_modules(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    course = db.query(Course).filter(Course.id == course_id, Course.owner_id == current_user.id).first()
+    course = db.query(Course).filter(Course.id == course_id, course_access_filter(current_user.id)).first()
     if not course:
         raise HTTPException(404, "❌ Курс не найден")
 
@@ -50,7 +51,7 @@ def generate_and_save_module_lessons(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    course = db.query(Course).filter(Course.id == course_id, Course.owner_id == current_user.id).first()
+    course = db.query(Course).filter(Course.id == course_id, course_access_filter(current_user.id)).first()
     if not course:
         raise HTTPException(404, "❌ Курс не найден")
 
@@ -72,7 +73,7 @@ def generate_and_save_lesson_content(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    course = db.query(Course).filter(Course.id == course_id, Course.owner_id == current_user.id).first()
+    course = db.query(Course).filter(Course.id == course_id, course_access_filter(current_user.id)).first()
     if not course:
         raise HTTPException(404, "❌ Курс не найден")
 
@@ -80,7 +81,7 @@ def generate_and_save_lesson_content(
         db.query(Lesson)
         .join(Module, Lesson.module_id == Module.id)
         .join(Course, Module.course_id == Course.id)
-        .filter(Lesson.id == payload.lesson_id, Course.id == course_id, Course.owner_id == current_user.id)
+        .filter(Lesson.id == payload.lesson_id, Course.id == course_id, course_access_filter(current_user.id))
         .first()
     )
     if not lesson:

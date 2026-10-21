@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.models.chat import Chat, ChatMessage
 from app.models.course import Course
+from app.services.course_access import course_access_filter, related_course_access
 
 
 class ChatRepository:
@@ -10,6 +11,7 @@ class ChatRepository:
         chat = db.query(Chat).filter(
             Chat.id == chat_id,
             Chat.owner_id == user_id,
+            (Chat.course_id.is_(None) | related_course_access(Chat.course_id, user_id)),
             Chat.status == "active",
             Chat.is_deleted.is_(False),
         ).first()
@@ -20,7 +22,7 @@ class ChatRepository:
     @staticmethod
     def create_chat(db: Session, user_id: int, name: str, course_id: int | None = None) -> Chat:
         if course_id is not None and db.query(Course.id).filter(
-            Course.id == course_id, Course.owner_id == user_id
+            Course.id == course_id, course_access_filter(user_id)
         ).first() is None:
             raise KeyError("course_not_found")
         chat = Chat(owner_id=user_id, course_id=course_id, title=name, status="active")
@@ -33,6 +35,7 @@ class ChatRepository:
     def list_chats(db: Session, user_id: int) -> list[Chat]:
         return db.query(Chat).filter(
             Chat.owner_id == user_id,
+            (Chat.course_id.is_(None) | related_course_access(Chat.course_id, user_id)),
             Chat.status == "active",
             Chat.is_deleted.is_(False),
         ).order_by(Chat.created_at.desc(), Chat.id.desc()).all()

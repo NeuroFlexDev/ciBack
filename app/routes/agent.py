@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.theory import Theory
@@ -25,7 +26,7 @@ def improve_theory(
         db.query(Lesson)
         .join(Module, Lesson.module_id == Module.id)
         .join(Course, Module.course_id == Course.id)
-        .filter(Lesson.id == lesson_id, Course.owner_id == current_user.id)
+        .filter(Lesson.id == lesson_id, course_access_filter(current_user.id))
         .first()
     )
     if not lesson:
