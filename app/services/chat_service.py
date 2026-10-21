@@ -64,6 +64,8 @@ def chat_generate(
     require_feature(db, db.get(User, user_id).organization_id, "assistant")
     chat = ChatRepository._active_chat(db, chat_id, user_id)
     engine_name = engine_name or chat.engine or "vsellm"
+    if settings.AI_LOCAL_ONLY:
+        engine_name = "vsellm"  # Only the approved local-provider registry may dispatch.
     model = model or chat.model
     if engine_name == "vsellm":
         from app.ai.memory import conversation_context

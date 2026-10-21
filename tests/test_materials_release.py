@@ -181,7 +181,7 @@ def test_learner_assistant_uses_snapshot_and_valid_citation_only(db_session, aut
     course = make_course(db_session, owner_id=auth_user.id)
     version = CourseVersion(course_id=course.id, revision=1, name="Published", publication_status="published")
     db_session.add(version); db_session.commit()
-    assignment = SimpleNamespace(course_version_id=version.id)
+    assignment = SimpleNamespace(course_version_id=version.id, organization_id=None)
     snapshot = {"modules": [{"lessons": [{"id": 5, "title": "Safe lesson", "content": "An atom contains a nucleus."}]}]}
     monkeypatch.setattr(assistant, "assignment_context", lambda *args: (assignment, snapshot))
     observed = []

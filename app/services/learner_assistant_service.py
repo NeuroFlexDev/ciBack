@@ -75,6 +75,8 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
         "Если подтверждения нет, прямо скажи. Верни JSON: {answer: string, cited_lesson_ids: number[], unsupported: boolean}. "
         "Ссылайся только на lesson_id переданного урока; никаких выдуманных URL."
     )}]
+    from app.services.organization_ai_context import organization_ai_context, with_organization_context
+    messages = with_organization_context(messages, organization_ai_context(db, assignment.organization_id))
     for previous in reversed(recent):
         messages += [{"role": "user", "content": previous.question}, {"role": "assistant", "content": previous.answer}]
     content = lesson.get("content") or ""

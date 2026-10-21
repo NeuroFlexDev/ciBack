@@ -11,6 +11,9 @@ from app.services.material_quota import material_policy
 
 def tracked_completion(db, owner_id, course_id, role, messages, *, invoke=None, **kwargs):
     user = db.execute(select(User).where(User.id == owner_id).with_for_update()).scalar_one()
+    if role in {"chat", "canvas"}:
+        from app.services.organization_ai_context import organization_ai_context, with_organization_context
+        messages = with_organization_context(messages, organization_ai_context(db, user.organization_id))
     ids = [owner_id]
     if user.organization_id:
         from app.services.organization_access import lock_org, member_ids

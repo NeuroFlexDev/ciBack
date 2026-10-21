@@ -149,6 +149,8 @@ class PipelineService:
                 detail={"code": "documents_not_ready", "message": "Документы не найдены, не принадлежат курсу или ещё не проиндексированы"},
             )
         settings_snapshot = generation_settings_snapshot(course, generation_settings)
+        from app.services.organization_ai_context import organization_ai_context
+        settings_snapshot["organization_context"] = organization_ai_context(db, course.organization_id)
         from app.services.generation_preflight import require_preflight
         require_preflight(documents, settings_snapshot)
         docs_snapshot = [
@@ -539,6 +541,9 @@ class PipelineService:
                 },
             )
         settings_snapshot = prepared_run.settings_snapshot if prepared_run is not None else generation_settings_snapshot(course, generation_settings)
+        if prepared_run is None:
+            from app.services.organization_ai_context import organization_ai_context
+            settings_snapshot["organization_context"] = organization_ai_context(db, course.organization_id)
         if prepared_run is not None:
             documents = PipelineRepository.documents_for_snapshot(
                 db,

@@ -78,7 +78,7 @@ def launch_generation(
     if payload.request_id:
         previous = db.query(GenerationRun).filter_by(owner_id=current_user.id, request_id=payload.request_id).first()
         if previous:
-            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key != "settings_revision"}
+            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context"}}
             if (previous.course_id != course_id or previous_settings != payload.settings.model_dump(mode="json", exclude={"expected_revision"})
                     or {item["document_id"] for item in previous.input_documents_snapshot} != set(payload.document_ids)):
                 raise HTTPException(409, {"code": "idempotency_conflict", "message": "Ключ запуска уже использован с другими параметрами"})

@@ -104,6 +104,7 @@ class AgenticCoursePipeline:
             "difficulty": settings_snapshot["difficulty"], "language": settings_snapshot["language"],
             "lesson_count": settings_snapshot["lesson_count"],
             "approved_plan": settings_snapshot.get("approved_plan") or [],
+            "organization_context": settings_snapshot.get("organization_context") or {},
         }
         def ingest(state):
             self.checkpoint("ingestion", 5)

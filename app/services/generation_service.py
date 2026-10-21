@@ -65,7 +65,8 @@ def get_cached_external_context(query: str, lang: str = "ru") -> str:
 def render_prompt(template_name: str, **kwargs: Any) -> str:
     """Render a configured Jinja prompt template."""
     template = env.get_template(template_name)
-    return template.render(**kwargs)
+    from app.services.organization_ai_context import context_text
+    return template.render(**kwargs) + context_text(kwargs.get("organization_context"))
 
 
 def agent_messages(prompt: str, *, expect_json: bool, repair_feedback: str = "") -> list[dict]:
