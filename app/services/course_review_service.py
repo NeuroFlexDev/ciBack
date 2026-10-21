@@ -92,6 +92,7 @@ def _module_out(item: Module) -> dict:
                 "module_id": task.module_id,
                 "name": task.name,
                 "description": task.description or "",
+                "revision": task.revision,
                 "updated_at": task.updated_at,
             }
             for task in tasks

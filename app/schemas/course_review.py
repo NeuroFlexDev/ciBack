@@ -63,6 +63,7 @@ class ReviewTask(BaseModel):
     module_id: int
     name: str
     description: str
+    revision: int
     updated_at: datetime
 
 
