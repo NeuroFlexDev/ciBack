@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 from zipfile import ZipFile
 import pytest
+from sqlalchemy import update
 from app.core.config import settings
 from app.models.administration import AdminEvent
 from app.models.document import Document
@@ -140,5 +141,40 @@ def test_package_size_limit_fails_before_export_receipt(client, db_session, worl
     monkeypatch.setattr(course_transfer, 'MAX_BUNDLE_BYTES', 20)
     response = client.post(BASE+'/export', headers=headers(world['owner']), json=payload)
     assert response.status_code == 413
+    assert response.headers.get('content-type', '').startswith('application/json')
+    assert db_session.query(AdminEvent).filter_by(action='learning.course_export_prepared').count() == 0
+
+
+@pytest.mark.parametrize('change', [{'is_active': False}, {'auth_version': 1}, {'organization_role': 'admin'}])
+def test_owner_revocation_while_waiting_for_organization_lock_blocks_export(client, db_session, world, monkeypatch, change):
+    from app.services import course_transfer
+    _, _, _, _, _, version = publish(client, db_session, world['author'])
+    payload = selection(client, world, version.id)
+    original_lock = course_transfer.lock_org
+    def changed_while_waiting(db, organization_id):
+        organization = original_lock(db, organization_id)
+        db.execute(update(User).where(User.id == world['owner'].id).values(**change).execution_options(synchronize_session=False))
+        return organization
+    monkeypatch.setattr(course_transfer, 'lock_org', changed_while_waiting)
+    response = client.post(BASE+'/export', headers=headers(world['owner']), json=payload)
+    assert response.status_code == (403 if 'organization_role' in change else 401)
+    assert db_session.query(AdminEvent).filter_by(action='learning.course_export_prepared').count() == 0
+
+
+def test_session_revoked_while_reading_assets_returns_no_archive(client, db_session, world, monkeypatch):
+    course, _, _, _, task, _ = publish(client, db_session, world['author'])
+    image = CourseImage(course_id=course.id, owner_id=world['author'].id, status='approved', storage_key='image.png', mime_type='image/png')
+    db_session.add(image); db_session.flush()
+    task.description = f'![Approved](/images/{image.id}/content)'
+    course.content_revision += 1; db_session.commit()
+    assert client.post(f'/api/courses/{course.id}/publish', headers=headers(world['author'])).status_code == 200
+    version = db_session.query(PublishedLearningContent).order_by(PublishedLearningContent.course_version_id.desc()).first()
+    payload = selection(client, world, version.course_version_id)
+    def read_and_revoke(key):
+        db_session.execute(update(User).where(User.id == world['owner'].id).values(auth_version=User.auth_version+1).execution_options(synchronize_session=False))
+        return b'approved image bytes'
+    monkeypatch.setattr(image_service, 'storage', lambda: SimpleNamespace(read_bytes=read_and_revoke))
+    response = client.post(BASE+'/export', headers=headers(world['owner']), json=payload)
+    assert response.status_code == 401
     assert response.headers.get('content-type', '').startswith('application/json')
     assert db_session.query(AdminEvent).filter_by(action='learning.course_export_prepared').count() == 0

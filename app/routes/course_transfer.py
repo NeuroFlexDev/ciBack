@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -26,8 +26,8 @@ def list_versions(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=
 
 
 @router.post('/export')
-def export_version(payload: ExportInput, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    archive, filename = transfer.prepare_bundle(db, user, payload)
+def export_version(payload: ExportInput, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    archive, filename = transfer.prepare_bundle(db, user, payload, claims=request.state.auth_claims)
     def chunks():
         try:
             while block := archive.read(256 * 1024):

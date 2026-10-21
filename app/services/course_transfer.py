@@ -15,6 +15,7 @@ from app.models.course_version import CourseVersion
 from app.models.document import Document
 from app.models.learning import PublishedLearningContent
 from app.models.materials import CourseImage, PublishedSourceFile
+from app.models.user import User
 from app.services import learning_service as learning
 from app.services.organization_access import audit, lock_org
 from app.services.protected_image_refs import image_ids_in
@@ -26,9 +27,21 @@ _IMAGE_PATH = re.compile(r'''(?<![\w/])(?:/api)?/images/(\d+)/content(?=$|[\s?#)
 
 def owner_scope(user):
     # Platform operations and general team administration do not grant export.
-    if not user.organization_id or user.organization_role != 'owner' or user.is_admin:
+    if not user.is_active or not user.organization_id or user.organization_role != 'owner' or user.is_admin:
         raise HTTPException(403, 'Передачу опубликованного курса подтверждает владелец организации')
     return user.organization_id
+
+
+def check_owner_session(db, user_id, org_id, claims):
+    # Refresh without adding User->organization / organization->User lock
+    # inversion. Ownership changes already serialize on the organization lock;
+    # independent session revocation is rechecked again after archive work.
+    user = db.execute(select(User).where(User.id == user_id).execution_options(populate_existing=True)).scalar_one_or_none()
+    if not user or not user.is_active or str(claims.get('sub')) != str(user_id) or user.auth_version != claims.get('ver', 0):
+        raise HTTPException(401, 'Сеанс завершён. Войдите снова.', headers={'WWW-Authenticate': 'Bearer'})
+    if owner_scope(user) != org_id:
+        raise HTTPException(403, 'Права владельца изменились. Передача остановлена.')
+    return user
 
 
 def version_query(db, org_id):
@@ -85,14 +98,12 @@ def course_markdown(content, private):
     return ('\n'.join(lines) + '\n').encode('utf-8')
 
 
-def prepare_bundle(db, user, payload):
+def prepare_bundle(db, user, payload, *, claims):
     org_id = owner_scope(user)
     if not payload.confirm_transfer or (payload.include_answer_keys and not payload.confirm_private_materials):
         raise HTTPException(422, 'Подтвердите состав передачи; ключи ответов требуют отдельного подтверждения')
     org = lock_org(db, org_id)
-    db.refresh(user)
-    if owner_scope(user) != org_id:
-        raise HTTPException(403, 'Права владельца изменились. Передача остановлена.')
+    user = check_owner_session(db, user.id, org_id, claims)
     if not org.is_active:
         raise HTTPException(403, 'Организация приостановлена')
     row = version_query(db, org_id).filter(CourseVersion.id == payload.course_version_id).first()
@@ -171,6 +182,7 @@ def prepare_bundle(db, user, payload):
             sums = ''.join(f"{entry['sha256']}  {entry['path']}\n" for entry in manifest['files'])
             sums += f"{sha256(manifest_bytes).hexdigest()}  manifest.json\n"
             bundle.writestr('SHA256SUMS', sums.encode('ascii'))
+        user = check_owner_session(db, user.id, org_id, claims)
         audit(db, user, 'learning.course_export_prepared', 'course_version', version.id, organization_id=org_id,
             course_id=course.id, export_id=export_id, snapshot_sha256=source_digest, manifest_sha256=sha256(manifest_bytes).hexdigest(),
             include_sources=payload.include_sources, include_answer_keys=payload.include_answer_keys, files=len(manifest['files']), bytes=total_bytes)
