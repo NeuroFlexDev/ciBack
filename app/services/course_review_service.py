@@ -159,6 +159,7 @@ class CourseReviewService:
             )
         return {
             "course_id": course.id,
+            "content_revision": course.content_revision,
             "title": course.name or "",
             "description": course.description or "",
             "status": _course_status(course),

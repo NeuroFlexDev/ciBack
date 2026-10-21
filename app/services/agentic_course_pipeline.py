@@ -103,6 +103,7 @@ class AgenticCoursePipeline:
             "target_audience": settings_snapshot.get("target_audience") or "not specified",
             "difficulty": settings_snapshot["difficulty"], "language": settings_snapshot["language"],
             "lesson_count": settings_snapshot["lesson_count"],
+            "approved_plan": settings_snapshot.get("approved_plan") or [],
         }
         def ingest(state):
             self.checkpoint("ingestion", 5)
@@ -138,6 +139,8 @@ class AgenticCoursePipeline:
                 _canonical_sources("architect", value.source_refs, source_catalog)
                 if len(value.lessons) != settings_snapshot["lesson_count"]:
                     raise ValueError("Course Architect returned an unexpected lesson count")
+                if common["approved_plan"] and [lesson.title for lesson in value.lessons] != common["approved_plan"]:
+                    raise ValueError("Course Architect changed the author-approved lesson plan")
                 known = {x["id"] for x in state["competency_map"]["competencies"]}
                 if set(value.competency_ids) != known:
                     raise ValueError("Course plan must cover every mapped competency")

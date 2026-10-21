@@ -6,6 +6,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    JSON,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -45,6 +46,8 @@ class CourseGenerationSettings(Base, BaseModelMixin):
     lesson_count = Column(Integer, nullable=False)
     module_tests_enabled = Column(Boolean, nullable=False)
     final_test_enabled = Column(Boolean, nullable=False)
+    approved_plan = Column(JSON, nullable=False, default=list, server_default="[]")
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 

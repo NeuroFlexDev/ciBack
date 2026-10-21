@@ -9,6 +9,7 @@ psycopg2-binary
 jinja2
 python-docx
 PyMuPDF
+Pillow>=11.3,<13
 faiss-cpu
 langchain-core
 PyJWT>=2.10,<3

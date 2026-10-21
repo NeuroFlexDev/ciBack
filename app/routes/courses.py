@@ -31,9 +31,10 @@ class CourseCreate(BaseModel):
 # Pydantic-модель для обновления курса
 class CourseUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, description="Новое название курса")
-    description: str | None = Field(None, min_length=1, description="Новое описание курса")
+    description: str | None = Field(None, max_length=10000, description="Новое описание курса")
     level: int | None = Field(None, gt=0, description="Новый ID уровня курса (целое число > 0)")
     language: int | None = Field(None, gt=0, description="Новый ID языка курса (целое число > 0)")
+    expected_revision: int | None = Field(default=None, gt=0)
 
 # Pydantic-модель для ответа
 class CourseResponse(BaseModel):
@@ -42,6 +43,7 @@ class CourseResponse(BaseModel):
     description: str
     level: int
     language: int
+    content_revision: int = 1
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -148,6 +150,7 @@ def create_course(
             description=new_course.description,
             level=parse_course_enum(new_course.level),
             language=parse_course_enum(new_course.language),
+            content_revision=new_course.content_revision,
         )
     except Exception as e:
         db.rollback()
@@ -199,12 +202,18 @@ def update_course(
                 course_access_filter(current_user.id),
                 Course.is_deleted.is_(False),
             )
+            .with_for_update()
             .first()
         )
         if not course:
             raise HTTPException(status_code=404, detail="Курс не найден")
+        if course.status == "generating":
+            raise HTTPException(409, "Дождитесь завершения генерации перед редактированием курса")
+        if course_update.expected_revision is not None and course_update.expected_revision != course.content_revision:
+            raise HTTPException(409, {"code": "revision_conflict", "message": "Параметры курса изменены в другой вкладке",
+                "expected_revision": course_update.expected_revision, "current_revision": course.content_revision})
         
-        update_data = course_update.dict(exclude_unset=True)
+        update_data = course_update.model_dump(exclude_unset=True, exclude_none=True, exclude={"expected_revision"})
         if not update_data:
             raise HTTPException(status_code=400, detail="Нет данных для обновления")
         
@@ -214,17 +223,21 @@ def update_course(
                 setattr(course, "name", value)
             else:
                 setattr(course, field, value)
+        previous_revision = course.content_revision
         CoursePublicationService.prepare_for_edit(course)
+        if course.content_revision == previous_revision:
+            course.content_revision += 1
         
         db.commit()
         db.refresh(course)
         logger.info("Курс обновлен: ID=%s, поля=%s", course.id, sorted(update_data))
         return CourseResponse(
             id=course.id,
-            title=course.name,
-            description=course.description,
+            title=course.name or "",
+            description=course.description or "",
             level=parse_course_enum(course.level),
             language=parse_course_enum(course.language),
+            content_revision=course.content_revision,
         )
     except HTTPException:
         raise

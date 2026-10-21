@@ -35,7 +35,7 @@ def credential(provider: AIProvider) -> str:
 
 
 def configured(provider: AIProvider) -> bool:
-    return provider.enabled and bool(credential(provider))
+    return provider.enabled and (not settings.AI_LOCAL_ONLY or provider.local) and bool(credential(provider))
 
 
 _circuits: dict[str, float] = {}

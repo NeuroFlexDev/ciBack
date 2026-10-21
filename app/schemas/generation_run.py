@@ -10,6 +10,7 @@ from app.schemas.course_generation_settings import CourseGenerationSettingsUpdat
 class GenerationRunCreate(BaseModel):
     settings: CourseGenerationSettingsUpdate
     document_ids: list[int] = Field(min_length=1)
+    request_id: str | None = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
     model_config = ConfigDict(extra="forbid")
 

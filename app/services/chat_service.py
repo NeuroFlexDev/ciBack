@@ -76,7 +76,8 @@ def chat_generate(
             system += "\nОтвечай по материалам курса. Ссылайся на фрагменты в формате [chunk:ID]. Если подтверждения нет, прямо скажи об этом.\nИсточники:\n" + json.dumps(retrieved.model_dump(mode="json"), ensure_ascii=False)
         try:
             context = conversation_context(db, chat_id, user_id, text)
-            response = gateway.chat_completion("chat", [{"role": "system", "content": system}, *context], model=model)
+            from app.services.scoped_ai import tracked_completion
+            response = tracked_completion(db, user_id, chat.course_id, "chat", [{"role": "system", "content": system}, *context], model=model)
         except AIUnavailable:
             response = source_answer(text, citations)
         usage = _usage_from_response(response)
@@ -97,9 +98,10 @@ def chat_generate(
     llm_history.append({"role": "user", "content": text})
 
     try:
-        response = get_chat_engine(engine_name, model).generate(
-            llm_history, model=model, expect_json=expect_json
-        )
+        from app.services.scoped_ai import tracked_completion
+        response = tracked_completion(db, user_id, chat.course_id, "chat", llm_history,
+            max_tokens=max_tokens, invoke=lambda _role, messages, **_kwargs: get_chat_engine(engine_name, model).generate(
+                messages, model=model, expect_json=expect_json))
     except Exception:
         from app.ai.offline import source_answer
         response = source_answer(text)

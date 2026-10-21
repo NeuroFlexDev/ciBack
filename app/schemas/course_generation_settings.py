@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.domain_enums import CourseDifficulty, CourseLanguage, CourseStatus
 
@@ -14,6 +14,17 @@ class CourseGenerationSettingsUpdate(BaseModel):
     lesson_count: int = Field(ge=1, le=100)
     module_tests_enabled: bool
     final_test_enabled: bool
+    approved_plan: list[str] = Field(default_factory=list, max_length=100)
+    expected_revision: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def approved_plan_matches_count(self):
+        self.approved_plan = [title.strip() for title in self.approved_plan]
+        if any(not title or len(title) > 200 for title in self.approved_plan):
+            raise ValueError("Each approved lesson title must contain 1–200 characters")
+        if self.approved_plan and len(self.approved_plan) != self.lesson_count:
+            raise ValueError("Approved plan must contain exactly lesson_count lessons")
+        return self
 
     model_config = ConfigDict(extra="forbid")
 
@@ -33,6 +44,7 @@ class CourseGenerationSettingsUpdate(BaseModel):
 
 class CourseGenerationSettingsResponse(BaseModel):
     course_id: int
+    revision: int = 1
     title: str
     goal: str
     target_audience: str | None
@@ -41,6 +53,7 @@ class CourseGenerationSettingsResponse(BaseModel):
     lesson_count: int
     module_tests_enabled: bool
     final_test_enabled: bool
+    approved_plan: list[str] = Field(default_factory=list)
     course_status: CourseStatus
     created_at: datetime
     updated_at: datetime

@@ -24,7 +24,7 @@ def get_model():
     try:
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer(settings.EMBEDDING_MODEL)
+        model = SentenceTransformer(settings.EMBEDDING_MODEL, local_files_only=settings.AI_LOCAL_ONLY)
     except Exception as exc:
         logger.warning("SentenceTransformer недоступен, семантический поиск отключён: %s", exc)
         model = False

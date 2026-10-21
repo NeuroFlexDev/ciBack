@@ -27,7 +27,8 @@ from app.models.domain_enums import (
 from app.models.generation_run import GenerationRun
 from app.repositories.pipeline import PipelineRepository
 from app.schemas.pipeline import GeneratedGraphPayload
-from app.services.document_processing import chunk_blocks, extract_blocks
+from app.services.document_processing import chunk_blocks
+from app.services.document_safety import bounded_extract_blocks as extract_blocks
 from app.services.agent_runtime import AgentRuntime
 from app.services.agentic_course_pipeline import AgenticCoursePipeline
 from app.services.embedding_service import replace_document_embeddings
@@ -134,13 +135,15 @@ class PipelineService:
 
     @staticmethod
     def _checkpoint(db: Session, run: GenerationRun, stage: str, progress: int) -> None:
+        from app.services.generation_control import check_cancelled
+        check_cancelled(db, run.id)
         run.current_stage = stage
         run.progress_percent = progress
         db.commit()
 
     @staticmethod
     def validate_generation_documents(
-        db: Session, *, course_id: int, owner_id: int, document_ids: list[int]
+        db: Session, *, course_id: int, owner_id: int, document_ids: list[int], request_id: str | None = None
     ) -> None:
         course = PipelineRepository.get_owned_course(db, course_id, owner_id)
         if course is None:
@@ -160,7 +163,7 @@ class PipelineService:
 
     @staticmethod
     def prepare_graph_generation(
-        db: Session, *, course_id: int, owner_id: int, document_ids: list[int]
+        db: Session, *, course_id: int, owner_id: int, document_ids: list[int], request_id: str | None = None
     ) -> GenerationRun:
         course = PipelineRepository.get_owned_course(db, course_id, owner_id, for_update=True)
         if course is None:
@@ -182,6 +185,8 @@ class PipelineService:
                 detail={"code": "documents_not_ready", "message": "Документы не найдены, не принадлежат курсу или ещё не проиндексированы"},
             )
         settings_snapshot = generation_settings_snapshot(course, generation_settings)
+        from app.services.generation_preflight import require_preflight
+        require_preflight(documents, settings_snapshot)
         docs_snapshot = [
             {"document_id": item.id, "version": item.version, "content_hash": item.content_hash}
             for item in documents
@@ -198,6 +203,7 @@ class PipelineService:
         now = datetime.utcnow()
         run = GenerationRun(
             owner_id=owner_id,
+            request_id=request_id,
             course_id=course_id,
             run_type=GenerationRunType.GRAPH_GENERATION.value,
             status=GenerationRunStatus.QUEUED.value,
@@ -292,6 +298,9 @@ class PipelineService:
             GENERATION_QUEUED if run.status == "queued" and run.error_code == "ai_unavailable" else None)
         if data["status_notice"]:
             data["error"] = None
+        if run.cancel_requested:
+            data["status_notice"] = ("Генерация остановлена. Завершённые этапы сохранены; можно продолжить." if run.status == "paused"
+                                     else "Останавливаем генерацию после текущего запроса AI. Завершённые этапы сохраняются.")
         data["stages"] = []
         if run.run_type == GenerationRunType.GRAPH_GENERATION.value:
             codes = [item[0] for item in PipelineService.GENERATION_STAGES]
@@ -377,52 +386,17 @@ class PipelineService:
                 status_code=409,
                 detail={"code": "retry_input_unavailable", "message": "Исходные версии документов недоступны"},
             )
-        if original.status == GenerationRunStatus.PAUSED.value:
-            # Resume the SAME run to preserve LangGraph checkpoints and usage.
-            original.status = GenerationRunStatus.QUEUED.value
-            original.queued_at = datetime.utcnow()
-            original.finished_at = None
-            original.error = original.error_code = original.error_message = None
-            original.attempt += 1
-            course.status = CourseStatus.GENERATING.value
-            db.commit()
-            return original
-        from app.services.organization_access import check_generation_limit
-        check_generation_limit(db, owner_id)
-        retry = GenerationRun(
-            owner_id=owner_id,
-            course_id=original.course_id,
-            run_type=original.run_type,
-            status=GenerationRunStatus.QUEUED.value,
-            current_stage="queued",
-            progress_percent=0,
-            queued_at=datetime.utcnow(),
-            prompt=original.prompt,
-            model=original.model,
-            input_docs=original.input_docs,
-            input_documents_snapshot=original.input_documents_snapshot,
-            settings_snapshot=original.settings_snapshot,
-            input_fingerprint=original.input_fingerprint,
-            attempt=original.attempt + 1,
-            retry_of_run_id=original.id,
-        )
+        # Resume the same durable checkpoint and cost ledger for every retryable
+        # failure. A worker restart is not a new course or a new monthly launch.
+        original.status = GenerationRunStatus.QUEUED.value
+        original.cancel_requested = False
+        original.queued_at = datetime.utcnow()
+        original.finished_at = None
+        original.error = original.error_code = original.error_message = None
+        original.attempt += 1
         course.status = CourseStatus.GENERATING.value
-        db.add(retry)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            active = PipelineRepository.active_graph_run(
-                db, original.course_id, owner_id
-            )
-            if active is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"code": "generation_run_active", "message": "Генерация курса уже запущена", "run_id": active.id},
-                ) from exc
-            raise
-        db.refresh(retry)
-        return retry
+        db.commit()
+        return original
 
     @staticmethod
     def reindex_document(
@@ -472,6 +446,8 @@ class PipelineService:
 
             content = storage.read_bytes(document.storage_key)
             blocks = extract_blocks(content, document.mime_type)
+            if sum(len(block.text) for block in blocks) > settings.DOCUMENT_MAX_EXTRACTED_CHARS:
+                raise ValueError("Извлечённый текст превышает лимит; разделите документ")
             chunks = chunk_blocks(
                 blocks,
                 max_chars=settings.DOCUMENT_CHUNK_CHARS,
@@ -647,6 +623,8 @@ class PipelineService:
                 return existing
 
         if prepared_run is None:
+            from app.services.generation_preflight import require_preflight
+            require_preflight(documents, settings_snapshot)
             from app.services.organization_access import check_generation_limit
             check_generation_limit(db, owner_id)
         run = prepared_run or GenerationRun(
@@ -713,6 +691,8 @@ class PipelineService:
             locked_course = PipelineRepository.get_owned_course(
                 db, course_id, owner_id, for_update=True
             )
+            from app.services.generation_control import check_cancelled
+            check_cancelled(db, run.id)
             if locked_course is None:
                 raise ValueError("Курс был удалён во время генерации")
             graph = CourseGraph(
@@ -804,6 +784,14 @@ class PipelineService:
             if failed_course is not None:
                 failed_course.status = CourseStatus.GENERATION_FAILED.value
             from app.ai.providers import AIUnavailable
+            from app.services.generation_control import GenerationCancelled
+            if isinstance(exc, GenerationCancelled) and failed_run is not None:
+                failed_run.status = GenerationRunStatus.PAUSED.value
+                failed_run.error_code = "user_cancelled"
+                failed_run.error_message = str(exc)
+                failed_run.retryable = True
+                if failed_course is not None:
+                    failed_course.status = CourseStatus.READY.value if failed_course.current_graph else CourseStatus.CONFIGURED.value
             if isinstance(exc, AIUnavailable) and failed_run is not None:
                 from app.ai.offline import GENERATION_PAUSED
                 failed_run.status = GenerationRunStatus.PAUSED.value

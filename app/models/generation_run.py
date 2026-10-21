@@ -10,6 +10,7 @@ from sqlalchemy import (
     Text,
     DateTime,
     Boolean,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -26,6 +27,7 @@ JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 class GenerationRun(Base, BaseModelMixin):
     __tablename__ = "generation_runs"
     __table_args__ = (
+        UniqueConstraint("owner_id", "request_id", name="uq_generation_runs_owner_request"),
         CheckConstraint(
             "run_type IN ('document_index', 'graph_generation')",
             name="ck_generation_runs_type",
@@ -62,6 +64,7 @@ class GenerationRun(Base, BaseModelMixin):
     )
 
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    request_id = Column(String(64), nullable=True)
     course_id = Column(
         Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=True, index=True
     )
@@ -87,6 +90,7 @@ class GenerationRun(Base, BaseModelMixin):
     error_code = Column(String(64), nullable=True)
     error_message = Column(Text, nullable=True)
     retryable = Column(Boolean, nullable=False, default=False)
+    cancel_requested = Column(Boolean, nullable=False, default=False, server_default="false")
     attempt = Column(Integer, nullable=False, default=1)
     queued_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)

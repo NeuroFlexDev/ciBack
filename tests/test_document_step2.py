@@ -116,7 +116,7 @@ def test_public_status_mapping_filter_and_detail(
     assert set(detail.json()) == {
         "id", "course_id", "original_filename", "content_type", "size_bytes",
         "source_type", "version", "status", "error_message", "created_at",
-        "updated_at",
+        "updated_at", "extracted_characters", "chunk_count",
     }
 
     failed = client.get(

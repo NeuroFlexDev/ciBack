@@ -67,6 +67,23 @@ class Settings(BaseSettings):
     # Backward-compatible override for existing deployments. New environments
     # should use MAX_DOCUMENT_SIZE_MB.
     MAX_UPLOAD_BYTES: int | None = Field(default=None, gt=0)
+    DOCUMENT_MAX_UNPACKED_BYTES: int = Field(default=100 * 1024 * 1024, gt=0)
+    DOCUMENT_MAX_ARCHIVE_ENTRIES: int = Field(default=5000, gt=0)
+    DOCUMENT_MAX_PAGES: int = Field(default=1000, gt=0)
+    DOCUMENT_PROCESSING_TIMEOUT_SECONDS: int = Field(default=120, ge=1, le=600)
+    DOCUMENT_MAX_EXTRACTED_CHARS: int = Field(default=2_000_000, gt=0)
+    IMAGE_MAX_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
+    IMAGE_MAX_PIXELS: int = Field(default=20_000_000, gt=0)
+    IMAGE_PROVIDER: str = ""
+    IMAGE_MODEL: str = ""
+    IMAGE_MONTHLY_LIMIT: int = Field(default=50, ge=0)
+    AI_LOCAL_ONLY: bool = False
+    EMBEDDING_PROVIDER: str = "vsellm"
+    AI_CHAT_RETENTION_DAYS: int = Field(default=90, ge=1, le=3650)
+    AI_CHAT_MONTHLY_LIMIT: int = Field(default=1000, ge=0)
+    MAX_COURSE_MODULES: int = Field(default=100, ge=1)
+    MAX_COURSE_LESSONS: int = Field(default=500, ge=1)
+    MAX_LESSON_CONTENT_CHARS: int = Field(default=200_000, ge=1000)
     CHAT_HISTORY_MESSAGES: int = Field(default=20, gt=0, le=200)
     DOCUMENT_CHUNK_CHARS: int = Field(default=2000, ge=200, le=20000)
     DOCUMENT_CHUNK_OVERLAP_CHARS: int = Field(default=200, ge=0, le=5000)

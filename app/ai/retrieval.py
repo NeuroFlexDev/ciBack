@@ -5,6 +5,7 @@ import math
 from langchain_openai import OpenAIEmbeddings
 from sqlalchemy.orm import Session
 from app.ai import gateway
+from app.ai import providers
 from app.ai.evidence import rank_sources
 from app.core.config import settings
 from app.models.ai_state import ChunkEmbedding
@@ -15,8 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 def embedding_client():
+    provider = providers.registry().get(settings.EMBEDDING_PROVIDER)
+    if not provider or not providers.available(provider):
+        raise providers.AIUnavailable()
     return OpenAIEmbeddings(model=settings.AI_MODEL_EMBEDDING,
-        api_key=settings.VSELLM_API_KEY.get_secret_value(), base_url=settings.VSELLM_BASE_URL,
+        api_key=providers.credential(provider), base_url=str(provider.base_url),
         check_embedding_ctx_length=False, max_retries=0, request_timeout=10, chunk_size=16)
 
 
@@ -27,7 +31,7 @@ def persist_embeddings(db: Session, chunks: list) -> list[str]:
     missing = [chunk for chunk in chunks if chunk.id not in existing or
                existing[chunk.id].text_hash != hashlib.sha256(chunk.text.encode()).hexdigest()]
     lexical_ids = [f"chunk:{chunk.id}" for chunk in chunks]
-    if missing and "vsellm" not in gateway.available_provider_ids():
+    if missing and settings.EMBEDDING_PROVIDER not in gateway.available_provider_ids():
         return lexical_ids
     try:
         vectors = embedding_client().embed_documents([chunk.text for chunk in missing]) if missing else []
@@ -66,7 +70,7 @@ class PersistentVectorStore:
         scores = {item["id"]: 1 / (60 + i) for i, item in enumerate(lexical, 1)}
         rows = self.db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(by_id),
             ChunkEmbedding.model == settings.AI_MODEL_EMBEDDING).all()
-        if rows and not self.local_only and "vsellm" in gateway.available_provider_ids():
+        if rows and not self.local_only and settings.EMBEDDING_PROVIDER in gateway.available_provider_ids():
             try:
                 vector = embedding_client().embed_query(query)
                 norm = math.sqrt(sum(x*x for x in vector)) or 1

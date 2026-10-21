@@ -15,6 +15,8 @@ from app.core.http_security import SecurityMiddleware
 from app.routes import account
 from app.routes import legal
 app.add_middleware(SecurityMiddleware)
+from app.core.upload_limits import UploadBodyLimitMiddleware
+app.add_middleware(UploadBodyLimitMiddleware)
 from app.routes import administration
 app.include_router(administration.router, prefix="/api", tags=["Administration"])
 from app.routes import learning
@@ -22,6 +24,10 @@ app.include_router(learning.router, prefix="/api", tags=["Learning"])
 app.include_router(account.router, prefix="/api", tags=["Account"])
 app.include_router(legal.router, prefix="/api", tags=["Legal"])
 from app.routes import ai_workspace
+from app.routes import materials
+app.include_router(materials.router, prefix="/api", tags=["Materials"])
+from app.routes import learner_assistant
+app.include_router(learner_assistant.router, prefix="/api", tags=["Learner Assistant"])
 app.include_router(ai_workspace.router, prefix="/api", tags=["AI Workspace"])
 
 cors_origins = os.getenv(

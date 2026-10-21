@@ -1,85 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+"""Legacy endpoint retained only as an authenticated migration response."""
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database.db import get_db
-from app.models.course import Course
-from app.services.course_access import course_access_filter
-from app.models.user import User
-from app.services.generation_service import generate_from_prompt
 from app.services.auth_service import get_current_user
-import os
-import tempfile
-import fitz  # PyMuPDF
-from docx import Document
-
+from app.services.course_editor_service import CourseEditorService
 router = APIRouter()
 
-@router.post(
-    "/courses/{course_id}/upload-description",
-    summary="RAG: загрузка файла и обновление описания курса",
-    deprecated=True,
-)
-def upload_and_update_description(
-    course_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    # Проверка курса
-    course = db.query(Course).filter(
-        Course.id == course_id,
-        course_access_filter(current_user.id),
-        Course.is_deleted.is_(False),
-    ).first()
-    if not course:
-        raise HTTPException(404, detail="❌ Курс не найден")
-
-    # Сохраняем файл во временную папку
-    suffix = os.path.splitext(file.filename)[-1]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(file.file.read())
-        temp_path = tmp.name
-
-    try:
-        # Извлечение текста
-        extracted = extract_text(temp_path, file.content_type)
-
-        # Суммаризация через LLM
-        result = generate_from_prompt(
-            "rag_summary_prompt.j2",
-            course_title=course.name,
-            original_text=extracted
-        )
-
-        summary = result.get("summary")
-        if not summary:
-            raise HTTPException(500, "❌ Не удалось получить summary от LLM")
-
-        # Обновляем описание
-        course.description = summary
-        db.commit()
-
-        return {
-            "message": "✅ Описание курса обновлено на основе загруженного документа",
-            "summary": summary
-        }
-
-    finally:
-        os.remove(temp_path)
-
-def extract_text(file_path: str, content_type: str) -> str:
-    if content_type == "application/pdf":
-        text = ""
-        with fitz.open(file_path) as doc:
-            for page in doc:
-                text += page.get_text()
-        return text
-
-    elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        doc = Document(file_path)
-        return "\n".join(p.text for p in doc.paragraphs)
-
-    elif content_type == "text/plain":
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-
-    raise HTTPException(400, detail="❌ Неподдерживаемый тип файла")
+@router.post("/courses/{course_id}/upload-description", deprecated=True)
+def upload_and_update_description(course_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    CourseEditorService._course(db, course_id, user.id)
+    raise HTTPException(410, {"code": "legacy_upload_retired",
+        "message": "Загрузите источник через мастер курса. Этот старый путь не поддерживал версии, лимиты и проверку материалов.",
+        "upload_url": f"/api/courses/{course_id}/documents"})

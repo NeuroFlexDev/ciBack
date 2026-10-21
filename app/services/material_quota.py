@@ -1,0 +1,35 @@
+from fastapi import HTTPException
+from sqlalchemy import func, select
+from app.core.config import settings
+from app.models.materials import CourseImage, OrganizationMaterialPolicy
+from app.models.document import Document
+from app.models.user import User
+from app.services.organization_access import lock_org, member_ids
+
+
+def material_policy(db, user):
+    if user.organization_id:
+        row = db.get(OrganizationMaterialPolicy, user.organization_id)
+        if row:
+            return {name: getattr(row, name) for name in ("disk_bytes_limit", "image_monthly_limit", "chat_monthly_limit")}
+    return {"disk_bytes_limit": 5 * 1024**3, "image_monthly_limit": settings.IMAGE_MONTHLY_LIMIT,
+            "chat_monthly_limit": settings.AI_CHAT_MONTHLY_LIMIT}
+
+
+def used_disk_bytes(db, owner_ids):
+    # Archived versions remain on disk and count until retention safely deletes
+    # them. Soft-delete is not a way to bypass a real storage quota.
+    return (db.query(func.coalesce(func.sum(Document.size_bytes), 0)).filter(Document.owner_id.in_(owner_ids)).scalar()
+            + db.query(func.coalesce(func.sum(CourseImage.size_bytes), 0)).filter(CourseImage.owner_id.in_(owner_ids)).scalar())
+
+
+def check_storage(db, user, additional_bytes):
+    db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
+    owner_ids = [user.id]
+    if user.organization_id:
+        org = lock_org(db, user.organization_id)
+        if not org.is_active:
+            raise HTTPException(403, "Организация приостановлена")
+        owner_ids = member_ids(db, org.id)
+    if used_disk_bytes(db, owner_ids) + additional_bytes > material_policy(db, user)["disk_bytes_limit"]:
+        raise HTTPException(413, {"code": "storage_quota_exceeded", "message": "Недостаточно места в хранилище организации. Обратитесь к администратору."})

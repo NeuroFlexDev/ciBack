@@ -24,6 +24,9 @@ ENGINES: dict[str, Callable[[str | None], ChatEngine]] = {
 
 
 def get_chat_engine(name: str, model: str | None) -> ChatEngine:
+    from app.core.config import settings
+    if settings.AI_LOCAL_ONLY:
+        raise ValueError("Legacy external chat engines are disabled in local-only mode")
     if name not in ENGINES:
         raise ValueError(f"Unknown engine {name!r}")
     logger.debug("get_chat_engine: name=%s model=%s", name, model)

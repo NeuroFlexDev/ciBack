@@ -144,12 +144,12 @@ def test_retry_creates_new_run_from_immutable_snapshot(client, db_session, auth_
     assert response.status_code == 202
     retry = db_session.get(GenerationRun, response.json()["run_id"])
     assert queued == [retry.id]
-    assert retry.id != original.id
-    assert retry.retry_of_run_id == original.id
+    assert retry.id == original.id
+    assert retry.retry_of_run_id is None
     assert retry.attempt == 2
     assert retry.settings_snapshot == original.settings_snapshot
     assert retry.input_documents_snapshot == snapshot
-    assert original.status == "failed"
+    assert original.status == "queued"
 
 
 def test_retry_rejects_nonretryable_and_changed_document(client, db_session, auth_user, auth_headers):
@@ -199,7 +199,7 @@ def test_retry_queue_failure_preserves_paused_attempt(client, db_session, auth_u
     response = client.post(f"/api/generation-runs/{original.id}/retry", headers=auth_headers)
 
     assert response.status_code == 202
-    retry = db_session.query(GenerationRun).filter_by(retry_of_run_id=original.id).one()
+    retry = db_session.get(GenerationRun, original.id)
     assert (retry.status, retry.error_code, retry.retryable) == (
         "paused", "queue_unavailable", True
     )

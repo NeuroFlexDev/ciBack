@@ -19,7 +19,10 @@ def _document(db, course, owner, *, status="indexed"):
     item = Document(storage_key="doc.txt", owner_id=owner.id, course_id=course.id,
                     version=1, status=status, content_hash="hash", source_type="upload",
                     original_filename="doc.txt", mime_type="text/plain", size_bytes=4)
-    db.add(item); db.commit(); db.refresh(item)
+    db.add(item); db.flush()
+    if status == "indexed":
+        item.chunks.append(DocumentChunk(document_id=item.id, document_version=1, text="Validated source context", chunk_index=0, metadata_json={}))
+    db.commit(); db.refresh(item)
     return item
 
 
@@ -81,7 +84,6 @@ def test_queue_failure_preserves_paused_run(client, db_session, auth_user, auth_
 def test_worker_executes_prepared_run(db_session, auth_user, monkeypatch):
     course = make_course(db_session, owner_id=auth_user.id)
     document = _document(db_session, course, auth_user)
-    document.chunks.append(DocumentChunk(document_id=document.id, document_version=1, text="Context", chunk_index=0, metadata_json={}))
     db_session.add(CourseGenerationSettings(course_id=course.id, goal="Goal", difficulty="basic", language="en", lesson_count=1, module_tests_enabled=False, final_test_enabled=False, created_by=auth_user.id, updated_by=auth_user.id))
     course.status = "configured"; db_session.commit()
     run = __import__("app.services.pipeline_service", fromlist=["PipelineService"]).PipelineService.prepare_graph_generation(

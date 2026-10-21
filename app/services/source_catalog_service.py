@@ -19,7 +19,7 @@ def build_source_catalog(documents: Iterable[Any], *, max_chars: int) -> list[di
 
     queues: list[deque[tuple[Any, Any]]] = []
     for document in sorted(documents, key=lambda item: (item.id, item.version)):
-        chunks = sorted(document.chunks, key=lambda item: item.chunk_index)
+        chunks = sorted((chunk for chunk in document.chunks if not getattr(chunk, "is_deleted", False)), key=lambda item: item.chunk_index)
         if chunks:
             queues.append(deque((document, chunk) for chunk in chunks))
 

@@ -125,6 +125,8 @@ class AgentRuntime:
         validator: Callable[[ArtifactModel], None] | None = None,
         normalize_response: Callable[[dict], dict] | None = None,
     ) -> ArtifactModel:
+        from app.services.generation_control import check_cancelled
+        check_cancelled(self.db, self.run_id)
         policy = model_policy(agent)
         live = gateway.configured() or settings.ENV != "test"
         output_limit = policy.max_output_tokens if live else max_tokens
@@ -161,6 +163,7 @@ class AgentRuntime:
         excluded_models: set[str] = set()
         min_tier = 0
         for attempt in range(1, self.max_attempts + 1):
+            check_cancelled(self.db, self.run_id)
             attempt_started = time.perf_counter()
             use_fallback = attempt > 1 and (attempt == self.max_attempts or not isinstance(last_error, (ValidationError, ValueError)))
             call = None

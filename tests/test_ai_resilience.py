@@ -187,8 +187,7 @@ def test_real_worker_without_providers_preserves_a_resumable_run(db_session, aut
     from app.workers.generation import execute_generation_run
     course = make_course(db_session, owner_id=auth_user.id)
     document = _document(db_session, course, auth_user)
-    document.chunks.append(DocumentChunk(document_id=document.id, document_version=1,
-        text="Перед работой проверьте состояние оборудования.", chunk_index=0, metadata_json={}))
+    document.chunks[0].text = "Перед работой проверьте состояние оборудования."
     db_session.add(CourseGenerationSettings(course_id=course.id, goal="Safe operation", difficulty="basic",
         language="ru", lesson_count=1, module_tests_enabled=False, final_test_enabled=False,
         created_by=auth_user.id, updated_by=auth_user.id))

@@ -1,4 +1,5 @@
 from .administration import Organization, Invitation, AdminEvent
+from .materials import CourseImage, LearnerAssistantMessage, OrganizationMaterialPolicy, ScopedAIUsage
 from .approval import Approval
 from .account import PasswordReset
 from .legal import LegalReceipt, LegalRequest

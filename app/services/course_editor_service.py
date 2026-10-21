@@ -18,6 +18,7 @@ from app.models.test_version import TestVersion
 from app.models.theory import Theory
 from app.schemas.course_editor import OrderItem
 from app.services.course_publication_service import CoursePublicationService
+from app.core.config import settings
 
 
 def _not_found(label: str = "Object") -> HTTPException:
@@ -87,6 +88,8 @@ class CourseEditorService:
     @staticmethod
     def create_module(db: Session, course_id: int, owner_id: int, title: str, description: str = "") -> Module:
         course = CourseEditorService._course(db, course_id, owner_id, True)
+        if db.query(Module).filter_by(course_id=course_id, is_deleted=False).count() >= settings.MAX_COURSE_MODULES:
+            raise HTTPException(422, "Достигнут лимит модулей курса")
         CoursePublicationService.prepare_for_edit(course)
         position = db.query(func.coalesce(func.max(Module.position), -1)).filter(Module.course_id == course_id, Module.is_deleted.is_(False)).scalar() + 1
         item = Module(course_id=course_id, title=title, description=description, position=position, revision=1)
@@ -103,6 +106,11 @@ class CourseEditorService:
 
     @staticmethod
     def create_lesson(db: Session, course_id: int, module_id: int, owner_id: int, title: str, description: str, content: str) -> Lesson:
+        CourseEditorService._course(db, course_id, owner_id, True)
+        if db.query(Lesson).join(Module).filter(Module.course_id == course_id, Lesson.is_deleted.is_(False), Module.is_deleted.is_(False)).count() >= settings.MAX_COURSE_LESSONS:
+            raise HTTPException(422, "Достигнут лимит уроков курса")
+        if len(content) > settings.MAX_LESSON_CONTENT_CHARS:
+            raise HTTPException(413, "Содержание урока превышает лимит")
         module = CourseEditorService._module(db, module_id, owner_id, True)
         if module.course_id != course_id: raise _not_found("Module")
         CoursePublicationService.prepare_for_edit(module.course)
@@ -117,6 +125,8 @@ class CourseEditorService:
         for field in ("title", "description"):
             if field in data and data[field] is not None: setattr(item, field, data[field])
         if "content" in data and data["content"] is not None:
+            if len(data["content"]) > settings.MAX_LESSON_CONTENT_CHARS:
+                raise HTTPException(413, "Содержание урока превышает лимит")
             if item.theory: item.theory.content, item.theory.is_deleted = data["content"], False
             else: db.add(Theory(lesson_id=item.id, content=data["content"]))
         item.revision += 1; db.flush(); CourseEditorService._lesson_snapshot(db, item, owner_id); db.commit(); db.refresh(item); return item
