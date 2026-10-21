@@ -37,17 +37,22 @@ args=sys.argv[1:]
 root=Path(os.environ['TEST_ROOT']);deploy=root/'deploy'
 with (root/'commands.jsonl').open('a') as log:log.write(json.dumps({'args':args,'image':(deploy/'.images.env').read_text()})+'\\n')
 if args[0]=='login':sys.stdin.read();raise SystemExit(0)
+if args[0]=='run':raise SystemExit(1 if os.environ.get('OLD_LACKS_MFA')=='1' else 0)
 assert args.pop(0)=='compose'
 while args and args[0].startswith('--'):args=args[2:]
 action=args[0]
 if action=='config':
  names=['backend','worker']+(['outbox'] if (deploy/'docker-compose.yml').read_text()=='new-profile' else [])
  services={name:{'image':'same-backend','restart':'unless-stopped','healthcheck':{'test':['CMD','health']}} for name in names}
+ services['backend']['environment']={'MFA_REQUIRED_FOR_OPERATORS':os.environ.get('MFA_REQUIRED','false')}
  services['migrate']={'image':'same-backend','restart':'no'}
  print(json.dumps({'services':services}))
 elif action=='ps':print('backend\\nworker')
 elif action=='up' and 'outbox' in args and os.environ.get('FAIL_ROLLOUT')=='1':raise SystemExit(1)
-elif action=='exec':print('synthetic database dump')
+elif action=='exec':
+ if 'to_regclass' in args[-1]:print('user_mfa' if os.environ.get('MFA_ENROLLED')=='1' else '')
+ elif 'SELECT EXISTS' in args[-1]:print('t' if os.environ.get('MFA_ENROLLED')=='1' else 'f')
+ else:print('synthetic database dump')
 ''')
         self.executable('curl','#!/bin/sh\nexit 0\n')
         # Only the root ownership invariant is bypassed in this isolated unprivileged CI test.
@@ -89,6 +94,26 @@ elif action=='exec':print('synthetic database dump')
         self.assertNotIn('outbox',commands[rollback_up])
         self.assertIn('--wait',commands[rollback_up])
         self.assertNotIn('Deployed backend',result.stdout)
+
+    def test_rollback_cannot_remove_an_enrolled_second_factor(self):
+        self.env.update(FAIL_ROLLOUT='1',MFA_ENROLLED='1',OLD_LACKS_MFA='1')
+        result=self.execute()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('Refusing rollback',result.stderr)
+        self.assertIn('operator recovery required',result.stderr)
+        self.assertIn(self.new,(self.deploy/'.images.env').read_text())
+        commands=self.commands()
+        stop=next(i for i,args in enumerate(commands) if 'stop' in args and 'backend' in args)
+        probe=next(i for i,args in enumerate(commands) if args[0]=='run')
+        self.assertLess(stop,probe)
+        self.assertFalse(any('up' in args for args in commands[probe+1:]))
+
+    def test_rollback_cannot_remove_operator_enforcement_before_enrollment(self):
+        self.env.update(FAIL_ROLLOUT='1',MFA_REQUIRED='true',OLD_LACKS_MFA='1')
+        result=self.execute()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('Refusing rollback',result.stderr)
+        self.assertIn(self.new,(self.deploy/'.images.env').read_text())
 
 
 if __name__=='__main__':unittest.main()

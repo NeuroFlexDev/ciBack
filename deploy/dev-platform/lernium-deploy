@@ -150,6 +150,12 @@ deploy_current_image() {
 
 rollback() {
     printf 'Health check failed; rolling %s back to %s\n' "${component}" "${previous_image}" >&2
+    if [[ "$component" == backend ]]; then
+        # Freeze enrollment before checking compatibility: otherwise a user can
+        # enable MFA after the query and be rolled back to password-only code.
+        compose stop --timeout 30 backend || return 1
+        rollback_auth_compatible || return 1
+    fi
     set_image "${image_variable}" "${previous_image}"
     case "${component}" in
         backend)
@@ -177,6 +183,26 @@ rollback() {
             if [[ "$edge_mode" == caddy ]]; then compose up -d --no-deps --force-recreate caddy; fi
             ;;
     esac
+}
+
+rollback_auth_compatible() {
+    local table enabled enforced
+    table="$(compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT to_regclass('\''public.user_mfa'\'')"')" || return 1
+    enabled=false
+    if [[ -n "$table" ]]; then
+        [[ "$table" == user_mfa || "$table" == public.user_mfa ]] || return 1
+        enabled="$(compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT EXISTS (SELECT 1 FROM user_mfa WHERE enabled)"')" || return 1
+        [[ "$enabled" == t || "$enabled" == f ]] || return 1
+    fi
+    enforced="$(compose config --format json | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["services"]["backend"].get("environment",{}).get("MFA_REQUIRED_FOR_OPERATORS","false")).lower())')" || return 1
+    if [[ "$enabled" == t || "$enforced" == true || "$enforced" == 1 ]]; then
+        if ! docker run --rm --network none --read-only --memory 128m --cpus .5 --pids-limit 64 \
+            --cap-drop ALL --security-opt no-new-privileges:true --entrypoint python "$previous_image" \
+            -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.services.mfa_service") else 1)'; then
+            printf 'Refusing rollback: previous backend lacks MFA while enrolled users or operator enforcement exist. Candidate image reference is retained; operator recovery is required.\n' >&2
+            return 1
+        fi
+    fi
 }
 
 exec 9>"/opt/lernium/.deploy.lock"
