@@ -195,7 +195,7 @@ def build_publication_snapshot(db, course, modules):
     for module in modules:
         data['modules'].append({
             'id': module.id, 'title': module.title, 'description': module.description or '',
-            'lessons': [{'id': l.id, 'title': l.title, 'description': l.description or '', 'content': l.theory.content}
+            'lessons': [{'id': l.id, 'title': l.title, 'description': l.description or '', 'content': l.theory.content if l.theory and not l.theory.is_deleted else ''}
                         for l in sorted(module.lessons, key=lambda x: (x.position, x.id)) if not l.is_deleted],
             'assessments': [_assessment(db, t, 'test') for t in sorted(module.tests, key=lambda x: (x.position, x.id)) if not t.is_deleted]
                            + [_assessment(db, t, 'task') for t in sorted(module.tasks, key=lambda x: x.id) if not t.is_deleted],
@@ -211,7 +211,7 @@ def validate_assessment_publication(db, course, modules):
     for item in assessments(build_publication_snapshot(db, course, modules)):
         try:
             AssessmentInput.model_validate({k: item[k] for k in ['question_type', 'correct_answers', 'max_points', 'grading_mode']} | {
-                'criteria': [{k: v for k, v in criterion.items() if k in {'id', 'title', 'description', 'max_points'}} for criterion in item['criteria']]})
+                'criteria': item['criteria']})
             if item['question_type'] != 'open' and (not item['answers'] or len(set(item['answers'])) != len(item['answers']) or any(answer not in item['answers'] for answer in item['correct_answers'])):
                 raise ValueError('Укажите разные варианты и правильный ответ из их числа')
         except (ValidationError, ValueError, TypeError, KeyError):

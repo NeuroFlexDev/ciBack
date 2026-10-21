@@ -883,10 +883,40 @@ def repeat_program(enrollment_id: int, db: Session = Depends(get_db), user: User
     return enrollment_out(db, row)
 
 
+@router.get('/learning/course-reviews')
+def course_review_queue(after_id: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100),
+                        db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = svc.organization(user)
+    allowed = [g.scope_id for g in svc.role_grants(db, user) if g.role == 'reviewer' and g.scope_type == 'course']
+    rows = db.query(Course).filter(Course.organization_id == org_id, Course.is_deleted.is_(False),
+        Course.id.in_(allowed), Course.id > after_id, Course.owner_id != user.id).order_by(Course.id).limit(limit + 1).all()
+    return {'items': [{'id': row.id, 'title': row.name, 'revision': row.content_revision, 'status': row.status} for row in rows[:limit]],
+            'next_cursor': rows[limit-1].id if len(rows) > limit else None}
+
+
+@router.get('/courses/{course_id}/approvals')
+def publication_approvals(course_id: int, before_id: int | None = Query(default=None, gt=0),
+                          db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    course = svc.org_course(db, user, course_id)
+    if course.is_deleted or not (course.owner_id == user.id or svc.can_scope(db, user, 'author', course_id=course.id)
+                                or svc.can_scope(db, user, 'reviewer', course_id=course.id)):
+        raise HTTPException(404, 'Курс не найден')
+    modules = sorted((item for item in course.modules if not item.is_deleted), key=lambda item: (item.position, item.id))
+    digest = svc.content_digest(svc.build_publication_snapshot(db, course, modules))
+    query = db.query(LearningPublicationApproval).filter_by(course_id=course.id, organization_id=course.organization_id)
+    if before_id:
+        query = query.filter(LearningPublicationApproval.id < before_id)
+    rows = query.order_by(LearningPublicationApproval.id.desc()).limit(51).all()
+    return {'required': bool(svc.settings_for(db, course.organization_id).rules.get('require_independent_approval')),
+            'content_digest': digest, 'items': [{k: getattr(row, k) for k in
+                ['id', 'reviewer_id', 'decision', 'revision', 'content_digest', 'comment', 'created_at']} for row in rows[:50]],
+            'next_cursor': rows[49].id if len(rows) > 50 else None}
+
+
 @router.get('/courses/{course_id}/review-content')
 def review_content(course_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     course = svc.org_course(db, user, course_id)
-    if not svc.can_scope(db, user, 'reviewer', course_id=course.id):
+    if course.is_deleted or not svc.can_scope(db, user, 'reviewer', course_id=course.id):
         raise HTTPException(403, 'Нет назначения на согласование этого курса')
     from app.services.course_publication_service import CoursePublicationService
     modules, _ = CoursePublicationService._validate(course, db)
@@ -903,6 +933,10 @@ def approve_publication(course_id: int, payload: PublicationApprovalInput, db: S
     content = review_content(course_id, db, user)
     if content['content_digest'] != payload.content_digest:
         raise HTTPException(409, 'Содержание изменилось после открытия проверки. Сравните новую версию.')
+    latest = db.query(LearningPublicationApproval).filter_by(course_id=course.id, organization_id=course.organization_id,
+        content_digest=payload.content_digest).order_by(LearningPublicationApproval.id.desc()).first()
+    if latest and latest.reviewer_id == user.id and latest.decision == payload.decision and latest.comment == payload.comment:
+        return {'id': latest.id, 'decision': latest.decision, 'revision': latest.revision, 'content_digest': latest.content_digest}
     row = LearningPublicationApproval(course_id=course.id, organization_id=course.organization_id, content_digest=payload.content_digest,
         revision=course.content_revision, reviewer_id=user.id, decision=payload.decision, comment=payload.comment)
     db.add(row)

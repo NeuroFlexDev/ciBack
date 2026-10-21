@@ -78,11 +78,24 @@ class RoleInput(StrictInput):
     scope_id: int = Field(default=0, ge=0)
 
 
+class CriterionLevel(StrictInput):
+    title: str = Field(default='', max_length=500)
+    description: str = Field(default='', max_length=5000)
+    points: float = Field(ge=0, le=10000, allow_inf_nan=False)
+
+
 class Criterion(StrictInput):
     id: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=500)
-    max_points: float = Field(gt=0, le=10000)
+    max_points: float = Field(gt=0, le=10000, allow_inf_nan=False)
     description: str = Field(default='', max_length=5000)
+    levels: list[CriterionLevel] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode='after')
+    def levels_within_scale(self):
+        if any(level.points > self.max_points for level in self.levels):
+            raise ValueError('Балл уровня не может превышать максимум критерия')
+        return self
 
 
 class AssessmentInput(StrictInput):
