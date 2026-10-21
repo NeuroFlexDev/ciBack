@@ -71,6 +71,17 @@ class PersonInput(StrictInput):
     external_id: str | None = Field(default=None, max_length=200)
     attributes: dict[str, str] = Field(default_factory=dict)
 
+    @field_validator('attributes', mode='before')
+    @classmethod
+    def bounded_attributes(cls, value):
+        if not isinstance(value, dict) or any(not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()):
+            raise ValueError('Дополнительные поля должны содержать строковые названия и значения')
+        if len(value) > 50 or any(not key.strip() or len(key) > 80 or len(item) > 2000 for key, item in value.items()):
+            raise ValueError('Дополнительные поля: не более 50, название до 80 и значение до 2000 символов')
+        if len({key.strip() for key in value}) != len(value):
+            raise ValueError('Названия дополнительных полей не должны повторяться')
+        return {key.strip(): item for key, item in value.items()}
+
 
 class RoleInput(StrictInput):
     role: Literal['admin', 'author', 'reviewer', 'manager', 'member']
@@ -124,6 +135,7 @@ class AssessmentInput(StrictInput):
 
 
 class AssignmentInput(StrictInput):
+    expected_rules_revision: int | None = Field(default=None, ge=1)
     user_ids: list[int] = Field(default_factory=list, max_length=1000)
     group_ids: list[int] = Field(default_factory=list, max_length=100)
     course_version_id: int | None = Field(default=None, gt=0)

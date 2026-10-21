@@ -478,6 +478,8 @@ def assign_course(course_id: int, payload: AssignmentInput, db: Session = Depend
         raise HTTPException(409, 'Сначала опубликуйте курс')
     svc.snapshot_for(db, version.id)
     config = svc.settings_for(db, org_id)
+    if payload.expected_rules_revision is not None and config.revision != payload.expected_rules_revision:
+        raise HTTPException(409, 'Правила организации изменились. Обновите их и подтвердите назначение повторно.')
     if config.features.get('learning') is False:
         raise HTTPException(403, 'Обучение не включено в поставку организации')
     rules = LearningRules.model_validate(config.rules).model_dump()
