@@ -485,7 +485,10 @@ def assign_course(course_id: int, payload: AssignmentInput, db: Session = Depend
     rules = LearningRules.model_validate(config.rules).model_dump()
     if set(payload.rule_overrides) - set(rules['assignment_overrides']):
         raise HTTPException(403, 'Переопределение этих правил запрещено настройками организации')
-    rules = LearningRules.model_validate({**rules, **payload.rule_overrides}).model_dump()
+    try:
+        rules = LearningRules.model_validate({**rules, **payload.rule_overrides}).model_dump()
+    except ValueError:
+        raise HTTPException(422, 'Проверьте исключения: число попыток от 1 до 100, проходной результат от 0 до 100 и допустимый режим открытия ответов.') from None
     target_groups = [svc.group(db, org_id, gid) for gid in sorted(set(payload.group_ids))]
     targets = {uid: None for uid in set(payload.user_ids)}
     for g in target_groups:

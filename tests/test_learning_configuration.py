@@ -20,6 +20,8 @@ def test_assignment_rejects_stale_rules_and_freezes_allowed_overrides(client, db
     assert client.post(path, headers=headers(world['owner']), json=payload).status_code == 409
     assert db_session.query(LearningAssignment).count() == 0
     payload['expected_rules_revision'] = config.revision
+    assert client.post(path, headers=headers(world['owner']), json={**payload, 'rule_overrides': {'max_attempts': 0}}).status_code == 422
+    assert db_session.query(LearningAssignment).count() == 0
     result=client.post(path, headers=headers(world['owner']), json=payload)
     assert result.status_code == 201, result.text
     assignment=db_session.get(LearningAssignment, result.json()['items'][0]['id'])
