@@ -59,7 +59,9 @@ jobs:
         run: python -m compileall -q app main.py
 
       - name: Validate deployment scripts
-        run: bash -n deploy/dev-platform/bootstrap.sh deploy/dev-platform/lernium-deploy
+        run: |
+          bash -n deploy/dev-platform/bootstrap.sh
+          bash -n deploy/dev-platform/lernium-deploy
 
       - name: Validate Caddy configuration
         run: |
