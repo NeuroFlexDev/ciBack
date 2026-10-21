@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.models.agent_artifact import AgentArtifact
 from app.models.course import Course
+from app.services.course_access import course_access_filter, related_course_access
 from app.models.course_graph import CourseGraph
 from app.models.course_generation_settings import CourseGenerationSettings
 from app.models.course_source_link import CourseSourceLink
@@ -34,7 +35,7 @@ class PipelineRepository:
             .join(Course, Course.id == Document.course_id)
             .filter(
                 Document.id == document_id,
-                Document.owner_id == owner_id,
+                related_course_access(Document.course_id, owner_id),
                 Document.is_deleted.is_(False),
                 Course.is_deleted.is_(False),
             )
@@ -47,7 +48,7 @@ class PipelineRepository:
     ) -> Course | None:
         query = db.query(Course).filter(
             Course.id == course_id,
-            Course.owner_id == owner_id,
+            course_access_filter(owner_id),
             Course.is_deleted.is_(False),
         )
         if for_update:
@@ -62,7 +63,7 @@ class PipelineRepository:
             db.query(GenerationRun)
             .filter(
                 GenerationRun.id == run_id,
-                GenerationRun.owner_id == owner_id,
+                related_course_access(GenerationRun.course_id, owner_id),
                 GenerationRun.is_deleted.is_(False),
             )
             .first()
@@ -76,7 +77,7 @@ class PipelineRepository:
             db.query(Document)
             .filter(
                 Document.course_id == course_id,
-                Document.owner_id == owner_id,
+                related_course_access(Document.course_id, owner_id),
                 Document.status == "indexed",
                 Document.is_current.is_(True),
                 Document.is_deleted.is_(False),
@@ -94,7 +95,7 @@ class PipelineRepository:
             .filter(
                 Document.id.in_(document_ids),
                 Document.course_id == course_id,
-                Document.owner_id == owner_id,
+                related_course_access(Document.course_id, owner_id),
                 Document.status == "indexed",
                 Document.is_current.is_(True),
                 Document.is_deleted.is_(False),
@@ -115,7 +116,7 @@ class PipelineRepository:
             .filter(
                 Document.id.in_(ids),
                 Document.course_id == course_id,
-                Document.owner_id == owner_id,
+                related_course_access(Document.course_id, owner_id),
                 Document.status == "indexed",
                 Document.is_deleted.is_(False),
             )
@@ -139,7 +140,7 @@ class PipelineRepository:
             db.query(GenerationRun)
             .filter(
                 GenerationRun.course_id == course_id,
-                GenerationRun.owner_id == owner_id,
+                related_course_access(GenerationRun.course_id, owner_id),
                 GenerationRun.run_type == "graph_generation",
                 GenerationRun.status.in_(("queued", "running")),
                 GenerationRun.is_deleted.is_(False),
@@ -176,7 +177,7 @@ class PipelineRepository:
                     "source": document.original_filename,
                     "source_type": document.source_type,
                     "owner_id": document.owner_id,
-                    "organization_id": None,
+                    "organization_id": db.get(Course, document.course_id).organization_id,
                     "course_id": document.course_id,
                 },
                 chunk_index=chunk["chunk_index"],
@@ -194,7 +195,7 @@ class PipelineRepository:
         return (
             db.query(GenerationRun)
             .filter(
-                GenerationRun.owner_id == owner_id,
+                related_course_access(GenerationRun.course_id, owner_id),
                 GenerationRun.course_id == course_id,
                 GenerationRun.run_type == "graph_generation",
                 GenerationRun.status.in_(("succeeded", "completed")),

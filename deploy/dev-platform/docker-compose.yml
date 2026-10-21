@@ -19,6 +19,7 @@ x-backend-environment: &backend-environment
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-https://dev.platform.lernium.ru}
   AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
   AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-20}
+  AUTH_RATE_LIMIT_PER_IP_MINUTE: ${AUTH_RATE_LIMIT_PER_IP_MINUTE:-1800}
   CORS_ORIGINS: ${CORS_ORIGINS:-https://dev.platform.lernium.ru}
   UPLOAD_DIR: /data/uploads
   MAX_DOCUMENT_SIZE_MB: "25"
@@ -35,8 +36,33 @@ x-backend-environment: &backend-environment
   SMTP_PASS: ${SMTP_PASS:-}
   SMTP_FROM: ${SMTP_FROM:-}
   SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+  DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+  MFA_REQUIRED_FOR_OPERATORS: ${MFA_REQUIRED_FOR_OPERATORS:-false}
+  MFA_STEP_UP_SECONDS: ${MFA_STEP_UP_SECONDS:-600}
+  INTEGRATION_PRIVATE_HOSTS: ${INTEGRATION_PRIVATE_HOSTS:-}
+  YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+  YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
   VSELLM_API_KEY: ${VSELLM_API_KEY:-}
   VSELLM_BASE_URL: ${VSELLM_BASE_URL:-https://api.vsellm.ru/v1}
+  AI_LOCAL_ONLY: ${AI_LOCAL_ONLY:-false}
+  IMAGE_PROVIDER: ${IMAGE_PROVIDER:-}
+  IMAGE_MODEL: ${IMAGE_MODEL:-}
+  IMAGE_PRICE_RUB: ${IMAGE_PRICE_RUB:-}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-vsellm}
+  EMBEDDING_RUB_PER_MILLION: ${EMBEDDING_RUB_PER_MILLION:-}
+  AI_ORG_QUEUED_LIMIT: ${AI_ORG_QUEUED_LIMIT:-8}
+  AI_INSTALL_QUEUED_LIMIT: ${AI_INSTALL_QUEUED_LIMIT:-64}
+  AI_ORG_BACKGROUND_LIMIT: ${AI_ORG_BACKGROUND_LIMIT:-2}
+  AI_INSTALL_BACKGROUND_LIMIT: ${AI_INSTALL_BACKGROUND_LIMIT:-4}
+  AI_ORG_INTERACTIVE_LIMIT: ${AI_ORG_INTERACTIVE_LIMIT:-4}
+  AI_INSTALL_INTERACTIVE_LIMIT: ${AI_INSTALL_INTERACTIVE_LIMIT:-16}
+  AI_ORG_MONTHLY_TOKENS: ${AI_ORG_MONTHLY_TOKENS:-20000000}
+  AI_INSTALL_MONTHLY_TOKENS: ${AI_INSTALL_MONTHLY_TOKENS:-200000000}
+  AI_ORG_MONTHLY_OCR_PAGES: ${AI_ORG_MONTHLY_OCR_PAGES:-10000}
+  AI_INSTALL_MONTHLY_OCR_PAGES: ${AI_INSTALL_MONTHLY_OCR_PAGES:-100000}
+  AI_ORG_MONTHLY_RUB: ${AI_ORG_MONTHLY_RUB:-10000}
+  AI_INSTALL_MONTHLY_RUB: ${AI_INSTALL_MONTHLY_RUB:-100000}
+  AI_MAX_RUB_PER_RUN: ${AI_MAX_RUB_PER_RUN:-1000}
   AI_MODEL_FAST: ${AI_MODEL_FAST:-openai/gpt-5.4-mini}
   AI_MODEL_REASONING: ${AI_MODEL_REASONING:-openai/gpt-5.4-mini}
   AI_MODEL_WRITER: ${AI_MODEL_WRITER:-openai/gpt-5.4-mini}
@@ -145,7 +171,7 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/healthz', timeout=5)
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/readiness', timeout=5)
       interval: 15s
       timeout: 7s
       retries: 10
@@ -172,6 +198,12 @@ services:
     environment: *backend-environment
     volumes:
       - uploads_data:/data/uploads
+    healthcheck:
+      test: ["CMD", "python", "-m", "scripts.worker_health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -191,6 +223,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  outbox:
+    logging: *logging
+    image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    command: ["python", "-m", "app.workers.outbox"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; import time; assert time.time()-Path('/tmp/lernium-outbox-heartbeat').stat().st_mtime<120"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    environment: *backend-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   db:
     logging: *logging

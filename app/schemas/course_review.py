@@ -29,6 +29,7 @@ class ModuleTimelineItem(BaseModel):
 
 class CourseReviewStructure(BaseModel):
     course_id: int
+    content_revision: int = 1
     title: str
     description: str
     status: ReviewStatus
@@ -63,6 +64,7 @@ class ReviewTask(BaseModel):
     module_id: int
     name: str
     description: str
+    revision: int
     updated_at: datetime
 
 

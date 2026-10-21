@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.course_generation_settings import CourseGenerationSettings
 
 
@@ -11,7 +12,7 @@ class CourseGenerationSettingsRepository:
     ) -> Course | None:
         query = db.query(Course).filter(
             Course.id == course_id,
-            Course.owner_id == owner_id,
+            course_access_filter(owner_id),
             Course.is_deleted.is_(False),
         )
         if for_update:

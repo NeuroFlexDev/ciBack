@@ -9,6 +9,7 @@ psycopg2-binary
 jinja2
 python-docx
 PyMuPDF
+Pillow==13.0.0
 faiss-cpu
 langchain-core
 PyJWT>=2.10,<3
@@ -23,3 +24,4 @@ langgraph-checkpoint-postgres==3.1.2
 psycopg[binary,pool]>=3.2,<4
 huggingface-hub>=1,<2
 networkx>=3.4,<4
+cryptography>=46,<51

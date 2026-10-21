@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.course_version import CourseVersion
 from app.models.lesson import Lesson
 from app.models.lesson_version import LessonVersion
@@ -18,15 +19,15 @@ router = APIRouter()
 
 def _owned(db, model, item_id, owner_id):
     if model is Module:
-        return db.query(Module).join(Course).filter(Module.id == item_id, Course.owner_id == owner_id).first()
+        return db.query(Module).join(Course).filter(Module.id == item_id, course_access_filter(owner_id)).first()
     if model is Lesson:
-        return db.query(Lesson).join(Module).join(Course).filter(Lesson.id == item_id, Course.owner_id == owner_id).first()
-    return db.query(Test).outerjoin(Module, Test.module_id == Module.id).join(Course, (Module.course_id == Course.id) | (Test.course_id == Course.id)).filter(Test.id == item_id, Course.owner_id == owner_id).first()
+        return db.query(Lesson).join(Module).join(Course).filter(Lesson.id == item_id, course_access_filter(owner_id)).first()
+    return db.query(Test).outerjoin(Module, Test.module_id == Module.id).join(Course, (Module.course_id == Course.id) | (Test.course_id == Course.id)).filter(Test.id == item_id, course_access_filter(owner_id)).first()
 
 
 @router.get("/versions/course/{course_id}")
 def get_course_versions(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    if not db.query(Course).filter(Course.id == course_id, Course.owner_id == current_user.id).first(): raise HTTPException(404, "Course not found")
+    if not db.query(Course).filter(Course.id == course_id, course_access_filter(current_user.id)).first(): raise HTTPException(404, "Course not found")
     return db.query(CourseVersion).filter(CourseVersion.course_id == course_id).order_by(CourseVersion.created_at.desc()).all()
 
 

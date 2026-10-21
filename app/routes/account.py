@@ -1,8 +1,9 @@
 import hashlib
 import secrets
+from typing import Literal
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -31,6 +32,7 @@ class PasswordChange(BaseModel):
 
 class ResetRequest(BaseModel):
     email: str = Field(min_length=5, max_length=255)
+    locale: Literal["ru", "en"] = "ru"
 
 
 class ResetConfirm(BaseModel):
@@ -49,10 +51,14 @@ def profile(payload: ProfileUpdate, db: Session = Depends(get_db), user: User = 
 
 
 @router.post("/change-password")
-def password(payload: PasswordChange, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def password(payload: PasswordChange, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from app.services.mfa_service import authenticated_factor
+    authenticated_factor(db,user,request.state.auth_claims)
     AuthService.change_password(db, user, payload.old_password, payload.new_password)
+    from app.services.mfa_service import preserve_token
+    result={"access_token": preserve_token(user,request.state.auth_claims), "token_type": "bearer"}
     db.commit()
-    return {"access_token": create_access_token(user.id, user.auth_version), "token_type": "bearer"}
+    return result
 
 
 @router.post("/auth/logout-all")
@@ -71,15 +77,10 @@ def reset_request(payload: ResetRequest, db: Session = Depends(get_db)):
         raw = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw.encode()).hexdigest()
         db.add(PasswordReset(token_hash=token_hash, user_id=user.id, expires_at=datetime.utcnow() + timedelta(minutes=30)))
-        db.commit()
         url = settings.PUBLIC_APP_URL.rstrip('/') + '/reset-password#token=' + raw
-        try:
-            mail_service.send_account_mail(user.email, "Лерниум — восстановление доступа", f"Чтобы задать новый пароль, откройте ссылку в течение 30 минут:\n{url}\nЕсли вы не запрашивали смену пароля, проигнорируйте письмо.")
-        except Exception:
-            # Do not leak whether an account exists, or SMTP/provider error details.
-            db.query(PasswordReset).filter_by(token_hash=token_hash).delete()
-            db.commit()
-    return {"message": "Если аккаунт существует, инструкция отправлена на указанный адрес."}
+        mail_service.queue_reset(db, user.email, url, token_hash, payload.locale)
+        db.commit()
+    return {"message": "If the account exists, password reset instructions have been queued for delivery." if payload.locale == "en" else "Если аккаунт существует, инструкция поставлена в очередь отправки на указанный адрес."}
 
 
 @router.post("/auth/password-reset/confirm")

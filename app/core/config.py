@@ -2,7 +2,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, model_validator, AnyHttpUrl
+from pydantic import BaseModel, Field, SecretStr, model_validator, field_validator, AnyHttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class AIRoutingCandidate(BaseModel):
@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     CONTACT_REQUESTS_ENABLED: bool = True
     PUBLIC_APP_URL: str = "http://localhost:5173"
     AUTH_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=1, le=1000)
+    AUTH_RATE_LIMIT_PER_IP_MINUTE: int = Field(default=1800, ge=20, le=100000)
     AUTH_RATE_LIMIT_ENABLED: bool = True
     SMTP_FROM: str = ""
     SMTP_STARTTLS: bool = True
@@ -67,6 +68,40 @@ class Settings(BaseSettings):
     # Backward-compatible override for existing deployments. New environments
     # should use MAX_DOCUMENT_SIZE_MB.
     MAX_UPLOAD_BYTES: int | None = Field(default=None, gt=0)
+    DOCUMENT_MAX_UNPACKED_BYTES: int = Field(default=100 * 1024 * 1024, gt=0)
+    DOCUMENT_MAX_ARCHIVE_ENTRIES: int = Field(default=5000, gt=0)
+    DOCUMENT_MAX_PAGES: int = Field(default=1000, gt=0)
+    DOCUMENT_PROCESSING_TIMEOUT_SECONDS: int = Field(default=120, ge=1, le=600)
+    DOCUMENT_MAX_EXTRACTED_CHARS: int = Field(default=2_000_000, gt=0)
+    IMAGE_MAX_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
+    IMAGE_MAX_PIXELS: int = Field(default=20_000_000, gt=0)
+    IMAGE_PROVIDER: str = ""
+    IMAGE_MODEL: str = ""
+    IMAGE_MONTHLY_LIMIT: int = Field(default=50, ge=0)
+    AI_LOCAL_ONLY: bool = False
+    EMBEDDING_PROVIDER: str = "vsellm"
+    AI_CHAT_RETENTION_DAYS: int = Field(default=90, ge=1, le=3650)
+    AI_CHAT_MONTHLY_LIMIT: int = Field(default=1000, ge=0)
+    AI_ORG_QUEUED_LIMIT: int = Field(default=8, ge=0)
+    AI_INSTALL_QUEUED_LIMIT: int = Field(default=64, ge=0)
+    AI_ORG_BACKGROUND_LIMIT: int = Field(default=2, ge=1)
+    AI_INSTALL_BACKGROUND_LIMIT: int = Field(default=4, ge=1)
+    AI_ORG_INTERACTIVE_LIMIT: int = Field(default=4, ge=1)
+    AI_INSTALL_INTERACTIVE_LIMIT: int = Field(default=16, ge=1)
+    AI_ORG_MONTHLY_TOKENS: int = Field(default=20_000_000, ge=0)
+    AI_INSTALL_MONTHLY_TOKENS: int = Field(default=200_000_000, ge=0)
+    AI_ORG_MONTHLY_OCR_PAGES: int = Field(default=10_000, ge=0)
+    AI_INSTALL_MONTHLY_OCR_PAGES: int = Field(default=100_000, ge=0)
+    AI_ORG_MONTHLY_RUB: Decimal = Field(default=Decimal("10000"), ge=0, allow_inf_nan=False)
+    AI_INSTALL_MONTHLY_RUB: Decimal = Field(default=Decimal("100000"), ge=0, allow_inf_nan=False)
+    AI_MAX_RUB_PER_RUN: Decimal = Field(default=Decimal("1000"), ge=0, allow_inf_nan=False)
+    # Remote images/embeddings require operator-approved prices. Local endpoints
+    # have zero external provider spend but still consume concurrency/token caps.
+    IMAGE_PRICE_RUB: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    EMBEDDING_RUB_PER_MILLION: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    MAX_COURSE_MODULES: int = Field(default=100, ge=1)
+    MAX_COURSE_LESSONS: int = Field(default=500, ge=1)
+    MAX_LESSON_CONTENT_CHARS: int = Field(default=200_000, ge=1000)
     CHAT_HISTORY_MESSAGES: int = Field(default=20, gt=0, le=200)
     DOCUMENT_CHUNK_CHARS: int = Field(default=2000, ge=200, le=20000)
     DOCUMENT_CHUNK_OVERLAP_CHARS: int = Field(default=200, ge=0, le=5000)
@@ -133,6 +168,13 @@ class Settings(BaseSettings):
         if len(providers) != len(set(providers)):
             raise ValueError("AI_PROVIDERS must have unique IDs")
         return self
+
+    @field_validator("IMAGE_PRICE_RUB", "EMBEDDING_RUB_PER_MILLION", mode="before")
+    @classmethod
+    def blank_optional_price(cls, value):
+        # Compose passes absent optional values as an empty string. Missing
+        # pricing must disable paid dispatch, never turn into a zero price.
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def max_document_bytes(self) -> int:

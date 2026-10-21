@@ -21,6 +21,7 @@ class VectorSearchFilters:
     owner_id: int
     course_id: int
     allowed_chunk_ids: frozenset[int]
+    allowed_owner_ids: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ class FaissVectorStore:
             candidates = [
                 entry
                 for entry in self._entries
-                if entry[0].metadata.get("owner_id") == filters.owner_id
+                if entry[0].metadata.get("owner_id") in (filters.allowed_owner_ids or {filters.owner_id})
                 and entry[0].metadata.get("course_id") == filters.course_id
                 and entry[0].metadata.get("chunk_id") in filters.allowed_chunk_ids
             ]

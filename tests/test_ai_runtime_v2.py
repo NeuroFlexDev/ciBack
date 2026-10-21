@@ -115,7 +115,7 @@ def test_rubric_cannot_require_more_than_its_weighted_maximum():
             'competency_ids':['cmp:check'],'source_ref_ids':[SOURCE['id']], 'criteria':criteria,'passing_score':1.5})
 
 
-def test_worker_transient_failure_is_scheduled_for_checkpoint_resume(db_session, auth_user, monkeypatch):
+def test_worker_unknown_provider_failure_is_not_automatically_rebilled(db_session, auth_user, monkeypatch):
     from types import SimpleNamespace
     from app.workers import generation
     from app.services.pipeline_service import PipelineRunFailed
@@ -128,9 +128,10 @@ def test_worker_transient_failure_is_scheduled_for_checkpoint_resume(db_session,
         run.status = 'failed'; db_session.commit()
         raise PipelineRunFailed(run.id, 'TimeoutError') from TimeoutError()
     monkeypatch.setattr(generation.PipelineService, 'generate_graph', fail)
-    with pytest.raises(RuntimeError, match='resume scheduled'):
-        generation.execute_generation_run(runtime.run_id)
-    assert db_session.get(GenerationRun, runtime.run_id).status == 'queued'
+    generation.execute_generation_run(runtime.run_id)
+    assert db_session.get(GenerationRun, runtime.run_id).status == 'failed'
+    from app.models.ai_resources import AIResourceUsage
+    assert db_session.query(AIResourceUsage).filter_by(key=f"generation:{runtime.run_id}").one().status == "unknown"
 
 
 def test_ingestion_batches_cover_tail_of_every_document():

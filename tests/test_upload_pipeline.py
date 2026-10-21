@@ -1,3 +1,4 @@
+from tests.generated_graph_fixture import concrete_graph
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -170,19 +171,7 @@ def test_graph_generation_reuses_fingerprint_and_force_creates_version(
     db_session.commit()
     monkeypatch.setattr(
         "app.services.pipeline_service.generate_from_prompt",
-        lambda *args, **kwargs: {
-            "nodes": [
-                {"id": "module-1", "label": "Модуль", "type": "module"},
-                {"id": "lesson-1", "label": "Урок", "type": "lesson"},
-            ],
-            "edges": [
-                {
-                    "source": "module-1",
-                    "target": "lesson-1",
-                    "relation": "contains",
-                }
-            ],
-        },
+        lambda *args, **kwargs: concrete_graph(),
     )
 
     first = PipelineService.generate_graph(

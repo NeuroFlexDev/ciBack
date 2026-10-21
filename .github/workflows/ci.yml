@@ -92,7 +92,7 @@ jobs:
 
   image:
     name: Build and publish image
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -123,7 +123,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=sha-${{ github.sha }}
-            type=raw,value=main
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push image
         id: build
@@ -138,7 +138,7 @@ jobs:
 
   image-security:
     name: Scan image and publish SBOM
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
     needs: image
     runs-on: ubuntu-latest
     timeout-minutes: 20

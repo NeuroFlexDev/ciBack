@@ -19,6 +19,47 @@ def _ready_course(db, owner_id, name="Publish me"):
     return course, module, lesson
 
 
+def test_manual_course_can_publish_after_complete_author_workflow(client, db_session, auth_headers):
+    course = client.post('/api/courses/drafts', headers=auth_headers).json()
+    course_id = course['id']
+    updated = client.put(f'/api/courses/{course_id}', headers=auth_headers,
+        json={'title': 'Manual course', 'description': 'Prepared by the author', 'expected_revision': 1})
+    assert updated.status_code == 200, updated.text
+    module = client.post(f'/api/courses/{course_id}/modules/', headers=auth_headers, json={'title': 'Module'}).json()
+    lesson = client.post(f'/api/courses/{course_id}/modules/{module["id"]}/lessons/', headers=auth_headers,
+        json={'title': 'Lesson', 'description': '', 'content': 'Complete explanation and examples.'})
+    assert lesson.status_code == 201, lesson.text
+    result = client.post(f'/api/courses/{course_id}/publish', headers=auth_headers)
+    assert result.status_code == 200, result.text
+    assert db_session.get(Course, course_id).status == 'ready'
+
+
+def test_publication_requires_complete_practice_rubric_and_preserves_generated_scale(client, db_session, auth_user, auth_headers):
+    from app.models.task import Task
+    from app.models.assessment_rubric import AssessmentRubric
+    from app.models.learning import PublishedLearningContent
+    course, module, _ = _ready_course(db_session, auth_user.id)
+    task = Task(module_id=module.id, name='Explain', description='Explain the process')
+    db_session.add(task); db_session.commit()
+    result = client.post(f'/api/courses/{course.id}/publish', headers=auth_headers)
+    assert result.status_code == 422
+    assert result.json()['detail']['assessments'][0]['id'] == f'task:{task.id}'
+    db_session.add(AssessmentRubric(course_id=course.id, task_id=task.id, criteria=[
+        {'id': 'accuracy', 'title': 'Accuracy', 'description': 'Correct reasoning', 'weight': 0.6,
+         'levels': [{'title': 'Incorrect', 'description': 'Missing reasoning', 'score': 0}, {'title': 'Correct', 'description': 'Complete reasoning', 'score': 5}]},
+        {'id': 'examples', 'title': 'Examples', 'description': 'Relevant examples', 'weight': 0.4,
+         'levels': [{'title': 'Missing', 'description': 'No examples', 'score': 0}, {'title': 'Present', 'description': 'Examples explained', 'score': 5}]},
+    ], levels=[])); db_session.commit()
+    published = client.post(f'/api/courses/{course.id}/publish', headers=auth_headers)
+    assert published.status_code == 200, published.text
+    version = db_session.query(CourseVersion).filter_by(course_id=course.id).one()
+    snapshot = db_session.get(PublishedLearningContent, version.id).snapshot
+    question = snapshot['modules'][0]['assessments'][0]
+    assert question['max_points'] == 5
+    assert [criterion['max_points'] for criterion in question['criteria']] == [3, 2]
+    assert question['criteria'][0]['levels'][1]['points'] == 3
+
+
 def test_publish_ready_course_creates_snapshot_and_is_idempotent(client, db_session, auth_user, auth_headers):
     course, module, lesson = _ready_course(db_session, auth_user.id)
 

@@ -8,6 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.course import Course
+from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.lesson_version import LessonVersion
 from app.models.module import Module
@@ -17,6 +18,8 @@ from app.models.test_version import TestVersion
 from app.models.theory import Theory
 from app.schemas.course_editor import OrderItem
 from app.services.course_publication_service import CoursePublicationService
+from app.core.config import settings
+from app.services.feature_access import require_feature
 
 
 def _not_found(label: str = "Object") -> HTTPException:
@@ -30,39 +33,41 @@ def _conflict(expected: int, current: int) -> HTTPException:
 class CourseEditorService:
     @staticmethod
     def _course(db: Session, course_id: int, owner_id: int, lock: bool = False) -> Course:
-        query = db.query(Course).filter(Course.id == course_id, Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Course).filter(Course.id == course_id, course_access_filter(owner_id), Course.is_deleted.is_(False))
         course = (query.with_for_update() if lock else query).first()
         if course is None:
             raise _not_found("Course")
+        if lock:
+            require_feature(db, course.organization_id, 'authoring')
         if course.status == "generating":
             raise HTTPException(status_code=409, detail="Course is being generated")
         return course
 
     @staticmethod
     def _module(db: Session, module_id: int, owner_id: int, lock: bool = False) -> Module:
-        query = db.query(Module).join(Course).filter(Module.id == module_id, Module.is_deleted.is_(False), Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Module).join(Course).filter(Module.id == module_id, Module.is_deleted.is_(False), course_access_filter(owner_id), Course.is_deleted.is_(False))
         module = (query.with_for_update() if lock else query).first()
         if module is None:
             raise _not_found("Module")
-        CourseEditorService._course(db, module.course_id, owner_id)
+        CourseEditorService._course(db, module.course_id, owner_id, lock)
         return module
 
     @staticmethod
     def _lesson(db: Session, lesson_id: int, owner_id: int, lock: bool = False) -> Lesson:
-        query = db.query(Lesson).join(Module).join(Course).filter(Lesson.id == lesson_id, Lesson.is_deleted.is_(False), Module.is_deleted.is_(False), Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Lesson).join(Module).join(Course).filter(Lesson.id == lesson_id, Lesson.is_deleted.is_(False), Module.is_deleted.is_(False), course_access_filter(owner_id), Course.is_deleted.is_(False))
         lesson = (query.with_for_update() if lock else query).first()
         if lesson is None:
             raise _not_found("Lesson")
-        CourseEditorService._course(db, lesson.module.course_id, owner_id)
+        CourseEditorService._course(db, lesson.module.course_id, owner_id, lock)
         return lesson
 
     @staticmethod
     def _test(db: Session, test_id: int, owner_id: int, lock: bool = False) -> Test:
-        query = db.query(Test).outerjoin(Module, Test.module_id == Module.id).join(Course, func.coalesce(Module.course_id, Test.course_id) == Course.id).filter(Test.id == test_id, Test.is_deleted.is_(False), Course.owner_id == owner_id, Course.is_deleted.is_(False))
+        query = db.query(Test).outerjoin(Module, Test.module_id == Module.id).join(Course, func.coalesce(Module.course_id, Test.course_id) == Course.id).filter(Test.id == test_id, Test.is_deleted.is_(False), course_access_filter(owner_id), Course.is_deleted.is_(False))
         test = (query.with_for_update() if lock else query).first()
         if test is None:
             raise _not_found("Test")
-        CourseEditorService._course(db, test.module.course_id if test.module_id else test.course_id, owner_id)
+        CourseEditorService._course(db, test.module.course_id if test.module_id else test.course_id, owner_id, lock)
         return test
 
     @staticmethod
@@ -86,6 +91,8 @@ class CourseEditorService:
     @staticmethod
     def create_module(db: Session, course_id: int, owner_id: int, title: str, description: str = "") -> Module:
         course = CourseEditorService._course(db, course_id, owner_id, True)
+        if db.query(Module).filter_by(course_id=course_id, is_deleted=False).count() >= settings.MAX_COURSE_MODULES:
+            raise HTTPException(422, "Достигнут лимит модулей курса")
         CoursePublicationService.prepare_for_edit(course)
         position = db.query(func.coalesce(func.max(Module.position), -1)).filter(Module.course_id == course_id, Module.is_deleted.is_(False)).scalar() + 1
         item = Module(course_id=course_id, title=title, description=description, position=position, revision=1)
@@ -102,6 +109,11 @@ class CourseEditorService:
 
     @staticmethod
     def create_lesson(db: Session, course_id: int, module_id: int, owner_id: int, title: str, description: str, content: str) -> Lesson:
+        CourseEditorService._course(db, course_id, owner_id, True)
+        if db.query(Lesson).join(Module).filter(Module.course_id == course_id, Lesson.is_deleted.is_(False), Module.is_deleted.is_(False)).count() >= settings.MAX_COURSE_LESSONS:
+            raise HTTPException(422, "Достигнут лимит уроков курса")
+        if len(content) > settings.MAX_LESSON_CONTENT_CHARS:
+            raise HTTPException(413, "Содержание урока превышает лимит")
         module = CourseEditorService._module(db, module_id, owner_id, True)
         if module.course_id != course_id: raise _not_found("Module")
         CoursePublicationService.prepare_for_edit(module.course)
@@ -116,6 +128,8 @@ class CourseEditorService:
         for field in ("title", "description"):
             if field in data and data[field] is not None: setattr(item, field, data[field])
         if "content" in data and data["content"] is not None:
+            if len(data["content"]) > settings.MAX_LESSON_CONTENT_CHARS:
+                raise HTTPException(413, "Содержание урока превышает лимит")
             if item.theory: item.theory.content, item.theory.is_deleted = data["content"], False
             else: db.add(Theory(lesson_id=item.id, content=data["content"]))
         item.revision += 1; db.flush(); CourseEditorService._lesson_snapshot(db, item, owner_id); db.commit(); db.refresh(item); return item

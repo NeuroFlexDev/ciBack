@@ -28,6 +28,7 @@ ALLOWED_UPLOADS = {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     },
     ".txt": {"text/plain"},
+    ".md": {"text/markdown", "text/plain"},
 }
 
 DOCX_REQUIRED_MEMBERS = {"[Content_Types].xml", "word/document.xml"}
@@ -44,6 +45,12 @@ def _invalid_file() -> HTTPException:
 def _validate_upload_content(upload: UploadFile, suffix: str) -> None:
     source = upload.file
     try:
+        from app.services.document_safety import validate_container
+        source.seek(0)
+        bounded_content = source.read(settings.max_document_bytes + 1)
+        if len(bounded_content) > settings.max_document_bytes:
+            raise UploadTooLargeError
+        validate_container(bounded_content, upload.content_type)
         source.seek(0)
         first_byte = source.read(1)
         if not first_byte:
@@ -60,7 +67,7 @@ def _validate_upload_content(upload: UploadFile, suffix: str) -> None:
                         raise _invalid_file()
             except (zipfile.BadZipFile, OSError):
                 raise _invalid_file()
-        elif suffix == ".txt":
+        elif suffix in {".txt", ".md"}:
             decoder = codecs.getincrementaldecoder("utf-8-sig")("strict")
             total = 0
             while chunk := source.read(1024 * 1024):
@@ -274,6 +281,11 @@ class CourseContentService:
             raise HTTPException(status_code=413, detail="Файл превышает допустимый размер")
 
         storage_key = f"{owner_id}/{course_id}/{uuid4().hex}{suffix}"
+        from app.models.user import User
+        from app.services.material_quota import check_storage
+        upload.file.seek(0, 2)
+        check_storage(db, db.get(User, owner_id), upload.file.tell())
+        upload.file.seek(0)
         try:
             stored = storage.save(upload.file, storage_key)
         except UploadTooLargeError:

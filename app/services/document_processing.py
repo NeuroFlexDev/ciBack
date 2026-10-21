@@ -4,6 +4,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
+from contextvars import ContextVar
 from io import BytesIO
 from statistics import median_low
 from zipfile import BadZipFile
@@ -22,6 +23,7 @@ from lxml.etree import XMLSyntaxError
 PDF_MIME = "application/pdf"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 TXT_MIME = "text/plain"
+extraction_usage: ContextVar[dict | None] = ContextVar("document_extraction_usage", default=None)
 
 _ATX_HEADING = re.compile(r"^\s{0,3}(#{1,6})\s*(\S.*?)\s*#*\s*$")
 _SETEXT_HEADING = re.compile(r"^\s*(=+|-+)\s*$")
@@ -116,6 +118,7 @@ def _docx_row_text(row) -> str:
 
 
 def _extract_docx(content: bytes) -> list[ExtractedBlock]:
+    from app.services.docx_math import paragraph_with_math
     document = DocxDocument(BytesIO(content))
     blocks: list[ExtractedBlock] = []
     headings: dict[int, str] = {}
@@ -123,7 +126,7 @@ def _extract_docx(content: bytes) -> list[ExtractedBlock]:
 
     for block in _iter_docx_blocks(document):
         if isinstance(block, Paragraph):
-            text = _normalize_text(block.text)
+            text = _normalize_text(paragraph_with_math(block))
             if not text:
                 continue
             heading_level = _docx_heading_level(block)
@@ -161,9 +164,15 @@ def _extract_docx(content: bytes) -> list[ExtractedBlock]:
 
 
 def _pdf_blocks(document) -> list[_PdfBlock]:
+    from app.core.config import settings
+    if len(document) > settings.DOCUMENT_MAX_PAGES:
+        raise ValueError("Слишком много страниц PDF; разделите документ")
     blocks: list[_PdfBlock] = []
     ocr_pages = 0
     for page_number, page in enumerate(document, start=1):
+        # OCR raster size at 150 dpi is bounded before native allocation.
+        if page.rect.width * page.rect.height * (150 / 72) ** 2 > settings.IMAGE_MAX_PIXELS:
+            raise ValueError("Слишком большой размер страницы PDF")
         payload = page.get_text("dict", sort=True)
         if not page.get_text("text").strip() and page.get_images():
             from app.core.config import settings
@@ -172,6 +181,11 @@ def _pdf_blocks(document) -> list[_PdfBlock]:
             ocr_pages += 1
             if ocr_pages > settings.AI_OCR_MAX_PAGES:
                 raise ValueError("Scanned PDF exceeds AI_OCR_MAX_PAGES; split the document")
+            usage = extraction_usage.get()
+            if usage is not None and usage.get("ocr_page_limit") is not None and ocr_pages > usage["ocr_page_limit"]:
+                raise ValueError("Недостаточно квоты OCR для документа; увеличьте лимит или загрузите текстовую версию")
+            if usage is not None:
+                usage["ocr_pages"] = ocr_pages
             # Local OCR avoids shipping whole documents to a vision model and
             # preserves page provenance. Missing language packs fail explicitly.
             try:
@@ -395,6 +409,8 @@ def _extract_txt(content: bytes) -> list[ExtractedBlock]:
 
 
 def extract_blocks(content: bytes, mime_type: str) -> list[ExtractedBlock]:
+    from app.services.document_safety import validate_container
+    validate_container(content, mime_type)
     if mime_type == PDF_MIME:
         try:
             return _extract_pdf(content)
@@ -416,7 +432,7 @@ def extract_blocks(content: bytes, mime_type: str) -> list[ExtractedBlock]:
             XMLSyntaxError,
         ) as exc:
             raise ValueError("Invalid DOCX document") from exc
-    if mime_type == TXT_MIME:
+    if mime_type in {TXT_MIME, "text/markdown"}:
         try:
             return _extract_txt(content)
         except UnicodeDecodeError as exc:

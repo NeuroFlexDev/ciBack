@@ -103,6 +103,8 @@ class AgenticCoursePipeline:
             "target_audience": settings_snapshot.get("target_audience") or "not specified",
             "difficulty": settings_snapshot["difficulty"], "language": settings_snapshot["language"],
             "lesson_count": settings_snapshot["lesson_count"],
+            "approved_plan": settings_snapshot.get("approved_plan") or [],
+            "organization_context": settings_snapshot.get("organization_context") or {},
         }
         def ingest(state):
             self.checkpoint("ingestion", 5)
@@ -138,6 +140,8 @@ class AgenticCoursePipeline:
                 _canonical_sources("architect", value.source_refs, source_catalog)
                 if len(value.lessons) != settings_snapshot["lesson_count"]:
                     raise ValueError("Course Architect returned an unexpected lesson count")
+                if common["approved_plan"] and [lesson.title for lesson in value.lessons] != common["approved_plan"]:
+                    raise ValueError("Course Architect changed the author-approved lesson plan")
                 known = {x["id"] for x in state["competency_map"]["competencies"]}
                 if set(value.competency_ids) != known:
                     raise ValueError("Course plan must cover every mapped competency")
@@ -212,6 +216,10 @@ class AgenticCoursePipeline:
         from app.ai.version import runtime_signature
         identity = _json([runtime_signature(), common, settings_snapshot, source_catalog]) + f"{settings.DATABASE_URL}:{self.runtime.owner_id}:{self.runtime.course_id}:{self.runtime.run_id}:{run.created_at}"
         thread_id = hashlib.sha256(identity.encode()).hexdigest()
+        from app.models.ai_resources import AIThreadReference
+        if self.runtime.db.get(AIThreadReference, thread_id) is None:
+            self.runtime.db.add(AIThreadReference(thread_id=thread_id, run_id=self.runtime.run_id))
+            self.runtime.db.commit()
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
         with checkpoint_store() as saver:
             graph = builder.compile(checkpointer=saver)
@@ -656,7 +664,10 @@ class AgenticCoursePipeline:
                     {
                         "id": question.id,
                         "question": question.prompt,
+                        "kind": question.kind,
                         "answers": [item.text for item in question.options],
+                        "correct_answers": [option_by_id[item] for item in question.correct_option_ids] if question.correct_option_ids else [question.expected_answer],
+                        "expected_answer": question.expected_answer,
                         "correct_answer": correct,
                         "explanation": question.explanation,
                         "objective_ids": question.objective_ids,

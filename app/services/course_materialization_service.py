@@ -13,6 +13,7 @@ from app.models.module import Module
 from app.models.task import Task
 from app.models.test import Test
 from app.models.theory import Theory
+from app.models.learning import AssessmentDefinition
 
 
 def _ordered_ids(nodes: list[dict], edges: list[dict], node_type: str) -> list[str]:
@@ -46,11 +47,7 @@ def _ordered_ids(nodes: list[dict], edges: list[dict], node_type: str) -> list[s
 def _question_payload(test_node: dict) -> list[dict]:
     questions = test_node.get("questions") or []
     if not questions:
-        questions = [{
-            "question": test_node.get("label") or "Контрольный вопрос",
-            "answers": [],
-            "correct_answer": "",
-        }]
+        raise ValueError("generated test must contain concrete answerable questions")
     result = []
     for item in questions:
         question = str(item.get("question") or "").strip()
@@ -58,11 +55,29 @@ def _question_payload(test_node: dict) -> list[dict]:
         correct = str(item.get("correct_answer", item.get("correct", ""))).strip()
         if not question or not isinstance(answers, list):
             raise ValueError("generated test question is invalid")
+        kind = item.get("kind") or ("single_choice" if answers else "short_answer")
+        question_type = {"single_choice": "single", "multiple_choice": "multiple", "short_answer": "open"}.get(kind)
+        if question_type is None:
+            raise ValueError("unknown generated question type")
+        correct_answers = item.get("correct_answers")
+        if correct_answers is None:
+            correct_answers = [item.get("expected_answer") or correct] if question_type == "open" else [correct]
+        if not isinstance(correct_answers, list) or not correct_answers or any(not isinstance(value, str) or not value.strip() for value in correct_answers):
+            raise ValueError("generated test has no valid answer key")
+        if len(set(answers)) != len(answers) or len(set(correct_answers)) != len(correct_answers):
+            raise ValueError("generated answer options must be unambiguous")
+        if question_type != "open" and (len(answers) < 2 or not set(correct_answers).issubset(answers) or (question_type == "single" and len(correct_answers) != 1)):
+            raise ValueError("generated answer key does not match options")
+        if question_type == "open" and answers:
+            raise ValueError("open generated question cannot contain answer options")
         result.append({
             "logical_id": str(item.get("id") or f"{test_node['id']}:question:{len(result)}"),
             "question": question,
             "answers": [str(answer) for answer in answers],
-            "correct": correct,
+            "correct": correct or " | ".join(correct_answers),
+            "definition": {"question_type": question_type, "correct_answers": correct_answers, "max_points": 1,
+                "grading_mode": "manual" if question_type == "open" else "automatic",
+                "criteria": [{"id": "accuracy", "title": "Корректность ответа", "description": "Ответ соответствует условиям вопроса и изученным материалам.", "max_points": 1}] if question_type == "open" else []},
             "source_refs": list(item.get("source_refs") or test_node.get("source_refs") or []),
         })
     return result
@@ -240,9 +255,6 @@ class CourseMaterializationService:
                             for value in (
                                 item.get("scenario"),
                                 "\n".join(item.get("prompts") or []),
-                                f"Ожидаемый ответ: {item.get('expected_response')}"
-                                if item.get("expected_response")
-                                else None,
                             )
                             if value
                         )
@@ -272,6 +284,16 @@ class CourseMaterializationService:
                     task_count += 1
                     rubric = item.get("rubric")
                     if rubric:
+                        normalized = [{"id": criterion["id"], "title": criterion["title"],
+                            "description": criterion.get("description", ""),
+                            "max_points": criterion["weight"] * max(level["score"] for level in criterion["levels"]),
+                            "levels": [{"title": level["title"], "description": level.get("description", ""), "points": criterion["weight"] * level["score"]} for level in criterion["levels"]]}
+                            for criterion in rubric.get("criteria", [])]
+                        if not normalized or any(criterion["max_points"] <= 0 for criterion in normalized):
+                            raise ValueError("generated practice requires positive rubric criteria")
+                        db.add(AssessmentDefinition(task_id=task.id, question_type="open", grading_mode="manual",
+                            correct_answers=[item["expected_response"]] if item.get("expected_response") else [],
+                            max_points=sum(criterion["max_points"] for criterion in normalized), criteria=normalized))
                         levels = [
                             {"criterion_id": criterion.get("id"), **level}
                             for criterion in rubric.get("criteria", [])
@@ -299,6 +321,7 @@ class CourseMaterializationService:
                     )
                     db.add(test)
                     db.flush()
+                    db.add(AssessmentDefinition(test_id=test.id, **question["definition"]))
                     test_canvas_id = f"test:{test.id}"
                     persisted_ids.setdefault(test_node_id, []).append(test_canvas_id)
                     persisted_ids[question["logical_id"]] = [test_canvas_id]
@@ -311,6 +334,8 @@ class CourseMaterializationService:
                         "question": question["question"],
                         "answers": question["answers"],
                         "correct_answer": question["correct"],
+                        "question_type": question["definition"]["question_type"],
+                        "correct_answers": question["definition"]["correct_answers"],
                         "position": position,
                         "source_refs": question["source_refs"],
                     })
@@ -329,6 +354,7 @@ class CourseMaterializationService:
                 )
                 db.add(test)
                 db.flush()
+                db.add(AssessmentDefinition(test_id=test.id, **question["definition"]))
                 test_canvas_id = f"test:{test.id}"
                 logical_test_id = str(final_node["id"])
                 persisted_ids.setdefault(logical_test_id, []).append(test_canvas_id)
@@ -342,6 +368,8 @@ class CourseMaterializationService:
                     "question": question["question"],
                     "answers": question["answers"],
                     "correct_answer": question["correct"],
+                    "question_type": question["definition"]["question_type"],
+                    "correct_answers": question["definition"]["correct_answers"],
                     "position": position,
                     "source_refs": question["source_refs"],
                 })

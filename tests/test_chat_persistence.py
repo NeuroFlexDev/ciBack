@@ -79,6 +79,8 @@ def test_message_history_legacy_shape_and_pagination(
     ]
     assert [item["text"] for item in page.json()] == ["message-1", "message-2"]
     assert set(page.json()[0]) == {"id", "author", "text", "is_deleted"}
+    latest = client.get(f"/api/chat/{chat.id}/messages?newest=true&limit=2", headers=auth_headers)
+    assert [item["text"] for item in latest.json()] == ["message-2", "message-3"]
 
 
 def test_model_patch_persists(client, db_session, auth_user, auth_headers):

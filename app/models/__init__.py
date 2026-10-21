@@ -1,4 +1,6 @@
 from .administration import Organization, Invitation, AdminEvent
+from .materials import CourseImage, LearnerAssistantMessage, OrganizationMaterialPolicy, ScopedAIUsage
+from .integrations import OutboundMessage, IntegrationKey, IntegrationOperation, WebhookEndpoint, OIDCProvider, ExternalIdentity, OIDCSession, BillingAccount, Invoice, PaymentEvent, LTIPlatform, LTIResource, LTIIdentity, LTISession, LTIGradeBinding
 from .approval import Approval
 from .account import PasswordReset
 from .legal import LegalReceipt, LegalRequest
@@ -29,6 +31,12 @@ from .test import Test
 from .test_version import TestVersion
 from .theory import Theory
 from .user import User
+from .ai_resources import AIResourceMutex, AIResourceUsage, AIThreadReference
+from .mfa import UserMFA, MFARecoveryCode, MFAChallenge
+from .learning import (OrganizationLearningSettings, LearningRoleGrant, LearningDepartment, LearningPerson,
+    LearningGroup, LearningGroupMember, PublishedLearningContent, AssessmentDefinition, LearningAssignment,
+    LearningGroupEnrollment, LearningResponse, LearningGradeEvent, LearningProgram,
+    LearningProgramEnrollment, OrganizationOwnershipTransfer, LearningPublicationApproval)
 
 __all__ = [
     "LegalReceipt",

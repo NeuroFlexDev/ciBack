@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.models.chat import Chat, ChatMessage
 from app.models.course import Course
+from app.services.course_access import course_access_filter, related_course_access
 
 
 class ChatRepository:
@@ -10,6 +11,7 @@ class ChatRepository:
         chat = db.query(Chat).filter(
             Chat.id == chat_id,
             Chat.owner_id == user_id,
+            (Chat.course_id.is_(None) | related_course_access(Chat.course_id, user_id)),
             Chat.status == "active",
             Chat.is_deleted.is_(False),
         ).first()
@@ -20,7 +22,7 @@ class ChatRepository:
     @staticmethod
     def create_chat(db: Session, user_id: int, name: str, course_id: int | None = None) -> Chat:
         if course_id is not None and db.query(Course.id).filter(
-            Course.id == course_id, Course.owner_id == user_id
+            Course.id == course_id, course_access_filter(user_id)
         ).first() is None:
             raise KeyError("course_not_found")
         chat = Chat(owner_id=user_id, course_id=course_id, title=name, status="active")
@@ -30,26 +32,32 @@ class ChatRepository:
         return chat
 
     @staticmethod
-    def list_chats(db: Session, user_id: int) -> list[Chat]:
-        return db.query(Chat).filter(
+    def list_chats(db: Session, user_id: int, *, limit=50, offset=0, course_id=None) -> list[Chat]:
+        query = db.query(Chat).filter(
             Chat.owner_id == user_id,
+            (Chat.course_id.is_(None) | related_course_access(Chat.course_id, user_id)),
             Chat.status == "active",
             Chat.is_deleted.is_(False),
-        ).order_by(Chat.created_at.desc(), Chat.id.desc()).all()
+        )
+        if course_id is not None:
+            query = query.filter(Chat.course_id == course_id)
+        return query.order_by(Chat.created_at.desc(), Chat.id.desc()).offset(offset).limit(limit).all()
 
     @staticmethod
     def get_history(
-        db: Session, chat_id: int, user_id: int, *, limit: int | None = None, offset: int = 0
+        db: Session, chat_id: int, user_id: int, *, limit: int | None = None, offset: int = 0, newest: bool = False
     ) -> list[ChatMessage]:
         ChatRepository._active_chat(db, chat_id, user_id)
         query = db.query(ChatMessage).filter(
             ChatMessage.chat_id == chat_id, ChatMessage.is_deleted.is_(False)
-        ).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+        )
+        query = query.order_by(ChatMessage.id.desc() if newest else ChatMessage.id.asc())
         if offset:
             query = query.offset(offset)
         if limit is not None:
             query = query.limit(limit)
-        return query.all()
+        result = query.all()
+        return list(reversed(result)) if newest else result
 
     @staticmethod
     def get_recent_history(

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.legal import LegalReceipt
 
 
-CATALOG = json.loads((Path(__file__).resolve().parents[1] / "legal/catalog.json").read_text())
+CATALOG = json.loads((Path(__file__).resolve().parents[1] / "legal/catalog.json").read_text(encoding="utf-8"))
 DOCUMENTS = {doc["slug"]: doc for doc in CATALOG["documents"]}
 for _document in DOCUMENTS.values():
     _unsigned = {key: value for key, value in _document.items() if key != "sha256"}

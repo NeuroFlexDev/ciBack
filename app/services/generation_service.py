@@ -49,6 +49,9 @@ _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTAL
 
 @lru_cache(maxsize=128)
 def get_cached_external_context(query: str, lang: str = "ru") -> str:
+    from app.core.config import settings
+    if settings.AI_LOCAL_ONLY:
+        return ""
     try:
         results = aggregated_search(query=query, source="all", lang=lang)
         return "\n\n".join(results)
@@ -62,7 +65,8 @@ def get_cached_external_context(query: str, lang: str = "ru") -> str:
 def render_prompt(template_name: str, **kwargs: Any) -> str:
     """Render a configured Jinja prompt template."""
     template = env.get_template(template_name)
-    return template.render(**kwargs)
+    from app.services.organization_ai_context import context_text
+    return template.render(**kwargs) + context_text(kwargs.get("organization_context"))
 
 
 def agent_messages(prompt: str, *, expect_json: bool, repair_feedback: str = "") -> list[dict]:
@@ -185,6 +189,8 @@ def generate_from_prompt(
     factory = _get_factory(engine, resolved_engine)
     from app.core.config import settings
     use_vsellm = engine == "vsellm" or (engine == DEFAULT_ENGINE and (gateway.configured() or settings.ENV != "test"))
+    if settings.AI_LOCAL_ONLY:
+        use_vsellm = True
     if factory is None and not use_vsellm:
         raise HTTPException(400, f"Неподдерживаемый движок генерации: {engine}")
 

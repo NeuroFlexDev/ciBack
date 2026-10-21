@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -43,7 +43,8 @@ class InviteInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     email: str = Field(min_length=5, max_length=255)
     organization_id: int = Field(gt=0)
-    role: Literal['owner','member'] = 'member'
+    role: Literal['owner','admin','author','reviewer','manager','member'] = 'member'
+    locale: Literal['ru', 'en'] = 'ru'
     @field_validator('email')
     @classmethod
     def email_valid(cls, value):
@@ -54,7 +55,7 @@ class UserChange(BaseModel):
     model_config = ConfigDict(extra='forbid')
     is_active: StrictBool
     organization_id: int | None = Field(default=None, gt=0)
-    organization_role: Literal['owner','member'] = 'member'
+    organization_role: Literal['owner','admin','author','reviewer','manager','member'] = 'member'
 
 
 class TokenInput(BaseModel):
@@ -74,7 +75,7 @@ def org_dict(db, org):
     users = db.query(User).filter(User.organization_id == org.id)
     return {**{key:getattr(org,key) for key in ['id','name','kind','is_active','seat_limit','course_limit','source_limit','generation_limit','created_at']},
             'active_users':users.filter(User.is_active.is_(True)).count(), 'reserved_seats':seats(db,org.id),
-            'courses':db.query(Course).filter(Course.owner_id.in_(member_ids(db,org.id)), Course.is_deleted.is_(False)).count()}
+            'courses':db.query(Course).filter(Course.organization_id == org.id, Course.is_deleted.is_(False)).count()}
 
 
 def user_dict(user):
@@ -93,9 +94,10 @@ def scoped_team(user):
     return user.organization_id
 
 
-def require_team_owner(user):
+def require_team_owner(user, db):
     org_id = scoped_team(user)
-    if user.organization_role != 'owner':
+    from app.services.learning_service import is_manager
+    if not is_manager(db, user):
         raise HTTPException(403, 'Приглашать участников может администратор организации')
     return org_id
 
@@ -103,8 +105,16 @@ def require_team_owner(user):
 def make_invitation(db, actor, payload):
     org = lock_org(db, payload.organization_id)
     check_seat(db, org)
-    if db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(409, 'Аккаунт уже существует. Администратор Лерниума может подключить его к организации без смены пароля.')
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing and (existing.is_admin or existing.organization_id):
+        raise HTTPException(409, 'Аккаунт уже связан с организацией или является оператором. Сначала завершите текущие отношения доступа.')
+    if not actor.is_admin:
+        if payload.role == 'owner':
+            raise HTTPException(403, 'Владение передаётся с отдельным подтверждением нового владельца')
+        if payload.role == 'admin' and actor.organization_role != 'owner':
+            raise HTTPException(403, 'Приглашать администратора может только владелец')
+    if payload.role == 'owner' and db.query(User).filter_by(organization_id=org.id, organization_role='owner', is_active=True).count():
+        raise HTTPException(409, 'У организации уже есть владелец. Используйте подтверждаемую передачу владения.')
     if db.query(Invitation).filter(Invitation.email == payload.email, Invitation.accepted_at.is_(None),
             Invitation.revoked_at.is_(None), Invitation.expires_at > datetime.utcnow()).first():
         raise HTTPException(409, 'Действующее приглашение уже существует. Сначала отзовите его.')
@@ -113,8 +123,17 @@ def make_invitation(db, actor, payload):
         invited_by=actor.id, token_hash=hashlib.sha256(raw.encode()).hexdigest(), expires_at=datetime.utcnow()+timedelta(days=7))
     db.add(row); db.flush()
     audit(db, actor, 'invitation.created', 'invitation', row.id, organization_id=org.id, role=payload.role)
+    url = settings.PUBLIC_APP_URL.rstrip('/')+'/invite#token='+raw
+    mail_status = 'not_configured'
+    import importlib.util
+    if importlib.util.find_spec('app.services.mail_service'):
+        from app.services.mail_service import configured
+        if configured():
+            from app.services.mail_service import queue_invitation
+            queue_invitation(db, payload.email, url, org.name, locale=payload.locale)
+            mail_status = 'queued'
     db.commit()
-    return {**invitation_dict(row), 'url':settings.PUBLIC_APP_URL.rstrip('/')+'/invite#token='+raw}
+    return {**invitation_dict(row), 'url':url, 'mail_status':mail_status, 'existing_account':bool(existing)}
 
 
 @router.get('/admin/organizations')
@@ -157,6 +176,13 @@ def change_user(db, actor, target, payload):
     if target.id==actor.id or target.is_admin:
         raise HTTPException(409,'Изменение доступа владельца через эту форму запрещено')
     old_org=target.organization_id
+    if payload.organization_role == 'owner' and target.organization_role != 'owner':
+        raise HTTPException(403, 'Новый владелец должен принять персональное приглашение или предложение передачи')
+    if not actor.is_admin:
+        if payload.organization_role == 'owner' and target.organization_role != 'owner':
+            raise HTTPException(403, 'Используйте подтверждаемую передачу владения')
+        if actor.organization_role != 'owner' and (payload.organization_role in {'owner','admin'} or target.organization_role in {'owner','admin'}):
+            raise HTTPException(403, 'Только владелец управляет администраторами')
     orgs={oid:lock_org(db,oid) for oid in sorted({oid for oid in [old_org,payload.organization_id] if oid})}
     leaving_owner = target.organization_role=='owner' and target.is_active and old_org and (
         not payload.is_active or payload.organization_id!=old_org or payload.organization_role!='owner')
@@ -164,10 +190,16 @@ def change_user(db, actor, target, payload):
         raise HTTPException(409,'Сначала назначьте другого администратора организации')
     if payload.organization_id and payload.is_active and (not target.is_active or payload.organization_id!=old_org):
         check_seat(db,orgs[payload.organization_id])
-    if payload.organization_id and payload.organization_id!=old_org:
-        used=db.query(Course).filter(Course.owner_id.in_(member_ids(db,payload.organization_id)),Course.is_deleted.is_(False)).count()
-        moving=db.query(Course).filter(Course.owner_id==target.id,Course.is_deleted.is_(False)).count()
-        if used+moving>orgs[payload.organization_id].course_limit:raise HTTPException(409,'Курсы пользователя превышают доступный лимит организации')
+    if old_org and payload.organization_id != old_org:
+        # Content and history stay with the original organization. A new tenant
+        # never inherits the employee's former company's materials or answers.
+        db.query(Course).filter(Course.owner_id==target.id, Course.organization_id.is_(None)).update({'organization_id':old_org})
+        from app.models.learning import LearningRoleGrant, LearningGroupMember, LearningGroup, LearningPerson
+        db.query(LearningRoleGrant).filter_by(user_id=target.id, organization_id=old_org).delete()
+        old_groups=select(LearningGroup.id).where(LearningGroup.organization_id==old_org)
+        db.query(LearningGroupMember).filter(LearningGroupMember.user_id==target.id, LearningGroupMember.group_id.in_(old_groups)).delete(synchronize_session=False)
+        person=db.get(LearningPerson,target.id)
+        if person:db.delete(person)
     target.is_active=payload.is_active;target.organization_id=payload.organization_id
     target.organization_role=payload.organization_role if payload.organization_id else 'member'
     target.auth_version+=1
@@ -232,7 +264,7 @@ def valid_invitation(db,token):
 @router.post('/auth/invitations/inspect')
 def inspect_invite(payload:TokenInput,db:Session=Depends(get_db)):
     row,org=valid_invitation(db,payload.token)
-    return {'email':row.email,'organization_name':org.name,'role':row.role,'expires_at':row.expires_at}
+    return {'email':row.email,'organization_name':org.name,'role':row.role,'expires_at':row.expires_at,'existing_account':bool(db.query(User).filter_by(email=row.email).first())}
 
 
 @router.post('/auth/invitations/accept',response_model=AuthResponse,status_code=201)
@@ -264,7 +296,8 @@ def accept_invite(payload:InviteAccept,db:Session=Depends(get_db)):
 def team(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
     if not user.organization_id:return {'organization':None,'members':[],'invitations':[],'can_manage':False}
     org=db.get(Organization,user.organization_id)
-    owner=user.organization_role=='owner'
+    from app.services.learning_service import is_manager
+    owner=is_manager(db,user)
     members=db.query(User).filter(User.organization_id==org.id).order_by(User.id).all()
     # Every member sees the team; only managers receive invitation addresses.
     pending=db.query(Invitation).filter(Invitation.organization_id==org.id).order_by((Invitation.accepted_at.is_(None) & Invitation.revoked_at.is_(None) & (Invitation.expires_at > datetime.utcnow())).desc(), Invitation.id.desc()).limit(100).all() if owner else []
@@ -272,15 +305,52 @@ def team(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
         'invitations':[invitation_dict(i) for i in pending],'can_manage':owner}
 
 
+@router.post('/auth/invitations/accept-existing', response_model=AuthResponse)
+def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depends(get_db), user:User=Depends(get_current_user)):
+    row,org=valid_invitation(db,payload.token)
+    lock_org(db,org.id)
+    from app.services.mfa_service import authenticated_factor
+    authenticated_factor(db,user,request.state.auth_claims)
+    row,org=valid_invitation(db,payload.token)
+    if normalize_email(user.email)!=row.email:
+        raise HTTPException(403,'Приглашение адресовано другому аккаунту')
+    if user.is_admin or user.organization_id:
+        raise HTTPException(409,'Аккаунт уже подключён к организации или является оператором')
+    if seats(db,org.id)>org.seat_limit:
+        raise HTTPException(409,'Лимит участников изменился. Обратитесь к администратору.')
+    claimed=db.execute(update(Invitation).where(Invitation.id==row.id,Invitation.accepted_at.is_(None),Invitation.revoked_at.is_(None),Invitation.expires_at>datetime.utcnow()).values(accepted_at=datetime.utcnow()))
+    if claimed.rowcount!=1:raise HTTPException(410,'Приглашение уже использовано')
+    user.organization_id=org.id
+    user.organization_role=row.role
+    user.auth_version+=1
+    audit(db,user,'invitation.accepted_existing','invitation',row.id,organization_id=org.id)
+    from app.services.mfa_service import preserve_token
+    result=AuthResponse(access_token=preserve_token(user,request.state.auth_claims),user=UserResponse.model_validate(user))
+    db.commit()
+    return result
+
+
+@router.post('/team/invitations/{invite_id}/resend')
+def resend_invite(invite_id:int,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
+    org_id=require_team_owner(user,db)
+    row=db.query(Invitation).filter_by(id=invite_id,organization_id=org_id).first()
+    if not row:raise HTTPException(404,'Приглашение не найдено')
+    if row.accepted_at:raise HTTPException(409,'Приглашение уже принято')
+    lock_org(db,org_id)
+    row.revoked_at=datetime.utcnow()
+    db.flush()
+    return make_invitation(db,user,InviteInput(email=row.email,organization_id=org_id,role=row.role))
+
+
 @router.post('/team/invitations',status_code=201)
 def team_invite(payload:InviteInput,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    if payload.organization_id!=require_team_owner(user):raise HTTPException(403,'Недоступная организация')
+    if payload.organization_id!=require_team_owner(user,db):raise HTTPException(403,'Недоступная организация')
     return make_invitation(db,user,payload)
 
 
 @router.delete('/team/invitations/{invite_id}')
 def team_revoke(invite_id:int,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    org_id=require_team_owner(user)
+    org_id=require_team_owner(user,db)
     row=db.query(Invitation).filter(Invitation.id==invite_id,Invitation.organization_id==org_id).first()
     if not row:raise HTTPException(404,'Приглашение не найдено')
     return revoke_invite(db,user,row)
@@ -288,7 +358,7 @@ def team_revoke(invite_id:int,db:Session=Depends(get_db),user:User=Depends(get_c
 
 @router.put('/team/members/{user_id}')
 def team_member(user_id:int,payload:UserChange,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    org_id=require_team_owner(user)
+    org_id=require_team_owner(user,db)
     if payload.organization_id!=org_id:raise HTTPException(403,'Перенос между организациями доступен только администратору Лерниума')
     target=db.query(User).filter(User.id==user_id,User.organization_id==org_id).first()
     if not target:raise HTTPException(404,'Участник не найден')

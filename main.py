@@ -15,11 +15,31 @@ from app.core.http_security import SecurityMiddleware
 from app.routes import account
 from app.routes import legal
 app.add_middleware(SecurityMiddleware)
+from app.core.upload_limits import UploadBodyLimitMiddleware
+app.add_middleware(UploadBodyLimitMiddleware)
 from app.routes import administration
 app.include_router(administration.router, prefix="/api", tags=["Administration"])
+from app.routes import learning
+app.include_router(learning.router, prefix="/api", tags=["Learning"])
+from app.routes import support_access
+app.include_router(support_access.router, prefix="/api", tags=["Support Access"])
 app.include_router(account.router, prefix="/api", tags=["Account"])
+from app.routes import mfa
+app.include_router(mfa.router, prefix="/api", tags=["Two-factor authentication"])
 app.include_router(legal.router, prefix="/api", tags=["Legal"])
+from app.routes import integrations, billing, oidc, lti, operations
+app.include_router(integrations.router, prefix="/api", tags=["Integrations v1"])
+app.include_router(billing.router, prefix="/api", tags=["Billing"])
+app.include_router(oidc.router, prefix="/api", tags=["OIDC"])
+app.include_router(lti.router, prefix="/api", tags=["LTI 1.3"])
+app.include_router(operations.router, prefix="/api", tags=["Operations"])
 from app.routes import ai_workspace
+from app.routes import materials
+app.include_router(materials.router, prefix="/api", tags=["Materials"])
+from app.routes import learner_assistant
+app.include_router(learner_assistant.router, prefix="/api", tags=["Learner Assistant"])
+from app.routes import ai_grading
+app.include_router(ai_grading.router, prefix="/api", tags=["AI Review"])
 app.include_router(ai_workspace.router, prefix="/api", tags=["AI Workspace"])
 
 cors_origins = os.getenv(
