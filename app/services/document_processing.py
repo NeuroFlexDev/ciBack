@@ -182,6 +182,8 @@ def _pdf_blocks(document) -> list[_PdfBlock]:
             if ocr_pages > settings.AI_OCR_MAX_PAGES:
                 raise ValueError("Scanned PDF exceeds AI_OCR_MAX_PAGES; split the document")
             usage = extraction_usage.get()
+            if usage is not None and usage.get("ocr_page_limit") is not None and ocr_pages > usage["ocr_page_limit"]:
+                raise ValueError("Недостаточно квоты OCR для документа; увеличьте лимит или загрузите текстовую версию")
             if usage is not None:
                 usage["ocr_pages"] = ocr_pages
             # Local OCR avoids shipping whole documents to a vision model and

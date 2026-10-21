@@ -41,10 +41,10 @@ def validate_container(content: bytes, mime_type: str) -> None:
             raise ValueError("Повреждённый DOCX") from exc
 
 
-def _extract_child(connection, content: bytes, mime_type: str):
+def _extract_child(connection, content: bytes, mime_type: str, ocr_page_limit=None):
     try:
         from app.services.document_processing import extract_blocks, extraction_usage
-        usage = {"ocr_pages": 0}
+        usage = {"ocr_pages": 0, "ocr_page_limit": ocr_page_limit}
         extraction_usage.set(usage)
         blocks = extract_blocks(content, mime_type)
         if sum(len(block.text) for block in blocks) > settings.DOCUMENT_MAX_EXTRACTED_CHARS:
@@ -56,13 +56,13 @@ def _extract_child(connection, content: bytes, mime_type: str):
         connection.close()
 
 
-def bounded_extract_blocks(content: bytes, mime_type: str, *, with_usage=False):
+def bounded_extract_blocks(content: bytes, mime_type: str, *, with_usage=False, ocr_page_limit=None):
     validate_container(content, mime_type)
     # In production native parsers/OCR run in an expendable process. A thread
     # timeout cannot stop a decompression bomb or a blocked OCR engine.
     if settings.ENV == "test":
         from app.services.document_processing import extract_blocks, extraction_usage
-        usage = {"ocr_pages": 0}
+        usage = {"ocr_pages": 0, "ocr_page_limit": ocr_page_limit}
         token = extraction_usage.set(usage)
         try:
             blocks = extract_blocks(content, mime_type)
@@ -71,7 +71,7 @@ def bounded_extract_blocks(content: bytes, mime_type: str, *, with_usage=False):
             extraction_usage.reset(token)
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
-    process = context.Process(target=_extract_child, args=(sender, content, mime_type), daemon=True)
+    process = context.Process(target=_extract_child, args=(sender, content, mime_type, ocr_page_limit), daemon=True)
     process.start()
     sender.close()
     try:

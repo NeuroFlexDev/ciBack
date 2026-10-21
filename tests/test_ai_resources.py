@@ -170,3 +170,38 @@ def test_empty_compose_prices_are_unconfigured_not_free():
     config = Settings(_env_file=None, DATABASE_URL="sqlite:///:memory:", JWT_SECRET="test-only-config-secret-32-characters", IMAGE_PRICE_RUB="", EMBEDDING_RUB_PER_MILLION="   ")
     assert config.IMAGE_PRICE_RUB is None and config.EMBEDDING_RUB_PER_MILLION is None
 
+
+def test_partial_ocr_reservation_never_exceeds_remaining_allowance(db_session, auth_user, monkeypatch):
+    monkeypatch.setattr(settings, "AI_ORG_MONTHLY_OCR_PAGES", 3)
+    first = resources.reserve(db_session, owner_id=auth_user.id, operation="document", pages=30, partial_ocr=True)
+    db_session.commit()
+    second = resources.reserve(db_session, owner_id=auth_user.id, operation="document", pages=30, partial_ocr=True)
+    db_session.commit()
+    assert (first.ocr_pages, second.ocr_pages) == (3, 0)
+    resources.finish(db_session, first, pages=1)
+    third = resources.reserve(db_session, owner_id=auth_user.id, operation="document", pages=30, partial_ocr=True)
+    assert third.ocr_pages == 2
+
+
+def test_text_pdf_works_without_ocr_allowance_and_scan_fails_before_ocr(monkeypatch):
+    import fitz
+    from io import BytesIO
+    from PIL import Image
+    from app.services.document_safety import bounded_extract_blocks
+    monkeypatch.setattr(settings, "AI_OCR_ENABLED", True)
+    with fitz.open() as pdf:
+        pdf.new_page().insert_text((30, 30), "Ordinary selectable text")
+        blocks, usage = bounded_extract_blocks(pdf.tobytes(), "application/pdf", with_usage=True, ocr_page_limit=0)
+    assert any("Ordinary selectable text" in block.text for block in blocks)
+    assert usage["ocr_pages"] == 0
+    calls = []
+    monkeypatch.setattr(fitz.Page, "get_textpage_ocr", lambda *args, **kwargs: calls.append(True))
+    raster = BytesIO()
+    Image.new("RGB", (50, 50), "white").save(raster, "PNG")
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_image(page.rect, stream=raster.getvalue())
+        with pytest.raises(ValueError, match="квоты OCR"):
+            bounded_extract_blocks(pdf.tobytes(), "application/pdf", ocr_page_limit=0)
+    assert calls == []
+

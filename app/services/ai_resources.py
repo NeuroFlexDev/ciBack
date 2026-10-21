@@ -107,7 +107,7 @@ def _budget(db, owner_id, organization_id, tokens, pages, cost, run_id=None):
 
 
 def reserve(db, *, owner_id, course_id=None, operation, lane="metered", tokens=0, pages=0,
-            cost=Decimal(0), key=None, run_id=None, queued=False, timeout=None):
+            cost=Decimal(0), key=None, run_id=None, queued=False, timeout=None, partial_ocr=False):
     locked(db)
     key = key or f"{operation}:{uuid4().hex}"
     existing = db.query(AIResourceUsage).filter_by(key=key).first()
@@ -124,6 +124,15 @@ def reserve(db, *, owner_id, course_id=None, operation, lane="metered", tokens=0
     if lane in {"background", "interactive"}:
         _capacity(db, owner_id, org_id, lane, status)
     cost = Decimal(cost).quantize(Decimal(".000001"), rounding=ROUND_UP)
+    if partial_ocr:
+        # Text-only PDFs need no OCR. Atomically reserve the remaining allowance
+        # and let the isolated parser enforce it before each OCR dispatch.
+        month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        query = db.query(AIResourceUsage).filter(AIResourceUsage.created_at >= month)
+        install_used = query.with_entities(func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0)).scalar()
+        org_used = scoped(query, org_id, owner_id).with_entities(func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0)).scalar()
+        pages = max(0, min(pages, settings.AI_INSTALL_MONTHLY_OCR_PAGES - install_used,
+            organization_limits(db, org_id)["monthly_ocr_pages"] - org_used))
     _budget(db, owner_id, org_id, tokens, pages, cost, run_id)
     row = AIResourceUsage(key=key, owner_id=owner_id, organization_id=org_id, course_id=course_id,
         operation=operation, lane=lane, status=status, tokens=tokens, ocr_pages=pages, cost_rub=cost,

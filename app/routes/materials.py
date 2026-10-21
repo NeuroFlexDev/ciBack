@@ -107,6 +107,8 @@ def get_image(image_id: int, db: Session = Depends(get_db), user=Depends(get_cur
         item.status, item.error_code = "failed", "image_result_unknown"
         item.size_bytes = 0
         db.commit()
+        from app.services.ai_resources import finish
+        finish(db, f"image:{item.id}", failed=True)
     return images.image_out(item)
 
 

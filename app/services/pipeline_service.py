@@ -409,7 +409,7 @@ class PipelineService:
         db.flush()
         from app.services.ai_resources import reserve, finish
         resource = reserve(db, owner_id=owner_id, course_id=document.course_id, operation="document", lane="background",
-            key=f"document:{run.id}", run_id=run.id, timeout=settings.DOCUMENT_PROCESSING_TIMEOUT_SECONDS,
+            key=f"document:{run.id}", run_id=run.id, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
             pages=settings.AI_OCR_MAX_PAGES if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED else 0)
         db.commit()
         db.refresh(run)
@@ -422,7 +422,7 @@ class PipelineService:
             db.commit()
 
             content = storage.read_bytes(document.storage_key)
-            blocks, extraction_usage = extract_blocks(content, document.mime_type, with_usage=True)
+            blocks, extraction_usage = extract_blocks(content, document.mime_type, with_usage=True, ocr_page_limit=resource.ocr_pages)
             resource.ocr_pages = extraction_usage.get("ocr_pages", resource.ocr_pages)
             db.commit()
             if sum(len(block.text) for block in blocks) > settings.DOCUMENT_MAX_EXTRACTED_CHARS:
