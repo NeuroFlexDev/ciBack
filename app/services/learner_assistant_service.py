@@ -9,11 +9,11 @@ from app.models.materials import LearnerAssistantMessage, ScopedAIUsage
 from app.models.user import User
 
 
-def assignment_context(db, user, assignment_id):
+def assignment_context(db, user, assignment_id, *, new_request=True):
     from app.services.learning_service import learner_assignment, public_snapshot, settings_for
     assignment = learner_assignment(db, user, assignment_id)
     config = settings_for(db, assignment.organization_id)
-    if config.features.get("assistant") is False or config.rules.get("allow_ai_assistant") is False or not assignment.rules.get("allow_ai_assistant", True):
+    if new_request and (config.features.get("assistant") is False or config.rules.get("allow_ai_assistant") is False or not assignment.rules.get("allow_ai_assistant", True)):
         raise HTTPException(403, "Помощник отключён правилами организации или назначения")
     return assignment, public_snapshot(db, assignment)
 

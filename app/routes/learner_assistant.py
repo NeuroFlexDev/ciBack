@@ -19,7 +19,7 @@ class Question(BaseModel):
 @router.get("/messages")
 def history(assignment_id: int, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
             db: Session = Depends(get_db), user=Depends(get_current_user)):
-    assignment, _ = assistant.assignment_context(db, user, assignment_id)
+    assignment, _ = assistant.assignment_context(db, user, assignment_id, new_request=False)
     assistant.expire_history(db, user.id)
     query = db.query(LearnerAssistantMessage).filter_by(owner_id=user.id, assignment_id=assignment_id,
         course_version_id=assignment.course_version_id).filter(LearnerAssistantMessage.status != "deleted")
@@ -38,7 +38,7 @@ def ask(assignment_id: int, payload: Question, db: Session = Depends(get_db), us
 
 @router.delete("/messages", status_code=204)
 def clear_history(assignment_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    assistant.assignment_context(db, user, assignment_id)
+    assistant.assignment_context(db, user, assignment_id, new_request=False)
     # Keep only non-content usage/idempotency records: deletion must not reset
     # a monthly paid quota or send a previously handled request twice.
     db.query(LearnerAssistantMessage).filter_by(owner_id=user.id, assignment_id=assignment_id).update(
