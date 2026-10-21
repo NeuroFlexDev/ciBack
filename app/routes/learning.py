@@ -22,6 +22,12 @@ from app.services import learning_service as svc
 router = APIRouter()
 
 
+@router.get('/learning/dashboard')
+def learning_dashboard(days: int = Query(default=30, ge=1, le=365), activity_days: int = Query(default=7, ge=1, le=30), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from app.services.learning_dashboard import dashboard
+    return dashboard(db, user, days=days, activity_days=activity_days)
+
+
 def settings_out(row):
     return {k: getattr(row, k) for k in ['organization_id', 'revision', 'profile', 'languages', 'role_labels', 'features', 'delivery', 'rules', 'ai_context', 'updated_at']}
 
