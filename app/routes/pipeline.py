@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
 
 from app.database.db import get_db
 from app.models.user import User
@@ -17,6 +18,20 @@ from app.services.course_update_service import CourseUpdateService
 
 
 router = APIRouter()
+
+
+class SourceSuggestionRequest(BaseModel):
+    document_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+@router.post("/courses/{course_id}/source-suggestion")
+def suggest_course_from_sources(course_id: int, payload: SourceSuggestionRequest,
+                                db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    PipelineService.validate_generation_documents(db, course_id=course_id, owner_id=current_user.id,
+                                                 document_ids=payload.document_ids)
+    documents = PipelineRepository.selected_indexed_documents(db, course_id, current_user.id, payload.document_ids)
+    from app.services.source_suggestion import source_suggestion
+    return source_suggestion(documents)
 
 
 @router.post("/generation-runs/{run_id}/cancel", response_model=GenerationRunStatusOut)

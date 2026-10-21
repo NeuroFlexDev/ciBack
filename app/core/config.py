@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_ENABLED: bool = True
     SMTP_FROM: str = ""
     SMTP_STARTTLS: bool = True
+    SMTP_SSL: bool = False
 
     CORS_ORIGINS: str = "http://localhost"
     APP_HOST: str = "0.0.0.0"
