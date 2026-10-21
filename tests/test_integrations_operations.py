@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.integration_config import integration_settings
 from app.core.security import create_access_token, hash_password
 from app.models.administration import Organization
-from app.models.integrations import OutboundMessage, IntegrationKey, WebhookEndpoint, BillingAccount, Invoice, PaymentEvent, OIDCProvider, OIDCSession, ExternalIdentity, LTIPlatform, LTIGradeBinding
+from app.models.integrations import OutboundMessage, IntegrationKey, WebhookEndpoint, BillingAccount, Invoice, PaymentEvent, OIDCProvider, OIDCSession, ExternalIdentity, LTIPlatform, LTIGradeBinding, LTIResource, LTIIdentity
 from app.models.user import User
 import app.models.learning
 from app.services import mail_service, outbox_service, integration_http, billing_service, oidc_service, lti_service
@@ -205,3 +205,88 @@ def test_oidc_browser_state_and_single_use_exchange(client,db_session,owner,monk
     response=client.post('/api/auth/oidc/exchange',json={'code':exchange,'state':state})
     assert response.status_code==200,response.text
     assert client.post('/api/auth/oidc/exchange',json={'code':exchange,'state':state}).status_code==400
+
+
+def published_fixture(db,owner):
+    from app.models.course import Course
+    from app.models.course_version import CourseVersion
+    from app.models.learning import PublishedLearningContent
+    course=Course(name='Published training',owner_id=owner.id,organization_id=owner.organization_id,status='ready',publication_status='published')
+    db.add(course);db.flush()
+    version=CourseVersion(course_id=course.id,revision=1,name=course.name,publication_status='published')
+    db.add(version);db.flush()
+    db.add(PublishedLearningContent(course_version_id=version.id,organization_id=owner.organization_id,
+        snapshot={'course':{'id':course.id,'title':course.name},'modules':[{'id':1,'title':'Module','lessons':[{'id':1,'title':'Lesson','content':'Immutable lesson'}],'assessments':[]}],'assessments':[]}))
+    db.commit();return version
+
+
+def test_assignment_api_idempotency_conflict_and_tenant_boundary(client,db_session,owner,auth_headers):
+    version=published_fixture(db_session,owner)
+    raw=client.post('/api/integrations/keys',headers=auth_headers,json=key_payload(['assignments:write','results:read'])).json()['key']
+    headers={'Authorization':'Bearer '+raw}
+    payload={'course_version_id':version.id,'user_id':owner.id,'external_id':'hr:2026:owner'}
+    first=client.post('/api/v1/assignments',headers=headers,json=payload)
+    assert first.status_code==200,first.text
+    second=client.post('/api/v1/assignments',headers=headers,json=payload)
+    assert second.status_code==200 and second.json()['created'] is False
+    assert second.json()['assignment']['id']==first.json()['assignment']['id']
+    assert client.post('/api/v1/assignments',headers=headers,json=payload|{'user_id':9999}).status_code==409
+    other=Organization(name='Foreign tenant');db_session.add(other);db_session.flush()
+    outsider=User(email='foreign@example.org',password_hash='unusable',organization_id=other.id);db_session.add(outsider);db_session.commit()
+    assert client.post('/api/v1/assignments',headers=headers,json=payload|{'external_id':'different','user_id':outsider.id}).status_code==404
+    result=client.get('/api/v1/results',headers=headers).json();assert result['total']==1
+    assert 'correct_answers' not in json.dumps(result)
+    assignment_id=first.json()['assignment']['id']
+    assert client.delete(f'/api/v1/assignments/{assignment_id}',headers=headers).status_code==200
+    assert client.get('/api/v1/results',headers=headers).json()['items'][0]['state']=='revoked'
+
+
+def test_expired_contract_preserves_reads_and_history_but_blocks_new_work(client,db_session,owner,auth_headers):
+    account,invoice=billing_fixture(db_session,owner)
+    account.status='active';account.access_until=datetime.utcnow()-timedelta(days=1);db_session.commit()
+    assert client.get('/api/billing',headers=auth_headers).status_code==200
+    assert client.patch('/api/me',headers=auth_headers,json={'full_name':'New Name'}).status_code==200
+    assert client.post('/api/courses/drafts',headers=auth_headers,json={}).status_code==403
+    assert db_session.get(Invoice,invoice.id).status=='issued'
+
+
+def test_lti_signed_launch_replay_deployment_and_latest_grade_delivery(client,db_session,owner,monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    version=published_fixture(db_session,owner)
+    private=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    public=json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key()))|{'kid':'lti-key','alg':'RS256'}
+    pem=private.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()).decode()
+    platform=LTIPlatform(organization_id=owner.organization_id,created_by=owner.id,name='Test LMS',issuer='https://lms.example.org',client_id='lernium-client',deployment_id='deployment-one',authorization_endpoint='https://lms.example.org/authorize',token_endpoint='https://lms.example.org/token',jwks_uri='https://lms.example.org/jwks',private_key_encrypted=seal(pem),public_jwk=public)
+    db_session.add(platform);db_session.flush()
+    db_session.add_all([LTIResource(platform_id=platform.id,resource_link_id='course-link',course_version_id=version.id),LTIIdentity(platform_id=platform.id,subject='lms-user-1',user_id=owner.id)])
+    db_session.commit()
+    url,state,browser=lti_service.begin(db_session,platform,'login-hint')
+    nonce=parse_qs(urlsplit(url).query)['nonce'][0]
+    now=datetime.now(timezone.utc)
+    claims={'iss':platform.issuer,'sub':'lms-user-1','aud':platform.client_id,'iat':now,'exp':now+timedelta(minutes=5),'nonce':nonce,
+        lti_service.CLAIM+'version':'1.3.0',lti_service.CLAIM+'message_type':'LtiResourceLinkRequest',lti_service.CLAIM+'deployment_id':'deployment-one',
+        lti_service.CLAIM+'roles':['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner'],
+        lti_service.CLAIM+'target_link_uri':lti_service.launch_url(platform),lti_service.CLAIM+'resource_link':{'id':'course-link'},
+        lti_service.AGS_CLAIM:{'lineitem':'https://lms.example.org/lineitems/42','scope':[lti_service.SCORE_SCOPE]}}
+    monkeypatch.setattr(integration_http,'request_json',lambda *a,**k:{'keys':[public]})
+    monkeypatch.setattr(integration_http,'validate_endpoint',lambda url:None)
+    sign=lambda data:jwt.encode(data,private,algorithm='RS256',headers={'kid':'lti-key'})
+    with pytest.raises(HTTPException):lti_service.complete(db_session,platform,state,sign(claims|{lti_service.CLAIM+'deployment_id':'wrong'}),browser)
+    code=lti_service.complete(db_session,platform,state,sign(claims),browser)
+    with pytest.raises(HTTPException):lti_service.complete(db_session,platform,state,sign(claims),browser)
+    client.cookies.set('lernium_lti_'+state[:12],browser,path='/api/lti')
+    exchanged=client.post('/api/lti/exchange',json={'code':code,'state':state})
+    assert exchanged.status_code==200,exchanged.text
+    assignment_id=exchanged.json()['assignment_id']
+    assert client.post('/api/lti/exchange',json={'code':code,'state':state}).status_code==400
+    first=datetime.utcnow();latest=first+timedelta(seconds=1)
+    lti_service.queue_grade(db_session,assignment_id,70,100,first);db_session.flush()
+    lti_service.queue_grade(db_session,assignment_id,80,100,latest);db_session.flush()
+    lti_service.queue_grade(db_session,assignment_id,60,100,first);db_session.commit()
+    assert db_session.query(OutboundMessage).count()==2
+    monkeypatch.setattr(integration_http,'request_json',lambda *a,**k:{'access_token':'lms-service-token','token_type':'Bearer'})
+    sent=[];monkeypatch.setattr(integration_http,'request',lambda *args:sent.append(args))
+    while outbox_service.process_one(db_session):pass
+    assert len(sent)==1 and sent[0][1].endswith('/scores')
+    assert json.loads(sent[0][2])['scoreGiven']==80
+    assert db_session.query(LTIGradeBinding).one().last_delivered_at==latest

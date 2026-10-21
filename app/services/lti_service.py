@@ -58,6 +58,8 @@ def complete(db,platform,raw_state,id_token,browser):
     claims=verify_id_token(id_token,platform,row.nonce_hash)
     if claims.get(CLAIM+"version")!="1.3.0" or claims.get(CLAIM+"message_type")!="LtiResourceLinkRequest" or claims.get(CLAIM+"deployment_id")!=platform.deployment_id:
         raise HTTPException(403,"Недопустимое LTI-сообщение или развёртывание LMS")
+    if not isinstance(claims.get(CLAIM+"roles"),list) or not claims[CLAIM+"roles"] or not all(isinstance(role,str) for role in claims[CLAIM+"roles"]):
+        raise HTTPException(403,"LMS не передала роли участника")
     if claims.get(CLAIM+"target_link_uri")!=launch_url(platform):raise HTTPException(403,"Неверный адрес назначения LTI")
     resource_id=claims.get(CLAIM+"resource_link",{}).get("id")
     resource=db.query(LTIResource).filter_by(platform_id=platform.id,resource_link_id=resource_id).first()

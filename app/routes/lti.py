@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.services.organization_access import audit
 from app.services.auth_service import ensure_organization_active
 from app.services.oidc_service import digest
 from app.services import lti_service
+from app.schemas.auth import UserResponse
 
 router=APIRouter()
 
@@ -149,6 +151,6 @@ def exchange(payload:ExchangeInput,request:Request,db:Session=Depends(get_db)):
     claimed=db.execute(update(LTISession).where(LTISession.state_hash==row.state_hash,LTISession.exchanged_at.is_(None)).values(exchanged_at=datetime.utcnow()))
     if claimed.rowcount!=1:raise HTTPException(400,"Сеанс LMS уже использован")
     db.commit()
-    response=JSONResponse({"access_token":create_access_token(user.id,user.auth_version),"token_type":"bearer","assignment_id":row.assignment_id})
+    response=JSONResponse(jsonable_encoder({"access_token":create_access_token(user.id,user.auth_version),"token_type":"bearer","assignment_id":row.assignment_id,"user":UserResponse.model_validate(user)}))
     response.delete_cookie("lernium_lti_"+payload.state[:12],path="/api/lti")
     return response

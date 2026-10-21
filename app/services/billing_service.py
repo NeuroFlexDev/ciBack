@@ -13,6 +13,8 @@ def ensure_write_access(db,organization_id):
     """Contract expiry stops new work while reads, export and renewal retain all historical data."""
     if not organization_id:return
     account=db.get(BillingAccount,organization_id)
+    if account and account.status=="pending":
+        raise HTTPException(403,"Договор ожидает подтверждения оплаты или согласования доступа оператором. Данные доступны для просмотра и выгрузки.")
     if account and (account.status in {"pending","suspended","cancelled"} or (account.status=="active" and account.access_until and account.access_until<=datetime.utcnow())):
         raise HTTPException(403,"Срок доступа по договору завершён. Данные сохранены и доступны для просмотра и выгрузки; обратитесь к владельцу организации для продления.")
 
