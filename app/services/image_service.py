@@ -21,9 +21,14 @@ from app.services.course_access import course_access_filter
 from app.services.file_storage import LocalFileStorage
 
 
-def course_access(db, user, course_id):
+def course_access(db, user, course_id, *, allow_reviewer=False):
     course = db.query(Course).filter(Course.id == course_id, course_access_filter(user.id),
                                      Course.is_deleted.is_(False)).first()
+    if not course and allow_reviewer:
+        from app.services.learning_service import can_scope
+        candidate = db.get(Course, course_id)
+        if candidate and not candidate.is_deleted and candidate.organization_id is not None and candidate.organization_id == user.organization_id and can_scope(db, user, "reviewer", course_id=course_id):
+            course = candidate
     if not course:
         raise HTTPException(404, "Курс не найден")
     return course

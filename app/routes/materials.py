@@ -41,10 +41,23 @@ class ImageReview(BaseModel):
 @router.get("/courses/{course_id}/images")
 def list_images(course_id: int, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
                 db: Session = Depends(get_db), user=Depends(get_current_user)):
-    images.course_access(db, user, course_id)
+    course = images.course_access(db, user, course_id, allow_reviewer=True)
+    from app.models.course import Course
+    from app.services.course_access import course_access_filter
+    from app.services.learning_service import settings_for, can_scope
+    author = bool(db.query(Course).filter(Course.id == course_id, course_access_filter(user.id)).first())
+    enabled = feature_enabled(db, user.organization_id, "images")
+    independent = bool(course.organization_id and settings_for(db, course.organization_id).rules.get("require_independent_approval"))
+    reviewer = bool(course.organization_id and can_scope(db, user, "reviewer", course_id=course.id))
     query = db.query(CourseImage).filter_by(course_id=course_id)
-    return {"items": [images.image_out(item) for item in query.order_by(CourseImage.id.desc()).offset(offset).limit(limit)],
-            "total": query.count(), "limit": limit, "offset": offset}
+    return {"items": [images.image_out(item) | {
+                "can_approve": enabled and (not independent or reviewer and user.id not in {item.owner_id, course.owner_id}),
+                "can_reject": enabled,
+            } for item in query.order_by(CourseImage.id.desc()).offset(offset).limit(limit)],
+            "total": query.count(), "limit": limit, "offset": offset,
+            "can_upload": author and enabled and feature_enabled(db, user.organization_id, "authoring"),
+            "can_generate": author and enabled and feature_enabled(db, user.organization_id, "authoring"),
+            "independent_review_required": independent}
 
 
 @router.post("/courses/{course_id}/images", status_code=201)

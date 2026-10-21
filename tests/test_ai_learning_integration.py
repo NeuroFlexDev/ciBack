@@ -78,6 +78,12 @@ def test_independent_reviewer_can_inspect_and_approve_draft_image(client, db_ses
     config = settings_for(db_session, world['org'].id)
     config.rules = {**config.rules, 'require_independent_approval': True}; db_session.commit()
     assert client.get(uploaded['content_url'], headers=headers(world['reviewer'])).status_code == 200
+    library = client.get(f'/api/courses/{course.id}/images', headers=headers(world['reviewer']))
+    assert library.status_code == 200 and library.json()['items'][0]['can_approve'] is True
+    assert library.json()['can_upload'] is False and library.json()['can_generate'] is False
+    author_library = client.get(f'/api/courses/{course.id}/images', headers=headers(world['author'])).json()
+    assert author_library['items'][0]['can_approve'] is False
+    assert client.get(f'/api/courses/{course.id}/images', headers=headers(world['foreign'])).status_code == 404
     path = f'/api/images/{uploaded["id"]}/review'
     assert client.post(path, headers=headers(world['author']), json={'decision': 'approved'}).status_code == 403
     assert client.post(path, headers=headers(world['reviewer']), json={'decision': 'approved'}).status_code == 200
