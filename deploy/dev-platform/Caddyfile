@@ -12,13 +12,15 @@
     }
     handle @demoRobots {
         header Content-Type "text/plain; charset=utf-8"
-        respond "User-agent: *\nAllow: /\n" 200
+        respond "User-agent: *" 200
     }
     @demoSitemap {
         path /sitemap.xml
         not host lernium.ru
     }
-    respond @demoSitemap 404
+    handle @demoSitemap {
+        respond 404
+    }
     redir /index.html / 301
 
     @backend path /api/*
