@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 readonly deployment_dir="/opt/lernium/deploy"
 readonly images_file="${deployment_dir}/.images.env"
 readonly backup_dir="/opt/lernium/backups"
+readonly rollback_profile="${deployment_dir}/.rollback-profile"
 
 fail() {
     printf 'Deployment failed: %s\n' "$*" >&2
@@ -101,18 +103,34 @@ wait_for_url() {
     return 1
 }
 
+# Derive all long-running services sharing this backend image, including outbox
+# and future worker pools. Never print the resolved Compose document: it has secrets.
+backend_service_names() {
+    compose config --format json | python3 -c '
+import json,re,sys
+services=json.load(sys.stdin)["services"]
+image=services["backend"]["image"]
+names=sorted(name for name, service in services.items()
+    if service.get("image")==image and service.get("restart") in {"always","unless-stopped","on-failure"})
+if "backend" not in names or "worker" not in names or any(not re.fullmatch(r"[a-z][a-z0-9_-]*",name) for name in names):
+    raise SystemExit("Invalid backend service set")
+if any(not services[name].get("healthcheck",{}).get("test") or services[name]["healthcheck"].get("disable") for name in names):
+    raise SystemExit("Every backend worker must declare a healthcheck")
+print("\n".join(names))'
+}
+
 deploy_current_image() {
     case "${component}" in
         backend)
-            compose pull backend worker migrate || return 1
+            compose pull "${backend_services[@]}" migrate || return 1
             compose up -d --wait --wait-timeout 120 db redis || return 1
             compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
                 > "${backup_dir}/database-$(date -u +%Y%m%dT%H%M%SZ).dump" || return 1
             compose run --rm --no-deps migrate || return 1
             if [[ -f "${deployment_dir}/.legacy-pending" ]]; then /usr/local/sbin/lernium-import-legacy || return 1; fi
-            compose up -d --no-deps --force-recreate backend worker || return 1
-            wait_for_url http://127.0.0.1:8000/api/healthz || return 1
-            if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/api/healthz" || return 1; fi
+            compose up -d --no-deps --force-recreate --wait --wait-timeout 180 "${backend_services[@]}" || return 1
+            wait_for_url http://127.0.0.1:8000/api/readiness || return 1
+            if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/api/readiness" || return 1; fi
             ;;
         frontend)
             compose pull frontend || return 1
@@ -135,7 +153,21 @@ rollback() {
     set_image "${image_variable}" "${previous_image}"
     case "${component}" in
         backend)
-            compose up -d --no-deps --force-recreate backend worker
+            # On the first release an old image may not contain a new worker module.
+            # Stop introduced services before restoring the previous configuration/image.
+            if ((${#introduced_services[@]})); then compose stop --timeout 30 "${introduced_services[@]}" || return 1; fi
+            if [[ "$profile_pending" == true ]]; then
+                for name in docker-compose.yml frontend-nginx.conf Caddyfile; do
+                    if [[ -f "${rollback_profile}/${name}" ]]; then
+                        cp -- "${rollback_profile}/${name}" "${deployment_dir}/${name}"
+                    fi
+                done
+            fi
+            compose up -d --no-deps --force-recreate --wait --wait-timeout 180 "${previous_backend_services[@]}" || return 1
+            wait_for_url http://127.0.0.1:8000/api/readiness || return 1
+            if [[ "$profile_pending" == true && "$edge_mode" == caddy ]]; then
+                compose up -d --no-deps --force-recreate caddy || return 1
+            fi
             ;;
         frontend)
             compose up -d --no-deps --force-recreate frontend
@@ -152,6 +184,26 @@ flock -w 600 9 || fail "another deployment is still running"
 previous_image="$(sed -n "s/^${image_variable}=//p" "${images_file}" | tail -n 1)"
 [[ -n "${previous_image}" ]] || fail "could not determine the current image"
 edge_mode="$(cat "${deployment_dir}/.edge-mode" 2>/dev/null || printf 'caddy')"
+profile_pending=false
+backend_services=()
+previous_backend_services=()
+introduced_services=()
+if [[ "$component" == backend ]]; then
+    names="$(backend_service_names)" || fail "could not identify all backend workers"
+    mapfile -t backend_services <<< "$names"
+    running="$(compose ps --services --status running)" || fail "could not inspect existing services"
+    for service in "${backend_services[@]}"; do
+        if grep -qxF "$service" <<< "$running"; then previous_backend_services+=("$service")
+        else introduced_services+=("$service"); fi
+    done
+    # A first installation has no prior service set to restore.
+    if ((${#previous_backend_services[@]} == 0)); then previous_backend_services=(backend worker); fi
+    if [[ -f "${rollback_profile}/.pending" ]]; then
+        [[ "$(stat -c %u "$rollback_profile")" == 0 && "$(stat -c %a "$rollback_profile")" == 700 ]] || fail "rollback profile must be root-owned mode 0700"
+        [[ -f "${rollback_profile}/docker-compose.yml" && ! -L "${rollback_profile}/docker-compose.yml" ]] || fail "previous Compose profile missing"
+        profile_pending=true
+    fi
+fi
 
 
 docker_config="$(mktemp -d /tmp/lernium-docker-config.XXXXXX)"
@@ -166,8 +218,13 @@ ghcr_token=""
 
 set_image "${image_variable}" "${image}"
 if ! deploy_current_image; then
-    rollback
+    rollback || fail "${component} failed and rollback readiness failed; operator recovery required"
     fail "${component} did not become healthy"
+fi
+
+if [[ "$component" == backend && "$profile_pending" == true ]]; then
+    # Preserve the previous files for investigation, but do not reuse a stale rollback automatically.
+    mv -- "${rollback_profile}/.pending" "${rollback_profile}/.applied-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 
 if [[ -f "${deployment_dir}/.bootstrap-pending" ]]; then

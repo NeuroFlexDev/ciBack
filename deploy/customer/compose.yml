@@ -52,7 +52,7 @@ services:
     <<: *app
     command: ["rq", "worker", "generation", "--with-scheduler", "--url", "redis://redis:6379/0"]
     healthcheck:
-      test: ["CMD", "python", "-c", "from redis import Redis; from rq import Worker; from datetime import datetime,timezone; ws=Worker.all(connection=Redis.from_url('redis://redis:6379/0')); assert any(w.last_heartbeat and (datetime.now(timezone.utc)-w.last_heartbeat).total_seconds()<180 for w in ws)"]
+      test: ["CMD", "python", "-m", "scripts.worker_health"]
       interval: 30s
       timeout: 10s
       retries: 3

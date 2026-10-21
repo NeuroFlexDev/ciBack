@@ -149,7 +149,7 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/healthz', timeout=5)
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/readiness', timeout=5)
       interval: 15s
       timeout: 7s
       retries: 10
@@ -176,6 +176,12 @@ services:
     environment: *backend-environment
     volumes:
       - uploads_data:/data/uploads
+    healthcheck:
+      test: ["CMD", "python", "-m", "scripts.worker_health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     depends_on:
       migrate:
         condition: service_completed_successfully
