@@ -185,3 +185,18 @@ def test_admin_bootstrap_preserves_password_and_revokes_old_tokens(client, db_se
     assert db_session.query(AdminEvent).filter_by(action='administrator.granted').count() == 1
     with pytest.raises(ValueError):grant(db_session, auth_user.email, 'never-overwrite-password')
     with pytest.raises(ValueError):grant(db_session, 'unknown@example.com')
+
+
+
+def test_synchronous_graph_endpoint_cannot_bypass_monthly_limit(client, db_session):
+    from tests.test_upload_pipeline import _course_and_document
+    from app.models.generation_run import GenerationRun
+    o = org(db_session, generation_limit=0)
+    u = member(db_session, o)
+    course, document, _ = _course_and_document(db_session, u)
+    document.status = 'indexed'
+    db_session.commit()
+    result = client.post(f'/api/courses/{course.id}/generate-graph?force=true', headers=headers(u))
+    assert result.status_code == 409, result.text
+    assert 'месячный лимит' in result.json()['detail']
+    assert db_session.query(GenerationRun).filter_by(course_id=course.id).count() == 0

@@ -646,6 +646,9 @@ class PipelineService:
                 db.commit()
                 return existing
 
+        if prepared_run is None:
+            from app.services.organization_access import check_generation_limit
+            check_generation_limit(db, owner_id)
         run = prepared_run or GenerationRun(
             owner_id=owner_id,
             course_id=course_id,
