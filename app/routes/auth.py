@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.user import User
-from app.schemas.auth import AuthCredentials, RegistrationCredentials, AuthResponse, UserResponse
+from app.schemas.auth import AuthCredentials, RegistrationCredentials, AuthResponse, UserResponse, MFAChallengeResponse
 from app.services.auth_service import AuthService, get_current_user
 from app.services.legal_service import require_current_version, record_receipt
 
@@ -25,13 +25,13 @@ def register(payload: RegistrationCredentials, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/auth/login", response_model=AuthResponse, summary="Вход пользователя")
+@router.post("/auth/login", response_model=AuthResponse | MFAChallengeResponse, summary="Вход пользователя")
 def login(payload: AuthCredentials, db: Session = Depends(get_db)):
     user, token = AuthService.authenticate(db, payload.email, payload.password)
-    return AuthResponse(
-        access_token=token,
-        user=UserResponse.model_validate(user),
-    )
+    from app.services.mfa_service import authentication_result
+    result=authentication_result(db,user)
+    db.commit()
+    return result
 
 
 @router.get("/auth/me", response_model=UserResponse, summary="Текущий пользователь")

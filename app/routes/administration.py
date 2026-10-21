@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -306,7 +306,7 @@ def team(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
 
 
 @router.post('/auth/invitations/accept-existing', response_model=AuthResponse)
-def accept_existing_invite(payload:TokenInput, db:Session=Depends(get_db), user:User=Depends(get_current_user)):
+def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depends(get_db), user:User=Depends(get_current_user)):
     row,org=valid_invitation(db,payload.token)
     lock_org(db,org.id)
     row,org=valid_invitation(db,payload.token)
@@ -323,7 +323,8 @@ def accept_existing_invite(payload:TokenInput, db:Session=Depends(get_db), user:
     user.auth_version+=1
     audit(db,user,'invitation.accepted_existing','invitation',row.id,organization_id=org.id)
     db.commit()
-    return AuthResponse(access_token=create_access_token(user.id,user.auth_version),user=UserResponse.model_validate(user))
+    from app.services.mfa_service import preserve_token
+    return AuthResponse(access_token=preserve_token(user,request.state.auth_claims),user=UserResponse.model_validate(user))
 
 
 @router.post('/team/invitations/{invite_id}/resend')

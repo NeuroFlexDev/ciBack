@@ -119,10 +119,12 @@ def exchange(payload:ExchangeInput,request:Request,db:Session=Depends(get_db)):
     ensure_organization_active(user)
     claimed=db.execute(update(OIDCSession).where(OIDCSession.state_hash==row.state_hash,OIDCSession.exchanged_at.is_(None)).values(exchanged_at=datetime.utcnow()))
     if claimed.rowcount!=1:raise HTTPException(400,"Сеанс входа уже использован")
+    from app.services.mfa_service import authentication_result
+    result=authentication_result(db,user,primary='oidc',context={'oidc_provider_id':provider.id,'organization_id':provider.organization_id})
     db.commit()
     from fastapi.responses import JSONResponse
     from fastapi.encoders import jsonable_encoder
-    response=JSONResponse(jsonable_encoder({"access_token":create_access_token(user.id,user.auth_version),"token_type":"bearer","user":UserResponse.model_validate(user)}))
+    response=JSONResponse(jsonable_encoder(result))
     response.delete_cookie("lernium_oidc_"+payload.state[:12],path="/api/auth/oidc")
     return response
 

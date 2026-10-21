@@ -3,7 +3,7 @@ import secrets
 from typing import Literal
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -51,10 +51,11 @@ def profile(payload: ProfileUpdate, db: Session = Depends(get_db), user: User = 
 
 
 @router.post("/change-password")
-def password(payload: PasswordChange, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def password(payload: PasswordChange, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     AuthService.change_password(db, user, payload.old_password, payload.new_password)
     db.commit()
-    return {"access_token": create_access_token(user.id, user.auth_version), "token_type": "bearer"}
+    from app.services.mfa_service import preserve_token
+    return {"access_token": preserve_token(user,request.state.auth_claims), "token_type": "bearer"}
 
 
 @router.post("/auth/logout-all")

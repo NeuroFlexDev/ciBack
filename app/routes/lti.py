@@ -163,7 +163,9 @@ def exchange(payload:ExchangeInput,request:Request,db:Session=Depends(get_db)):
     ensure_organization_active(user)
     claimed=db.execute(update(LTISession).where(LTISession.state_hash==row.state_hash,LTISession.exchanged_at.is_(None)).values(exchanged_at=datetime.utcnow()))
     if claimed.rowcount!=1:raise HTTPException(400,"Сеанс LMS уже использован")
+    from app.services.mfa_service import authentication_result
+    result=authentication_result(db,user,primary='lti',context={'lti_platform_id':platform.id,'organization_id':platform.organization_id,'assignment_id':row.assignment_id})
     db.commit()
-    response=JSONResponse(jsonable_encoder({"access_token":create_access_token(user.id,user.auth_version),"token_type":"bearer","assignment_id":row.assignment_id,"user":UserResponse.model_validate(user)}))
+    response=JSONResponse(jsonable_encoder(result))
     response.delete_cookie("lernium_lti_"+payload.state[:12],path="/api/lti")
     return response

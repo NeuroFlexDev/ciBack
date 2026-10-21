@@ -27,7 +27,8 @@ def configure(args):
         "JWT_SECRET":secrets.token_urlsafe(48),"DATA_ENCRYPTION_KEY":base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
         "PUBLIC_APP_URL":"https://"+args.domain,"CORS_ORIGINS":"https://"+args.domain,
         "REGISTRATION_ENABLED":"false","CONTACT_REQUESTS_ENABLED":"false","AUTH_RATE_LIMIT_ENABLED":"true",
-        "REDIS_URL":"redis://redis:6379/0","UPLOAD_DIR":"/data/uploads","SMTP_STARTTLS":"true"}
+        "REDIS_URL":"redis://redis:6379/0","UPLOAD_DIR":"/data/uploads","SMTP_STARTTLS":"true",
+        "MFA_REQUIRED_FOR_OPERATORS":"false","MFA_STEP_UP_SECONDS":"600"}
     env=lambda values:"".join(f"{key}={value}\n" for key,value in values.items())
     write_private(targets[0],env({"PUBLIC_HOST":args.domain}|images))
     write_private(targets[1],env(runtime))

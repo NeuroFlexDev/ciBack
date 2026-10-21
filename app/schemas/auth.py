@@ -43,3 +43,9 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+
+class MFAChallengeResponse(BaseModel):
+    mfa_required: bool = True
+    challenge_token: str
+    expires_at: str
