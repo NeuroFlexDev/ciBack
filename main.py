@@ -23,6 +23,8 @@ from app.routes import learning
 app.include_router(learning.router, prefix="/api", tags=["Learning"])
 from app.routes import support_access
 app.include_router(support_access.router, prefix="/api", tags=["Support Access"])
+from app.routes import course_transfer
+app.include_router(course_transfer.router, prefix="/api", tags=["Course Transfer"])
 app.include_router(account.router, prefix="/api", tags=["Account"])
 from app.routes import mfa
 app.include_router(mfa.router, prefix="/api", tags=["Two-factor authentication"])
