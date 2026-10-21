@@ -44,6 +44,7 @@ class InviteInput(BaseModel):
     email: str = Field(min_length=5, max_length=255)
     organization_id: int = Field(gt=0)
     role: Literal['owner','admin','author','reviewer','manager','member'] = 'member'
+    locale: Literal['ru', 'en'] = 'ru'
     @field_validator('email')
     @classmethod
     def email_valid(cls, value):
@@ -129,7 +130,7 @@ def make_invitation(db, actor, payload):
         from app.services.mail_service import configured
         if configured():
             from app.services.mail_service import queue_invitation
-            queue_invitation(db, payload.email, url, org.name)
+            queue_invitation(db, payload.email, url, org.name, locale=payload.locale)
             mail_status = 'queued'
     db.commit()
     return {**invitation_dict(row), 'url':url, 'mail_status':mail_status, 'existing_account':bool(existing)}

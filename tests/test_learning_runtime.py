@@ -70,6 +70,18 @@ def grant(client, world, name, role, scope_type, scope_id):
     return r.json()
 
 
+def test_management_directory_includes_unpublished_courses_without_content(client, db_session, world):
+    own = Course(name='First draft', description='Private content', owner_id=world['author'].id)
+    foreign = Course(name='Foreign draft', description='Secret', owner_id=world['foreign'].id)
+    db_session.add_all([own, foreign])
+    db_session.commit()
+    result = client.get('/api/team/course-directory', headers=headers(world['owner']))
+    assert result.status_code == 200
+    assert result.json()['items'] == [{'id': own.id, 'title': 'First draft', 'status': own.status}]
+    assert client.get('/api/team/course-directory', headers=headers(world['learner'])).status_code == 403
+    assert client.get('/api/team/course-directory', headers=headers(world['foreign'])).status_code == 403
+
+
 def test_complete_snapshot_safe_learner_and_cross_tenant_isolation(client, db_session, world):
     course, module, lesson, question, task, version = publish(client, db_session, world['author'])
     assignment = assign(client, world, course)

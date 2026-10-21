@@ -435,6 +435,14 @@ def get_task_assessment(task_id: int, db: Session = Depends(get_db), user: User 
     return read_assessment_settings(db, user, 'task', task_id)
 
 
+@router.get('/team/course-directory')
+def course_directory(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Management metadata, including drafts needing their first reviewer grant."""
+    org_id = svc.require_manager(db, user)
+    rows = db.query(Course).filter_by(organization_id=org_id, is_deleted=False).order_by(Course.name, Course.id).all()
+    return {'items': [{'id': r.id, 'title': r.name, 'status': r.status} for r in rows]}
+
+
 @router.get('/team/catalogue')
 def catalogue(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
@@ -845,7 +853,11 @@ def program_enrollments(program_id: int, db: Session = Depends(get_db), user: Us
 def reminders(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = report_rows(db, user)
     now = datetime.utcnow()
-    due = [r for r in rows if r.state == 'active' and not r.completed_at and r.due_at and svc.utc(r.due_at) <= now + timedelta(days=3)]
+    windows = {}
+    for enrollment in db.query(LearningProgramEnrollment).filter_by(organization_id=svc.organization(user)):
+        for aid in enrollment.assignment_ids:
+            windows[aid] = enrollment.snapshot.get('reminder_days', 3)
+    due = [r for r in rows if r.state == 'active' and not r.completed_at and r.due_at and svc.utc(r.due_at) <= now + timedelta(days=windows.get(r.id, 3))]
     return {'items': [svc.assignment_summary(db, r) for r in due]}
 
 
