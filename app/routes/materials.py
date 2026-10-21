@@ -57,13 +57,18 @@ def resource_usage(db: Session = Depends(get_db), user=Depends(get_current_user)
 def material_capabilities(db: Session = Depends(get_db), user=Depends(get_current_user)):
     from app.ai import providers
     provider = providers.registry().get(settings.IMAGE_PROVIDER)
+    from app.services.material_quota import material_policy
+    price_ready = bool(provider and (provider.local or settings.IMAGE_PRICE_RUB is not None))
+    configured = bool(provider and providers.available(provider) and settings.IMAGE_MODEL)
     return {"document_formats": ["pdf", "docx", "txt", "md"], "document_max_bytes": settings.max_document_bytes,
             "source_characters_limit": settings.AI_MAX_SOURCE_CHARS,
-            "image_formats": ["png", "jpg", "jpeg"], "image_max_bytes": settings.IMAGE_MAX_BYTES,
+            "image_formats": ["png", "jpg", "jpeg", "webp"], "image_max_bytes": settings.IMAGE_MAX_BYTES,
             "image_max_pixels": settings.IMAGE_MAX_PIXELS,
             "image_library_available": feature_enabled(db, user.organization_id, "images"),
-            "image_generation_available": bool(feature_enabled(db, user.organization_id, "images") and provider and providers.available(provider) and settings.IMAGE_MODEL),
-            "image_monthly_limit": settings.IMAGE_MONTHLY_LIMIT,
+            "image_generation_available": bool(feature_enabled(db, user.organization_id, "images") and configured and price_ready),
+            "image_generation_error": None if configured and price_ready else "image_price_unconfigured" if configured else "image_provider_unavailable",
+            "image_price_rub_upper_bound": str(settings.IMAGE_PRICE_RUB) if configured and price_ready and not provider.local else "0" if configured and provider.local else None,
+            "image_monthly_limit": material_policy(db, user)["image_monthly_limit"],
             "course_modules_limit": settings.MAX_COURSE_MODULES, "course_lessons_limit": settings.MAX_COURSE_LESSONS,
             "lesson_content_characters_limit": settings.MAX_LESSON_CONTENT_CHARS,
             "canvas_semantics": "Canvas stores layout and connections; course content is edited through module and lesson APIs."}
@@ -126,9 +131,8 @@ def generate_image(course_id: int, payload: ImageGenerate, db: Session = Depends
         try:
             images.enqueue_image(item.id)
         except Exception:
-            item.status, item.error_code = "failed", "image_queue_unavailable"
-            item.size_bytes = 0
-            db.commit()
+            db.rollback()
+            item = images.reconcile_enqueue_failure(db, item.id)
     return images.image_out(item)
 
 

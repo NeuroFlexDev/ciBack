@@ -1,7 +1,6 @@
 """Authenticated immutable image assets; generation is idempotent and reviewable."""
 from __future__ import annotations
 
-import base64
 from datetime import datetime
 from io import BytesIO
 import re
@@ -10,7 +9,6 @@ import warnings
 
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import select
 
 from app.ai import providers
 from app.core.config import settings
@@ -51,14 +49,16 @@ def normalize_image(content):
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(content)) as picture:
-                if picture.format not in {"PNG", "JPEG"}:
-                    raise HTTPException(415, "Поддерживаются только PNG и JPEG")
+                if picture.format not in {"PNG", "JPEG", "WEBP"}:
+                    raise HTTPException(415, "Поддерживаются только PNG, JPEG и WebP")
+                if getattr(picture, "n_frames", 1) > 1:
+                    raise HTTPException(415, "Загрузите статичное изображение вместо анимации")
                 width, height = picture.size
                 if width * height > settings.IMAGE_MAX_PIXELS or width < 1 or height < 1:
                     raise HTTPException(413, "Иллюстрация превышает лимит пикселей")
                 picture.verify()
             with Image.open(BytesIO(content)) as picture:
-                fmt = "PNG" if picture.format == "PNG" else "JPEG"
+                fmt = "JPEG" if picture.format == "JPEG" else "PNG"
                 converted = picture.convert("RGBA" if fmt == "PNG" else "RGB")
                 output = BytesIO()
                 converted.save(output, format=fmt)
@@ -98,20 +98,19 @@ def image_access(db, user, image_id, *, author_only=False):
 
 
 def prepare_generation(db, user, course_id, prompt, request_id):
-    from app.services.feature_access import require_feature
     from app.services.organization_access import lock_member
     user = lock_member(db, user.id, expected_auth_version=user.auth_version)
+    from app.services.ai_resources import locked
+    locked(db)  # Also serialize SQLite admission before checking idempotency and image count.
+    from app.services.feature_access import require_feature
     require_feature(db, user.organization_id, "images")
     course_access(db, user, course_id)
-    # A user row serializes quotas even for personal accounts; organization row
-    # serializes across its members. Failed/uncertain provider calls consume quota.
-    owner_ids = [user.id]
+    # Membership/resource locks serialize admission; sent or uncertain calls consume quota.
     if user.organization_id:
-        from app.services.organization_access import lock_org, member_ids
+        from app.services.organization_access import lock_org
         org = lock_org(db, user.organization_id)
         if not org.is_active:
             raise HTTPException(403, "Организация приостановлена")
-        owner_ids = member_ids(db, org.id)
     existing = db.query(CourseImage).filter_by(owner_id=user.id, request_id=request_id).first()
     if existing:
         if existing.course_id != course_id or existing.prompt != prompt:
@@ -132,6 +131,9 @@ def prepare_generation(db, user, course_id, prompt, request_id):
     check_storage(db, user, settings.IMAGE_MAX_BYTES)
     item = CourseImage(owner_id=user.id, course_id=course_id, prompt=prompt, request_id=request_id,
                        status="queued", provider=provider.id, model=settings.IMAGE_MODEL, size_bytes=settings.IMAGE_MAX_BYTES)
+    from app.services.image_provider import generation_options
+    item.generation_config = {"options": generation_options(item.model), "endpoint": str(provider.base_url),
+                              "local": provider.local, "download_hosts": settings.IMAGE_DOWNLOAD_HOSTS}
     from app.services.ai_resources import reserve
     if not provider.local and settings.IMAGE_PRICE_RUB is None:
         raise HTTPException(503, {"code": "image_price_unconfigured", "message": "Не настроен денежный лимит одного изображения"})
@@ -166,18 +168,20 @@ def execute_image_generation(image_id):
         provider = providers.registry().get(item.provider)
         if not provider or not providers.available(provider):
             raise RuntimeError("provider_unavailable")
+        from app.services.image_provider import image_bytes, ImageResultError
+        config = item.generation_config
+        if not config or config.get("endpoint") != str(provider.base_url) or config.get("local") != provider.local:
+            raise ImageResultError("image_configuration_changed")
         item.status = "generating"
         db.commit()  # At-most-once submission: a killed worker never blindly bills again.
         client = OpenAI(api_key=providers.credential(provider), base_url=str(provider.base_url),
                         timeout=provider.timeout_seconds, max_retries=0)
         request_started = True
-        result = client.images.generate(model=item.model, prompt=item.prompt, n=1, size="1024x1024",
-                                        response_format="b64_json")
+        result = client.images.generate(prompt=item.prompt, **config["options"])
         author_result_access(db, owner_id, stamp, course_id, "images")
-        encoded = result.data[0].b64_json if result.data else None
-        if not encoded or len(encoded) > settings.IMAGE_MAX_BYTES * 4 // 3 + 16:
-            raise RuntimeError("invalid_image_response")
-        save_content(item, base64.b64decode(encoded, validate=True))
+        content = image_bytes(result, timeout=provider.timeout_seconds, allowed_hosts=config.get("download_hosts", []))
+        author_result_access(db, owner_id, stamp, course_id, "images")
+        save_content(item, content)
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -196,7 +200,8 @@ def execute_image_generation(image_id):
             item = db.get(CourseImage, image_id)
             item.status = "failed"
             item.size_bytes = 0
-            item.error_code = "image_access_revoked" if isinstance(exc, HTTPException) and exc.status_code in {403, 404} else "image_generation_failed"
+            from app.services.image_provider import ImageResultError
+            item.error_code = "image_access_revoked" if isinstance(exc, HTTPException) and exc.status_code in {401, 403, 404, 409} else str(exc) if isinstance(exc, ImageResultError) else "image_generation_failed"
             db.commit()
     finally:
         if claimed:
@@ -215,6 +220,22 @@ def enqueue_image(image_id):
     queue.enqueue("app.services.image_service.execute_image_generation", image_id,
                   job_id=f"course-image-{image_id}", job_timeout=360, result_ttl=86400, failure_ttl=604800,
                   retry=Retry(max=20, interval=15))
+
+
+def reconcile_enqueue_failure(db, image_id):
+    """Redis acknowledgement can be lost after a worker started: never refund that call."""
+    from app.models.ai_resources import AIResourceUsage
+    from app.services.ai_resources import locked, finish
+    item = db.query(CourseImage).filter_by(id=image_id).with_for_update().populate_existing().one()
+    locked(db)
+    receipt = db.query(AIResourceUsage).filter_by(key=f"image:{image_id}").populate_existing().one()
+    if item.status == "queued" and receipt.status == "queued":
+        # Worker takes the same image→resource locks and sees failed before claim.
+        item.status, item.error_code, item.size_bytes = "failed", "image_queue_unavailable", 0
+        finish(db, receipt, unsent=True, failed=True)
+    else:
+        db.commit()  # A claimed job owns its outcome and original reservation.
+    return item
 
 
 def validate_course_images(db, course_id):

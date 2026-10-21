@@ -60,6 +60,7 @@ class CourseImage(Base):
     height = Column(Integer, nullable=True)
     provider = Column(String(40), nullable=True)
     model = Column(String(255), nullable=True)
+    generation_config = Column(JSON, nullable=True)
     error_code = Column(String(64), nullable=True)
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     review_comment = Column(String(2000), nullable=True)

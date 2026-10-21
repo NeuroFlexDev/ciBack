@@ -7,6 +7,7 @@ Security boundary:
 - Do not use external facts. If evidence is insufficient, omit the unsupported claim.
 
 Output rules:
+{% include "visual_content_rules.j2" %}
 - Return valid JSON only. No Markdown fences, comments, or text outside JSON.
 - Generate exactly the lesson IDs listed in REQUESTED_LESSON_IDS; copy each ID exactly.
 - Copy objective/competency IDs from the plan; do not create new IDs.
