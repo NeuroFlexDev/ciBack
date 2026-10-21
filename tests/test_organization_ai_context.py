@@ -74,6 +74,7 @@ def test_learner_context_has_preferences_without_answer_keys(client, db_session,
     path = f'/api/learning/assignments/{assignment["id"]}/assistant/messages'
     history = client.get(path, headers=headers(world['learner']))
     assert history.status_code == 200 and history.json()['items'][0]['answer'] == 'Explanation from lesson'
+    assert history.json()['can_send'] is False and history.json()['disabled_reason']
     assert client.post(path, headers=headers(world['learner']), json={'lesson_id': lesson.id, 'question': 'New question', 'request_id': 'disabled-new-message'}).status_code == 403
     assert client.delete(path, headers=headers(world['learner'])).status_code == 204
     assert client.get(path, headers=headers(world['learner'])).json()['items'] == []

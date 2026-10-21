@@ -26,8 +26,12 @@ def history(assignment_id: int, limit: int = Query(20, ge=1, le=100), offset: in
     total = query.count()
     items = query.order_by(LearnerAssistantMessage.id.desc()).offset(offset).limit(limit).all()
     db.commit()
+    from app.services.learning_service import settings_for
+    config = settings_for(db, assignment.organization_id)
+    can_send = config.features.get("assistant") is not False and config.rules.get("allow_ai_assistant") is not False and assignment.rules.get("allow_ai_assistant", True)
     return {"items": [assistant.message_out(item) for item in items], "total": total,
-            "limit": limit, "offset": offset, "retention_days": settings.AI_CHAT_RETENTION_DAYS}
+            "limit": limit, "offset": offset, "retention_days": settings.AI_CHAT_RETENTION_DAYS,
+            "can_send": bool(can_send), "disabled_reason": None if can_send else "Помощник отключён правилами организации или назначения"}
 
 
 @router.post("/messages")
