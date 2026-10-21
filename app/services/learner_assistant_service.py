@@ -10,8 +10,11 @@ from app.models.user import User
 
 
 def assignment_context(db, user, assignment_id):
-    from app.services.learning_service import learner_assignment, public_snapshot
+    from app.services.learning_service import learner_assignment, public_snapshot, settings_for
     assignment = learner_assignment(db, user, assignment_id)
+    config = settings_for(db, assignment.organization_id)
+    if config.features.get("assistant") is False or config.rules.get("allow_ai_assistant") is False or not assignment.rules.get("allow_ai_assistant", True):
+        raise HTTPException(403, "Помощник отключён правилами организации или назначения")
     return assignment, public_snapshot(db, assignment)
 
 
@@ -103,7 +106,7 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
         if result.get("unsupported") or not cited:
             item.answer += "\n\nВ материалах этого урока нет достаточного подтверждения ответа."
         item.citations = [{"lesson_id": lesson_id, "title": lesson["title"],
-                           "url": f"/learn/{assignment_id}/lessons/{lesson_id}",
+                           "url": f"/learning/{assignment_id}?item=lesson:{lesson_id}",
                            "course_version_id": assignment.course_version_id}] if cited else []
         usage = response.get("usage") or {}
         item.model = response.get("model")

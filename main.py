@@ -34,6 +34,8 @@ from app.routes import materials
 app.include_router(materials.router, prefix="/api", tags=["Materials"])
 from app.routes import learner_assistant
 app.include_router(learner_assistant.router, prefix="/api", tags=["Learner Assistant"])
+from app.routes import ai_grading
+app.include_router(ai_grading.router, prefix="/api", tags=["AI Review"])
 app.include_router(ai_workspace.router, prefix="/api", tags=["AI Workspace"])
 
 cors_origins = os.getenv(

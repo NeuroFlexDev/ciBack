@@ -350,6 +350,8 @@ def response_dict(db, row, assignment, *, include_key=False):
     result = {k: getattr(row, k) for k in ['id', 'assignment_id', 'assessment_id', 'attempt', 'revision', 'answer', 'status', 'submitted_at', 'points', 'feedback', 'updated_at']}
     result['max_points'] = assessment['max_points']
     result['grading_metadata'] = {k: v for k, v in (row.grading_metadata or {}).items() if k in {'method', 'reason'}}
+    if include_key and (row.grading_metadata or {}).get('ai_proposal'):
+        result['grading_metadata']['ai_proposal'] = row.grading_metadata['ai_proposal']
     result['can_retry'] = row.status == 'reviewed' and row.attempt < assignment.rules.get('max_attempts', 3) and (not assignment.due_at or utc(assignment.due_at) >= datetime.utcnow() or assignment.rules.get('allow_late_submission'))
     reveal = assignment.rules.get('reveal_answers', 'never')
     passed = row.status == 'reviewed' and row.points >= assessment['max_points'] * assignment.rules.get('pass_percent', 60) / 100

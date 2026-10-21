@@ -120,6 +120,12 @@ class CourseGenerationSettingsService:
                 settings.updated_by = owner_id
                 settings.is_deleted = False
 
+            if course.name != payload.title:
+                from app.services.course_publication_service import CoursePublicationService
+                before = course.content_revision
+                CoursePublicationService.prepare_for_edit(course)
+                if before == course.content_revision:
+                    course.content_revision += 1
             course.name = payload.title
             course.status = CourseStatus.CONFIGURED.value
             if commit:

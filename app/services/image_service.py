@@ -17,11 +17,12 @@ from app.core.config import settings
 from app.models.materials import CourseImage
 from app.models.course import Course
 from app.models.user import User
+from app.services.course_access import course_access_filter
 from app.services.file_storage import LocalFileStorage
 
 
 def course_access(db, user, course_id):
-    course = db.query(Course).filter(Course.id == course_id, Course.owner_id == user.id,
+    course = db.query(Course).filter(Course.id == course_id, course_access_filter(user.id),
                                      Course.is_deleted.is_(False)).first()
     if not course:
         raise HTTPException(404, "Курс не найден")
@@ -74,11 +75,11 @@ def save_content(item, content):
 
 
 def image_access(db, user, image_id, *, author_only=False):
-    item = db.get(CourseImage, image_id)
+    query = db.query(CourseImage).filter(CourseImage.id == image_id)
+    item = (query.with_for_update() if author_only else query).first()
     if not item:
         raise HTTPException(404, "Иллюстрация не найдена")
-    if item.owner_id == user.id:
-        course_access(db, user, item.course_id)
+    if db.query(Course).filter(Course.id == item.course_id, course_access_filter(user.id), Course.is_deleted.is_(False)).first():
         return item
     if not author_only and item.status == "approved":
         from app.services.learning_service import authorized_learning_image
@@ -108,8 +109,11 @@ def prepare_generation(db, user, course_id, prompt, request_id):
     if not provider or not providers.available(provider) or not settings.IMAGE_MODEL:
         raise HTTPException(503, {"code": "image_provider_unavailable", "message": "Генератор изображений недоступен. Можно загрузить PNG или JPEG."})
     since = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    used = db.query(CourseImage).filter(CourseImage.owner_id.in_(owner_ids), CourseImage.prompt.is_not(None),
-                                        CourseImage.created_at >= since).count()
+    scope = Course.organization_id == user.organization_id
+    if user.organization_id is None:
+        scope = scope & (Course.owner_id == user.id)
+    used = db.query(CourseImage).join(Course).filter(scope, CourseImage.prompt.is_not(None),
+                                                   CourseImage.created_at >= since).count()
     from app.services.material_quota import material_policy, check_storage
     if used >= material_policy(db, user)["image_monthly_limit"]:
         raise HTTPException(429, "Исчерпан месячный лимит генерации иллюстраций")

@@ -40,7 +40,7 @@ class ImageReview(BaseModel):
 def list_images(course_id: int, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
                 db: Session = Depends(get_db), user=Depends(get_current_user)):
     images.course_access(db, user, course_id)
-    query = db.query(CourseImage).filter_by(course_id=course_id, owner_id=user.id)
+    query = db.query(CourseImage).filter_by(course_id=course_id)
     return {"items": [images.image_out(item) for item in query.order_by(CourseImage.id.desc()).offset(offset).limit(limit)],
             "total": query.count(), "limit": limit, "offset": offset}
 
@@ -128,7 +128,7 @@ def get_policy(organization_id: int, db: Session = Depends(get_db), user=Depends
     return {"disk_bytes_limit": row.disk_bytes_limit if row else 5 * 1024**3,
             "image_monthly_limit": row.image_monthly_limit if row else settings.IMAGE_MONTHLY_LIMIT,
             "chat_monthly_limit": row.chat_monthly_limit if row else settings.AI_CHAT_MONTHLY_LIMIT,
-            "used_disk_bytes": used_disk_bytes(db, member_ids(db, organization_id))}
+            "used_disk_bytes": used_disk_bytes(db, [], organization_id=organization_id)}
 
 
 @router.put("/admin/organizations/{organization_id}/material-policy")
