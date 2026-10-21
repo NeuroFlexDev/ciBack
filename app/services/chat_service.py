@@ -62,6 +62,8 @@ def chat_generate(
     from app.services.feature_access import require_feature
     from app.models.user import User
     require_feature(db, db.get(User, user_id).organization_id, "assistant")
+    from app.services.ai_access_boundary import principal_stamp, author_result_access
+    stamp = principal_stamp(db.get(User, user_id))
     chat = ChatRepository._active_chat(db, chat_id, user_id)
     engine_name = engine_name or chat.engine or "vsellm"
     if settings.AI_LOCAL_ONLY:
@@ -89,6 +91,8 @@ def chat_generate(
             response = tracked_completion(db, user_id, chat.course_id, "chat", [{"role": "system", "content": system}, *context], model=model)
         except AIUnavailable:
             response = source_answer(text, citations)
+        author_result_access(db, user_id, stamp, chat.course_id, "chat")
+        ChatRepository._active_chat(db, chat_id, user_id)
         if chat.course_id is not None:
             import re
             cited_ids = {int(value) for value in re.findall(r"\[chunk:(\d+)\]", response["text"])}
@@ -121,6 +125,8 @@ def chat_generate(
     except Exception:
         from app.ai.offline import source_answer
         response = source_answer(text)
+    author_result_access(db, user_id, stamp, chat.course_id, "chat")
+    ChatRepository._active_chat(db, chat_id, user_id)
     answer = response.get("text") or response.get("choice") or ""
     response_model = response.get("model")
     usage = _usage_from_response(response)

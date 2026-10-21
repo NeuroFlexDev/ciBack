@@ -11,6 +11,8 @@ from app.services.material_quota import material_policy
 
 def tracked_completion(db, owner_id, course_id, role, messages, *, invoke=None, **kwargs):
     user = db.execute(select(User).where(User.id == owner_id).with_for_update()).scalar_one()
+    from app.services.ai_access_boundary import principal_stamp, author_result_access
+    stamp = principal_stamp(user)
     if role in {"chat", "canvas"}:
         from app.services.organization_ai_context import organization_ai_context, with_organization_context
         messages = with_organization_context(messages, organization_ai_context(db, user.organization_id))
@@ -40,7 +42,6 @@ def tracked_completion(db, owner_id, course_id, role, messages, *, invoke=None, 
         record.model, record.provider = result.get("model"), result.get("provider")
         record.status = "completed" if usage else "usage_unreported"
         db.commit()
-        return result
     except Exception as exc:
         record.status = "unavailable" if getattr(exc, "request_sent", None) is False else "usage_unknown"
         record.error_code = gateway.safe_error(exc)
@@ -48,3 +49,10 @@ def tracked_completion(db, owner_id, course_id, role, messages, *, invoke=None, 
             record.input_tokens = record.output_tokens = 0
         db.commit()
         raise
+    try:
+        author_result_access(db, owner_id, stamp, course_id, role)
+    except HTTPException:
+        record.error_code = "ai_access_revoked"
+        db.commit()
+        raise
+    return result

@@ -35,7 +35,10 @@ def message_out(item):
 
 
 def send_message(db, user, assignment_id, lesson_id, question, request_id):
+    from app.services.ai_access_boundary import principal_stamp, refresh_principal
+    user_id, stamp = user.id, principal_stamp(user)
     assignment, snapshot = assignment_context(db, user, assignment_id)
+    version_id = assignment.course_version_id
     lessons = {lesson["id"]: lesson for module in snapshot["modules"] for lesson in module["lessons"]}
     lesson = lessons.get(lesson_id)
     if not lesson:
@@ -99,6 +102,15 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
         from app.models.course_version import CourseVersion
         assigned_course = db.get(CourseVersion, assignment.course_version_id).course_id
         response = completion(db, user.id, assigned_course, "chat", messages, max_tokens=2000, json_mode=True)
+        try:
+            current_user = refresh_principal(db, user_id, stamp)
+            current_assignment, _ = assignment_context(db, current_user, assignment_id)
+            if current_assignment.course_version_id != version_id:
+                raise HTTPException(403, "Назначенная версия изменилась")
+        except HTTPException:
+            item.status, item.error_code = "failed", "assistant_access_revoked"
+            db.commit()
+            raise
         result = json.loads(response["text"])
         cited = result.get("cited_lesson_ids", [])
         if not isinstance(result.get("answer"), str) or not result["answer"].strip() or not isinstance(cited, list):
@@ -119,6 +131,8 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
         item.output_tokens = int(usage.get("output_tokens") or 0)
         item.status = "completed"
     except Exception as exc:
+        if item.error_code == "assistant_access_revoked":
+            raise HTTPException(403, {"code": "ai_access_revoked", "message": "Доступ к помощнику изменился во время запроса. Результат не выдан."}) from None
         item.status = "failed"
         item.error_code = "assistant_context_limit" if isinstance(exc, HTTPException) and exc.status_code == 413 else "assistant_unavailable"
     db.commit()

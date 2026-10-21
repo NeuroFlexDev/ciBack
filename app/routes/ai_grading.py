@@ -69,6 +69,8 @@ def validate_candidate(candidate, assessment, answer):
 
 @router.post("/learning/reviews/{response_id}/ai-proposal")
 def propose(response_id: int, payload: ProposalRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.ai_access_boundary import principal_stamp, refresh_principal
+    user_id, stamp = user.id, principal_stamp(user)
     response = db.query(LearningResponse).filter_by(id=response_id).with_for_update().first()
     assignment = db.get(LearningAssignment, response.assignment_id) if response else None
     if not assignment or not learning.can_review(db, user, assignment):
@@ -107,6 +109,23 @@ def propose(response_id: int, payload: ProposalRequest, db: Session = Depends(ge
     except Exception as exc:
         proposal = {**proposal, "status": "failed", "error_code": "quota_exceeded" if isinstance(exc, HTTPException) and exc.status_code == 429 else "ai_grading_unavailable"}
     db.refresh(response)
+    try:
+        current_user = refresh_principal(db, user_id, stamp)
+        current_assignment = db.get(LearningAssignment, response.assignment_id)
+        if not current_assignment or not learning.can_review(db, current_user, current_assignment):
+            raise HTTPException(403, "Право проверки отозвано")
+        current_config = learning.settings_for(db, current_assignment.organization_id)
+        if current_config.features.get("ai_grading") is not True or not current_config.rules.get("allow_ai_grading", False) or not current_assignment.rules.get("allow_ai_grading", False):
+            raise HTTPException(403, "AI-проверка отключена")
+    except HTTPException:
+        # Retain the request receipt/cost, but never expose an answer to a
+        # reviewer whose authorization expired during provider execution.
+        if response.status == "pending_review" and response.revision == payload.expected_revision:
+            response.grading_metadata = {**response.grading_metadata, "ai_proposal": {
+                key: proposal[key] for key in ("request_id", "response_revision", "created_at", "assessment_hash", "answer_hash")
+            } | {"status": "failed", "error_code": "ai_access_revoked"}}
+            db.commit()
+        raise HTTPException(403, {"code": "ai_access_revoked", "message": "Право AI-проверки изменилось во время запроса. Результат не выдан."}) from None
     if response.status != "pending_review" or response.revision != payload.expected_revision:
         raise HTTPException(409, "Работа была проверена во время подготовки предложения. Оценка проверяющего сохранена.")
     response.grading_metadata = {**response.grading_metadata, "ai_proposal": proposal}
