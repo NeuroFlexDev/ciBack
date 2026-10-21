@@ -23,7 +23,7 @@ def enqueue_event(db, organization_id, event_type, event_id, data):
         if event_type not in endpoint.events:
             continue
         key = f"webhook:{endpoint.id}:{event_id}"
-        if db.query(OutboundMessage.id).filter_by(deduplication_key=key).first():
+        if any(isinstance(item, OutboundMessage) and item.deduplication_key == key for item in db.new) or db.query(OutboundMessage.id).filter_by(deduplication_key=key).first():
             continue
         db.add(OutboundMessage(id=str(uuid.uuid4()), organization_id=organization_id, kind="webhook",
             deduplication_key=key, payload_encrypted=seal({"endpoint_id":endpoint.id, "event":event}),

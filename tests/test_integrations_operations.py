@@ -110,7 +110,6 @@ def test_webhook_signing_and_duplicate_domain_events(db_session,owner,monkeypatc
     secret='only-receiver-knows';endpoint=WebhookEndpoint(organization_id=owner.organization_id,url='https://customer.example/webhook',secret_encrypted=seal(secret),events=['course.published'])
     db_session.add(endpoint);db_session.flush()
     outbox_service.enqueue_event(db_session,owner.organization_id,'course.published','course:42:v1',{'course_id':42})
-    db_session.flush()
     outbox_service.enqueue_event(db_session,owner.organization_id,'course.published','course:42:v1',{'course_id':42})
     db_session.commit();assert db_session.query(OutboundMessage).count()==1
     requests=[];monkeypatch.setattr(integration_http,'request',lambda *args:requests.append(args))
