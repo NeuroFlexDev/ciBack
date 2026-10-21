@@ -92,6 +92,13 @@ def test_disabled_delivery_option_blocks_keys_and_federation_but_preserves_histo
     assert not db_session.query(OutboundMessage).count()
 
 
+def test_organization_admin_can_manage_allowed_integrations_but_not_billing(client,db_session,owner,auth_headers):
+    owner.organization_role='admin';db_session.commit()
+    assert client.post('/api/integrations/keys',headers=auth_headers,json=key_payload()).status_code==201
+    assert client.get('/api/integrations/keys',headers=auth_headers).status_code==200
+    assert client.get('/api/billing',headers=auth_headers).status_code==403
+
+
 def test_mail_queue_survives_failure_retries_and_erases_token_after_delivery(db_session,monkeypatch):
     monkeypatch.setattr(mail_service,'configured',lambda:True)
     row=mail_service.queue_reset(db_session,'learner@example.org','https://example.org/reset#token=private-token','hash','en')

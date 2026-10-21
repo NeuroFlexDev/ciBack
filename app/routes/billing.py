@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.integrations import BillingAccount, Invoice
 from app.services.auth_service import require_admin
-from app.services.integration_access import integration_owner
+from app.services.integration_access import billing_owner
 from app.services.organization_access import audit, lock_org
 from app.services.billing_service import apply_payment, invoice_dict, reconcile_payment
 
@@ -48,7 +48,7 @@ def account_dict(account):
 
 
 @router.get("/billing")
-def billing(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),db:Session=Depends(get_db),user=Depends(integration_owner)):
+def billing(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),db:Session=Depends(get_db),user=Depends(billing_owner)):
     return billing_view(db,user.organization_id,offset,limit)
 
 

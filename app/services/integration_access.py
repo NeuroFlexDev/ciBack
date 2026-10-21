@@ -25,11 +25,17 @@ def ensure_integrations_enabled(db, organization_id):
 
 
 def integration_owner(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user.organization_id or user.organization_role != "owner":
-        raise HTTPException(403, "Управление интеграциями доступно владельцу организации")
+    if not user.organization_id or user.organization_role not in {"owner", "admin"}:
+        raise HTTPException(403, "Управление интеграциями доступно владельцу или администратору организации")
     # Keep history, billing and revocation available when a delivery option is disabled.
     if request.url.path.startswith("/api/integrations/") and request.method not in {"GET", "DELETE"}:
         ensure_integrations_enabled(db, user.organization_id)
+    return user
+
+
+def billing_owner(user=Depends(get_current_user)):
+    if not user.organization_id or user.organization_role != "owner":
+        raise HTTPException(403, "Условия и оплата доступны владельцу организации")
     return user
 
 
