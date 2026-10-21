@@ -138,7 +138,7 @@ def create_course(
         db.add(new_course)
         db.commit()
         db.refresh(new_course)
-        logger.info("Курс успешно создан: ID=%s, Название=%s", new_course.id, new_course.name)
+        logger.info("Курс успешно создан: ID=%s", new_course.id)
         return CourseResponse(
             id=new_course.id,
             title=new_course.name,
@@ -215,7 +215,7 @@ def update_course(
         
         db.commit()
         db.refresh(course)
-        logger.info("Курс обновлен: ID=%s, Обновленные данные: %s", course.id, update_data)
+        logger.info("Курс обновлен: ID=%s, поля=%s", course.id, sorted(update_data))
         return CourseResponse(
             id=course.id,
             title=course.name,
