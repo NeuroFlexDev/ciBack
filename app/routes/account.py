@@ -52,10 +52,13 @@ def profile(payload: ProfileUpdate, db: Session = Depends(get_db), user: User = 
 
 @router.post("/change-password")
 def password(payload: PasswordChange, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from app.services.mfa_service import authenticated_factor
+    authenticated_factor(db,user,request.state.auth_claims)
     AuthService.change_password(db, user, payload.old_password, payload.new_password)
-    db.commit()
     from app.services.mfa_service import preserve_token
-    return {"access_token": preserve_token(user,request.state.auth_claims), "token_type": "bearer"}
+    result={"access_token": preserve_token(user,request.state.auth_claims), "token_type": "bearer"}
+    db.commit()
+    return result
 
 
 @router.post("/auth/logout-all")

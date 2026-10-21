@@ -48,7 +48,8 @@ class AuthService:
 
     @staticmethod
     def authenticate(db: Session, email: str, password: str) -> tuple[User, str]:
-        user = UserRepository.get_by_email(db, normalize_email(email))
+        # Hold the user version stable from password proof through session/challenge issuance.
+        user = db.query(User).filter(User.email==normalize_email(email)).with_for_update().populate_existing().first()
         if not user or not user.is_active or not verify_password(password, user.password_hash):
             raise _credentials_exception("Неверный email или пароль")
         ensure_organization_active(user)

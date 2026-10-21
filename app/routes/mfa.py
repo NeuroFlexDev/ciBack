@@ -49,13 +49,13 @@ def status(db:Session=Depends(get_db),user=Depends(get_current_user)):
 
 
 @router.post('/auth/mfa/enroll')
-def enroll(payload:PasswordInput,db:Session=Depends(get_db),user=Depends(get_current_user)):
-    return svc.start_enrollment(db,user,payload.password)
+def enroll(payload:PasswordInput,request:Request,db:Session=Depends(get_db),user=Depends(get_current_user)):
+    return svc.start_enrollment(db,user,payload.password,request.state.auth_claims)
 
 
 @router.post('/auth/mfa/enroll/confirm')
-def confirm(payload:EnrollmentInput,db:Session=Depends(get_db),user=Depends(get_current_user)):
-    return svc.confirm_enrollment(db,user,payload.enrollment_token,payload.code)
+def confirm(payload:EnrollmentInput,request:Request,db:Session=Depends(get_db),user=Depends(get_current_user)):
+    return svc.confirm_enrollment(db,user,payload.enrollment_token,payload.code,request.state.auth_claims)
 
 
 @router.post('/auth/mfa/verify')
@@ -65,7 +65,7 @@ def verify(payload:ChallengeInput,db:Session=Depends(get_db)):
 
 @router.post('/auth/mfa/step-up')
 def step_up(payload:CodeInput,request:Request,db:Session=Depends(get_db),user=Depends(get_current_user)):
-    factor=svc.locked_factor(db,user.id)
+    factor=svc.authenticated_factor(db,user,request.state.auth_claims)
     method=svc.consume(db,user,factor,payload.code)
     primary=next((x for x in request.state.auth_claims.get('amr',[]) if x in {'pwd','oidc','lti'}),'pwd')
     audit(db,user,'mfa.step_up','user',user.id,method=method)
@@ -76,8 +76,8 @@ def step_up(payload:CodeInput,request:Request,db:Session=Depends(get_db),user=De
 
 @router.post('/auth/mfa/recovery-codes')
 def replace_codes(payload:ManageInput,request:Request,db:Session=Depends(get_db),user=Depends(get_current_user)):
+    factor=svc.authenticated_factor(db,user,request.state.auth_claims)
     svc.require_password(user,payload.password)
-    factor=svc.locked_factor(db,user.id)
     method=svc.consume(db,user,factor,payload.code)
     recovery=svc.codes(db,user)
     audit(db,user,'mfa.recovery_replaced','user',user.id)
@@ -87,11 +87,11 @@ def replace_codes(payload:ManageInput,request:Request,db:Session=Depends(get_db)
 
 
 @router.post('/auth/mfa/disable')
-def disable(payload:ManageInput,db:Session=Depends(get_db),user=Depends(get_current_user)):
+def disable(payload:ManageInput,request:Request,db:Session=Depends(get_db),user=Depends(get_current_user)):
+    factor=svc.authenticated_factor(db,user,request.state.auth_claims)
     if user.is_admin and mfa_settings.MFA_REQUIRED_FOR_OPERATORS:
         raise HTTPException(403,'Политика операторов требует двухэтапный вход. Отключение недоступно.')
     svc.require_password(user,payload.password)
-    factor=svc.locked_factor(db,user.id)
     svc.consume(db,user,factor,payload.code)
     factor.enabled=False;factor.secret_encrypted='';factor.pending_secret_encrypted=''
     factor.enrollment_token_hash=None;factor.enrollment_expires_at=None;factor.enabled_at=None

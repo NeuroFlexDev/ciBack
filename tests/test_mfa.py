@@ -53,6 +53,26 @@ def test_rfc6238_vector():
     assert svc.otp(key, 1234567890//30) == '005924'
 
 
+@pytest.mark.parametrize('path', ['step-up','enroll','enroll/confirm','recovery-codes','disable','password'])
+def test_revocation_between_bearer_validation_and_factor_lock_never_revives_session(client,auth_user,db_session,clock,monkeypatch,path):
+    from sqlalchemy import update
+    from app.models.user import User
+    setup,confirmed,_=enroll(client,auth_user,clock)
+    original=svc.locked_factor
+    def revoked_before_lock(db,user_id):
+        db.execute(update(User).where(User.id==user_id).values(auth_version=User.auth_version+1).execution_options(synchronize_session=False))
+        return original(db,user_id)
+    monkeypatch.setattr(svc,'locked_factor',revoked_before_lock)
+    payload={'code':confirmed['recovery_codes'][0]}
+    if path in {'enroll','recovery-codes','disable'}:payload['password']='password123'
+    if path=='enroll':payload.pop('code')
+    if path=='enroll/confirm':payload['enrollment_token']=setup['enrollment_token']
+    if path=='password':payload={'old_password':'password123','new_password':'changed-password123'}
+    result=client.post('/api/change-password' if path=='password' else '/api/auth/mfa/'+path,headers=headers(confirmed),json=payload)
+    assert result.status_code==401,result.text
+    assert 'access_token' not in result.json()
+
+
 def test_pending_enrollment_is_encrypted_and_expires(client, auth_user, auth_headers, db_session, clock):
     assert client.get('/api/auth/mfa/status', headers=auth_headers).json()['enabled'] is False
     assert client.post('/api/auth/mfa/enroll', headers=auth_headers, json={'password': 'wrong'}).status_code == 400
@@ -220,6 +240,23 @@ def test_password_change_preserves_mfa_without_refreshing_step_up(client, auth_u
     assert claims['amr'] == original_claims['amr'] and claims['mfa_at'] == original_claims['mfa_at']
     assert client.get('/api/auth/me', headers=headers(result.json())).status_code == 200
     assert login(client, auth_user, 'new-password1234').json()['mfa_required']
+
+
+def test_logout_after_password_commit_still_revokes_returned_token(client,auth_user,db_session,clock,monkeypatch):
+    from sqlalchemy import update
+    from app.models.user import User
+    _,confirmed,_=enroll(client,auth_user,clock)
+    prior_version=auth_user.auth_version
+    commit=db_session.commit
+    def revoke_after_commit():
+        commit()
+        db_session.execute(update(User).where(User.id==auth_user.id).values(auth_version=User.auth_version+1).execution_options(synchronize_session=False))
+        commit()
+    monkeypatch.setattr(db_session,'commit',revoke_after_commit)
+    result=client.post('/api/change-password',headers=headers(confirmed),json={'old_password':'password123','new_password':'changed-password123'})
+    assert result.status_code==200,result.text
+    assert decode_access_token(result.json()['access_token'])['ver']==prior_version+1
+    assert client.get('/api/auth/me',headers=headers(result.json())).status_code==401
 
 
 @pytest.mark.parametrize('kind', ['oidc', 'lti'])

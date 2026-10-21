@@ -74,6 +74,17 @@ def require_password(user, password):
         raise HTTPException(400, 'Текущий пароль неверен')
 
 
+def authenticated_factor(db,user,claims):
+    """Recheck revocation under the same lock used to issue a replacement JWT."""
+    factor=locked_factor(db,user.id)
+    if not user.is_active or user.auth_version!=claims.get('ver',0):
+        raise HTTPException(401,'Сеанс завершён. Войдите снова.',headers={'WWW-Authenticate':'Bearer'})
+    from app.services.auth_service import ensure_organization_active
+    db.expire(user,['organization'])
+    ensure_organization_active(user)
+    return factor
+
+
 def enabled(db, user):
     factor = db.get(UserMFA, user.id)
     return bool(factor and factor.enabled)
@@ -180,9 +191,9 @@ def complete_challenge(db,raw,code):
     return result
 
 
-def start_enrollment(db,user,password):
+def start_enrollment(db,user,password,claims):
+    factor=authenticated_factor(db,user,claims)
     require_password(user,password)
-    factor=locked_factor(db,user.id)
     if factor.enabled: raise HTTPException(409,'Двухэтапный вход уже подключён')
     try: cipher()  # Fail before returning a secret if durable encryption is unavailable.
     except (ValueError,RuntimeError):
@@ -198,8 +209,8 @@ def start_enrollment(db,user,password):
     return {'enrollment_token':raw,'secret':secret,'otpauth_uri':uri,'expires_at':factor.enrollment_expires_at.isoformat()+'Z'}
 
 
-def confirm_enrollment(db,user,raw,code):
-    factor=locked_factor(db,user.id)
+def confirm_enrollment(db,user,raw,code,claims):
+    factor=authenticated_factor(db,user,claims)
     if factor.enabled or not factor.enrollment_token_hash or not hmac.compare_digest(factor.enrollment_token_hash,digest(raw)) or not factor.enrollment_expires_at or factor.enrollment_expires_at<=now():
         raise HTTPException(400,'Настройка истекла или уже завершена. Начните заново.')
     step=matching_step(secret_for(factor,pending=True),code)

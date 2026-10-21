@@ -309,6 +309,8 @@ def team(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
 def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depends(get_db), user:User=Depends(get_current_user)):
     row,org=valid_invitation(db,payload.token)
     lock_org(db,org.id)
+    from app.services.mfa_service import authenticated_factor
+    authenticated_factor(db,user,request.state.auth_claims)
     row,org=valid_invitation(db,payload.token)
     if normalize_email(user.email)!=row.email:
         raise HTTPException(403,'Приглашение адресовано другому аккаунту')
@@ -322,9 +324,10 @@ def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depen
     user.organization_role=row.role
     user.auth_version+=1
     audit(db,user,'invitation.accepted_existing','invitation',row.id,organization_id=org.id)
-    db.commit()
     from app.services.mfa_service import preserve_token
-    return AuthResponse(access_token=preserve_token(user,request.state.auth_claims),user=UserResponse.model_validate(user))
+    result=AuthResponse(access_token=preserve_token(user,request.state.auth_claims),user=UserResponse.model_validate(user))
+    db.commit()
+    return result
 
 
 @router.post('/team/invitations/{invite_id}/resend')
