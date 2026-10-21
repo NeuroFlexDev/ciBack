@@ -99,6 +99,23 @@ def test_organization_admin_can_manage_allowed_integrations_but_not_billing(clie
     assert client.get('/api/billing',headers=auth_headers).status_code==403
 
 
+def test_explicit_organization_admin_grant_is_tenant_scoped_and_revocable(client,db_session,owner,auth_headers):
+    from app.models.learning import LearningRoleGrant
+    owner.organization_role='member'
+    foreign=Organization(name='Other tenant');db_session.add(foreign);db_session.flush()
+    grant=LearningRoleGrant(organization_id=foreign.id,user_id=owner.id,created_by=owner.id,
+        role='admin',scope_type='organization',scope_id=0)
+    db_session.add(grant);db_session.commit()
+    assert client.get('/api/integrations/keys',headers=auth_headers).status_code==403
+    grant.organization_id=owner.organization_id;grant.scope_type='course';grant.scope_id=10;db_session.commit()
+    assert client.get('/api/integrations/keys',headers=auth_headers).status_code==403
+    grant.scope_type='organization';grant.scope_id=0;db_session.commit()
+    assert client.post('/api/integrations/keys',headers=auth_headers,json=key_payload()).status_code==201
+    assert client.get('/api/billing',headers=auth_headers).status_code==403
+    db_session.delete(grant);db_session.commit()
+    assert client.get('/api/integrations/keys',headers=auth_headers).status_code==403
+
+
 def test_mail_queue_survives_failure_retries_and_erases_token_after_delivery(db_session,monkeypatch):
     monkeypatch.setattr(mail_service,'configured',lambda:True)
     row=mail_service.queue_reset(db_session,'learner@example.org','https://example.org/reset#token=private-token','hash','en')
