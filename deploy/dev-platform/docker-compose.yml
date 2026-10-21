@@ -19,6 +19,7 @@ x-backend-environment: &backend-environment
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-https://dev.platform.lernium.ru}
   AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
   AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-20}
+  AUTH_RATE_LIMIT_PER_IP_MINUTE: ${AUTH_RATE_LIMIT_PER_IP_MINUTE:-1800}
   CORS_ORIGINS: ${CORS_ORIGINS:-https://dev.platform.lernium.ru}
   UPLOAD_DIR: /data/uploads
   MAX_DOCUMENT_SIZE_MB: "25"

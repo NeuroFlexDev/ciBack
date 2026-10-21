@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     CONTACT_REQUESTS_ENABLED: bool = True
     PUBLIC_APP_URL: str = "http://localhost:5173"
     AUTH_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=1, le=1000)
+    AUTH_RATE_LIMIT_PER_IP_MINUTE: int = Field(default=1800, ge=20, le=100000)
     AUTH_RATE_LIMIT_ENABLED: bool = True
     SMTP_FROM: str = ""
     SMTP_STARTTLS: bool = True

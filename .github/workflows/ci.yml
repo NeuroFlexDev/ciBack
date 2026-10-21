@@ -6,12 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      deploy_staging:
-        description: "Deploy this tested candidate to the demo staging environment"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -213,7 +207,7 @@ jobs:
 
   deploy:
     name: Deploy to staging
-    if: (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') || (github.event_name == 'workflow_dispatch' && inputs.deploy_staging)
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [image, image-security]
     runs-on: ubuntu-latest
     timeout-minutes: 15
