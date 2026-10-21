@@ -1,21 +1,40 @@
 {$PUBLIC_HOST:dev.platform.lernium.ru} {
     encode zstd gzip
 
+    # A demo must remain crawlable for crawlers to observe the noindex header.
+    @nonProduction not host lernium.ru
+    header @nonProduction X-Robots-Tag "noindex, nofollow, noarchive"
+    @privatePages path /auth /auth/* /admin /admin/* /invite /invite/* /dashboard /dashboard/* /account /account/* /forgot-password /reset-password /courses /courses/* /employees /analytics /express /templates /ai-helper
+    header @privatePages X-Robots-Tag "noindex, nofollow"
+    @demoRobots {
+        path /robots.txt
+        not host lernium.ru
+    }
+    handle @demoRobots {
+        header Content-Type "text/plain; charset=utf-8"
+        respond "User-agent: *\nAllow: /\n" 200
+    }
+    @demoSitemap {
+        path /sitemap.xml
+        not host lernium.ru
+    }
+    respond @demoSitemap 404
+    redir /index.html / 301
+
     @backend path /api/*
     handle @backend {
         reverse_proxy 127.0.0.1:8000
     }
 
-    @landing path / /index.html
+    @landing path /
     handle @landing {
         rewrite * /index.html
         header Cache-Control "no-cache, no-store, must-revalidate"
         reverse_proxy 127.0.0.1:8081
     }
 
-    @landingAssets path /styles.css /script.js /assets/fonts/* /assets/icons/* /assets/hero-* /assets/cta-*
+    @landingAssets path /styles.css /script.js /robots.txt /sitemap.xml /assets/fonts/* /assets/icons/* /assets/hero-* /assets/cta-*
     handle @landingAssets {
-        header Cache-Control "public, max-age=300"
         reverse_proxy 127.0.0.1:8081
     }
 
