@@ -8,7 +8,8 @@ from app.schemas.agentic_pipeline import IngestionArtifact
 
 def terms(text: str) -> list[str]:
     # Prefix matching also handles common Russian inflections without a remote NLP model.
-    return [word[:6] if len(word) > 6 else word for word in re.findall(r"[\w]+", text.lower()) if len(word) > 2]
+    return [word[:5] if re.search("[а-яё]", word) and len(word) > 4 else word[:6]
+            for word in re.findall(r"[\w]+", text.lower()) if len(word) > 2]
 
 
 def rank_sources(query: str, sources: list[dict], limit: int = 6) -> list[dict]:

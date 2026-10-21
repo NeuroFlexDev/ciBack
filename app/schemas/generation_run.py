@@ -67,6 +67,7 @@ class GenerationRunStatusOut(GenerationRunOut):
     progress_percent: int = Field(ge=0, le=100)
     stages: list[GenerationStageOut]
     status_error: GenerationStatusError | None
+    status_notice: str | None = None
     retryable: bool
     attempt: int
     retry_of_run_id: int | None

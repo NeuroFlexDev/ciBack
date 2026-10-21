@@ -47,6 +47,7 @@ class GenerationRunStatus(str, Enum):
     SUCCEEDED = "succeeded"
     COMPLETED = "completed"
     FAILED = "failed"
+    PAUSED = "paused"
 
 
 class GenerationRunType(str, Enum):

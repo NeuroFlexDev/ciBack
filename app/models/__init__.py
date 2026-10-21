@@ -1,5 +1,6 @@
 from .approval import Approval
 from .account import PasswordReset
+from .legal import LegalReceipt, LegalRequest
 from .ai_state import AICall, AIResponseCache, ChatMemory, ChunkEmbedding, CanvasWorkspace
 from .agent_artifact import AgentArtifact
 from .assessment_rubric import AssessmentRubric
@@ -29,6 +30,8 @@ from .theory import Theory
 from .user import User
 
 __all__ = [
+    "LegalReceipt",
+    "LegalRequest",
     "Approval",
     "AgentArtifact",
     "AssessmentRubric",

@@ -1,8 +1,45 @@
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator, AnyHttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class AIRoutingCandidate(BaseModel):
+    """Operator-approved provider/model route and its text-token price band."""
+
+    model: str = Field(min_length=1, max_length=255)
+    provider: str = "vsellm"
+    roles: list[str] = Field(min_length=1)
+    approved: bool = False
+    tier: int = Field(default=0, ge=0, le=10)
+    input_rub_per_million: Decimal = Field(ge=0, allow_inf_nan=False)
+    output_rub_per_million: Decimal = Field(ge=0, allow_inf_nan=False)
+    max_input_tokens: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+    context_window: int = Field(gt=0)
+    json_mode: bool = True
+    independent_review: bool = False
+    vision: bool = False
+    extra_body: dict = Field(default_factory=dict)
+
+
+class AIProvider(BaseModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,39}$")
+    base_url: AnyHttpUrl
+    api_key_env: str = Field(default="", pattern=r"^$|^[A-Z][A-Z0-9_]*$")
+    local: bool = False
+    enabled: bool = True
+    timeout_seconds: int = Field(default=60, ge=1, le=300)
+
+    @model_validator(mode="after")
+    def endpoint_policy(self):
+        if not self.local and self.base_url.scheme != "https":
+            raise ValueError("Remote AI providers require HTTPS")
+        if self.base_url.username or self.base_url.password or self.base_url.query:
+            raise ValueError("Provider URLs must not contain credentials or query parameters")
+        return self
+
 
 class Settings(BaseSettings):
     # Основные секции конфига
@@ -15,6 +52,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_MINUTES: int = 1440
     REGISTRATION_ENABLED: bool = True
+    CONTACT_REQUESTS_ENABLED: bool = True
     PUBLIC_APP_URL: str = "http://localhost:5173"
     AUTH_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=1, le=1000)
     AUTH_RATE_LIMIT_ENABLED: bool = True
@@ -51,6 +89,15 @@ class Settings(BaseSettings):
     AI_MAX_TOKENS_PER_RUN: int = Field(default=600000, ge=1000)
     AI_MAX_INPUT_TOKENS: int = Field(default=64000, ge=1000)
     AI_CACHE_TTL_SECONDS: int = Field(default=86400, ge=0)
+    AI_ROUTING_MODE: Literal["off", "shadow", "adaptive"] = "adaptive"
+    AI_ROUTING_CANDIDATES: list[AIRoutingCandidate] = Field(default_factory=list)
+    AI_PROVIDERS: list[AIProvider] = Field(default_factory=list)
+    AI_PROVIDER_COOLDOWN_SECONDS: int = Field(default=60, ge=1, le=3600)
+    AI_TOKEN_FORECAST_PATH: Path = Path("app/ai/data/token_forecast.json")
+    AI_ROUTING_MIN_SAMPLES: int = Field(default=10, ge=3, le=1000)
+    AI_ROUTING_MIN_PASS_RATE: float = Field(default=0.85, gt=0, le=1)
+    AI_ROUTING_HISTORY_LIMIT: int = Field(default=200, ge=10, le=1000)
+    AI_ROUTING_COOLDOWN_SECONDS: int = Field(default=300, ge=0, le=3600)
     AI_INGESTION_BATCH_CHARS: int = Field(default=10000, ge=2000, le=40000)
     AI_MAX_SOURCE_CHARS: int = Field(default=500000, ge=10000)
     AI_MAX_REVISIONS: int = Field(default=2, ge=0, le=4)
@@ -76,6 +123,16 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def unique_routing_models(self):
+        names = [(candidate.provider, candidate.model) for candidate in self.AI_ROUTING_CANDIDATES]
+        if len(names) != len(set(names)):
+            raise ValueError("AI_ROUTING_CANDIDATES must have unique provider/model pairs")
+        providers = [provider.id for provider in self.AI_PROVIDERS]
+        if len(providers) != len(set(providers)):
+            raise ValueError("AI_PROVIDERS must have unique IDs")
+        return self
 
     @property
     def max_document_bytes(self) -> int:

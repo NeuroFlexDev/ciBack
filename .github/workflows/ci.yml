@@ -234,15 +234,17 @@ jobs:
           set -euo pipefail
           test -n "${DEPLOY_HOST}"
           test -n "${DEPLOY_USER}"
-          test -n "${BASTION_HOST}"
-          test -n "${BASTION_USER}"
           test -n "${DEPLOY_KEY}"
           test -n "${KNOWN_HOSTS}"
           [[ "${ACTOR}" =~ ^[A-Za-z0-9-]+$ ]]
           [[ "${DEPLOY_HOST}" =~ ^[0-9.]+$ ]]
-          [[ "${BASTION_HOST}" =~ ^[0-9.]+$ ]]
           [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
-          [[ "${BASTION_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          proxy_options=()
+          if [[ -n "${BASTION_HOST}" || -n "${BASTION_USER}" ]]; then
+            [[ "${BASTION_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
+            [[ "${BASTION_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+            proxy_options=(-o "ProxyCommand=ssh -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -i ${HOME}/.ssh/id_ed25519 -W %h:%p ${BASTION_USER}@${BASTION_HOST}")
+          fi
 
           install -d -m 0700 "${HOME}/.ssh"
           printf '%s\n' "${DEPLOY_KEY}" > "${HOME}/.ssh/id_ed25519"
@@ -256,7 +258,7 @@ jobs:
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=4 \
             -o StrictHostKeyChecking=yes \
-            -o "ProxyCommand=ssh -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -i ${HOME}/.ssh/id_ed25519 -W %h:%p ${BASTION_USER}@${BASTION_HOST}" \
+            "${proxy_options[@]}" \
             -i "${HOME}/.ssh/id_ed25519" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "sudo /usr/local/sbin/lernium-deploy backend ${IMAGE} ${ACTOR}"

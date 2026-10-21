@@ -31,7 +31,7 @@ class GenerationRun(Base, BaseModelMixin):
             name="ck_generation_runs_type",
         ),
         CheckConstraint(
-            "status IN ('queued', 'running', 'succeeded', 'completed', 'failed')",
+            "status IN ('queued', 'running', 'succeeded', 'completed', 'failed', 'paused')",
             name="ck_generation_runs_status",
         ),
         CheckConstraint(

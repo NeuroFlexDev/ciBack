@@ -67,15 +67,15 @@ def test_second_active_run_is_conflict(client, db_session, auth_user, auth_heade
     assert second.json()["detail"]["run_id"]
 
 
-def test_queue_failure_marks_run_failed(client, db_session, auth_user, auth_headers, monkeypatch):
+def test_queue_failure_preserves_paused_run(client, db_session, auth_user, auth_headers, monkeypatch):
     course = make_course(db_session, owner_id=auth_user.id)
     document = _document(db_session, course, auth_user)
     monkeypatch.setattr("app.routes.pipeline.enqueue_generation", lambda run_id: (_ for _ in ()).throw(ConnectionError()))
     response = client.post(f"/api/courses/{course.id}/generation-runs", headers=auth_headers,
                            json={"settings": _settings(), "document_ids": [document.id]})
-    assert response.status_code == 503
+    assert response.status_code == 202
     run = db_session.query(GenerationRun).filter_by(course_id=course.id).one()
-    assert (run.status, run.error_code, run.retryable) == ("failed", "queue_unavailable", True)
+    assert (run.status, run.error_code, run.retryable) == ("paused", "queue_unavailable", True)
 
 
 def test_worker_executes_prepared_run(db_session, auth_user, monkeypatch):

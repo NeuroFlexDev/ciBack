@@ -62,8 +62,6 @@ ensure_image_variable BACKEND_IMAGE lernium-backend:latest
 ensure_image_variable FRONTEND_IMAGE lernium-frontend:latest
 ensure_image_variable LANDING_IMAGE lernium-landing:latest
 
-previous_image="$(sed -n "s/^${image_variable}=//p" "${images_file}" | tail -n 1)"
-[[ -n "${previous_image}" ]] || fail "could not determine the current image"
 
 set_image() {
     local variable="$1"
@@ -106,27 +104,28 @@ wait_for_url() {
 deploy_current_image() {
     case "${component}" in
         backend)
-            compose pull backend worker migrate
-            compose up -d db redis
+            compose pull backend worker migrate || return 1
+            compose up -d --wait --wait-timeout 120 db redis || return 1
             compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
-                > "${backup_dir}/database-$(date -u +%Y%m%dT%H%M%SZ).dump"
-            compose run --rm --no-deps migrate
-            compose up -d --no-deps --force-recreate backend worker
-            wait_for_url http://127.0.0.1:8000/api/healthz
-            wait_for_url "${health_url}/api/healthz"
+                > "${backup_dir}/database-$(date -u +%Y%m%dT%H%M%SZ).dump" || return 1
+            compose run --rm --no-deps migrate || return 1
+            if [[ -f "${deployment_dir}/.legacy-pending" ]]; then /usr/local/sbin/lernium-import-legacy || return 1; fi
+            compose up -d --no-deps --force-recreate backend worker || return 1
+            wait_for_url http://127.0.0.1:8000/api/healthz || return 1
+            if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/api/healthz" || return 1; fi
             ;;
         frontend)
-            compose pull frontend
-            compose up -d --no-deps --force-recreate frontend
-            wait_for_url http://127.0.0.1:8080/healthz
-            wait_for_url "${health_url}/auth"
+            compose pull frontend || return 1
+            compose up -d --no-deps --force-recreate frontend || return 1
+            wait_for_url http://127.0.0.1:8080/healthz || return 1
+            if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/auth" || return 1; fi
             ;;
         landing)
-            compose pull landing
-            compose up -d --no-deps --force-recreate landing
-            wait_for_url http://127.0.0.1:8081/healthz
-            compose up -d --no-deps --force-recreate caddy
-            wait_for_url "${health_url}/"
+            compose pull landing || return 1
+            compose up -d --no-deps --force-recreate landing || return 1
+            wait_for_url http://127.0.0.1:8081/healthz || return 1
+            if [[ "$edge_mode" == caddy && ! -f "${deployment_dir}/.bootstrap-pending" ]]; then compose up -d --no-deps --force-recreate caddy || return 1; fi
+            if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/" || return 1; fi
             ;;
     esac
 }
@@ -142,13 +141,18 @@ rollback() {
             compose up -d --no-deps --force-recreate frontend
             ;;
         landing)
-            compose up -d --no-deps --force-recreate landing caddy
+            compose up -d --no-deps --force-recreate landing
+            if [[ "$edge_mode" == caddy ]]; then compose up -d --no-deps --force-recreate caddy; fi
             ;;
     esac
 }
 
 exec 9>"/opt/lernium/.deploy.lock"
 flock -w 600 9 || fail "another deployment is still running"
+previous_image="$(sed -n "s/^${image_variable}=//p" "${images_file}" | tail -n 1)"
+[[ -n "${previous_image}" ]] || fail "could not determine the current image"
+edge_mode="$(cat "${deployment_dir}/.edge-mode" 2>/dev/null || printf 'caddy')"
+
 
 docker_config="$(mktemp -d /tmp/lernium-docker-config.XXXXXX)"
 cleanup() {
@@ -164,6 +168,20 @@ set_image "${image_variable}" "${image}"
 if ! deploy_current_image; then
     rollback
     fail "${component} did not become healthy"
+fi
+
+if [[ -f "${deployment_dir}/.bootstrap-pending" ]]; then
+    if curl -fsS --max-time 5 http://127.0.0.1:8000/api/healthz >/dev/null && \
+       curl -fsS --max-time 5 http://127.0.0.1:8080/healthz >/dev/null && \
+       curl -fsS --max-time 5 http://127.0.0.1:8081/healthz >/dev/null; then
+        if [[ "$edge_mode" == caddy ]]; then compose up -d --no-deps caddy; fi
+        wait_for_url "${health_url}/api/healthz"
+        wait_for_url "${health_url}/auth"
+        rm "${deployment_dir}/.bootstrap-pending"
+        printf 'Initial environment is healthy\n'
+    else
+        printf 'Component is healthy; initial environment awaits remaining components\n'
+    fi
 fi
 
 printf 'Deployed %s as %s\n' "${component}" "${image}"

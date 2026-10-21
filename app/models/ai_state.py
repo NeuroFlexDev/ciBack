@@ -25,6 +25,7 @@ class AICall(Base):
     cached_tokens = Column(Integer, nullable=False, default=0)
     latency_ms = Column(Integer, nullable=False, default=0)
     error_code = Column(String(128), nullable=True)
+    routing = Column(JSON, nullable=True)
 
 
 class ChatMemory(Base):

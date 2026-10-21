@@ -14,7 +14,8 @@ class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         request_id = uuid.uuid4().hex
         request.state.request_id = request_id
-        if settings.ENV != "test" and settings.AUTH_RATE_LIMIT_ENABLED and request.method == "POST" and request.url.path.startswith('/api/auth/'):
+        limited = request.url.path.startswith('/api/auth/') or request.url.path == '/api/legal/requests'
+        if settings.ENV != "test" and settings.AUTH_RATE_LIMIT_ENABLED and request.method == "POST" and limited:
             # Use the ASGI peer address. Forwarded headers are accepted only from trusted proxies by uvicorn.
             peer = request.client.host if request.client else 'unknown'
             key = 'lernium:auth-rate:' + hashlib.sha256(peer.encode()).hexdigest()
@@ -26,7 +27,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 if count > settings.AUTH_RATE_LIMIT_PER_MINUTE:
                     return JSONResponse({"detail": "Слишком много попыток. Повторите через минуту.", "request_id": request_id}, status_code=429, headers={"Retry-After": "60", "X-Request-ID": request_id})
             except RedisError:
-                return JSONResponse({"detail": "Вход временно недоступен. Повторите позже.", "request_id": request_id}, status_code=503, headers={"X-Request-ID": request_id})
+                return JSONResponse({"detail": "Отправка временно недоступна. Повторите позже.", "request_id": request_id}, status_code=503, headers={"X-Request-ID": request_id})
         try:
             response = await call_next(request)
         except Exception:

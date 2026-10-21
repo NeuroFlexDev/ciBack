@@ -28,7 +28,7 @@ def test_chat_generate_persists_messages_and_usage(db_session, auth_user, monkey
     monkeypatch.setattr(chat_service, "get_chat_engine", lambda *_: engine)
 
     result = chat_service.chat_generate(
-        chat_id=chat.id, user_id=auth_user.id, text="hello", db=db_session
+        chat_id=chat.id, user_id=auth_user.id, text="hello", db=db_session, engine_name="lc_giga"
     )
 
     messages = ChatRepository.get_history(db_session, chat.id, auth_user.id)
@@ -49,7 +49,7 @@ def test_chat_generate_limits_llm_history_but_retains_all(
     monkeypatch.setattr(chat_service.settings, "CHAT_HISTORY_MESSAGES", 20)
 
     chat_service.chat_generate(
-        chat_id=chat.id, user_id=auth_user.id, text="latest", db=db_session
+        chat_id=chat.id, user_id=auth_user.id, text="latest", db=db_session, engine_name="lc_giga"
     )
 
     assert len(engine.history) == 21
@@ -65,12 +65,12 @@ def test_llm_failure_keeps_user_message(db_session, auth_user, monkeypatch):
         lambda *_: DummyEngine(error=RuntimeError("provider unavailable")),
     )
 
-    with pytest.raises(RuntimeError, match="provider unavailable"):
-        chat_service.chat_generate(
-            chat_id=chat.id, user_id=auth_user.id, text="keep me", db=db_session
-        )
+    response = chat_service.chat_generate(
+        chat_id=chat.id, user_id=auth_user.id, text="keep me", db=db_session, engine_name="lc_giga"
+    )
+    assert response["raw"]["degraded"]
 
     messages = db_session.query(ChatMessage).filter_by(chat_id=chat.id).all()
-    assert [(message.role, message.content) for message in messages] == [
-        ("user", "keep me")
-    ]
+    assert [(message.role, message.content) for message in messages[:1]] == [("user", "keep me")]
+    assert messages[1].role == "assistant"
+    assert "локальный режим" in messages[1].content

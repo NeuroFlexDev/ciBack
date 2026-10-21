@@ -33,7 +33,17 @@ jobs:
     permissions:
       contents: read
       packages: read
+      actions: read
     steps:
+      - name: Require successful CI and staging for the requested commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_TAG" =~ ^sha-[0-9a-f]{40}$ ]]
+          count="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" -f head_sha="${IMAGE_TAG#sha-}" -f branch=main -f event=push --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+          [[ "$count" -gt 0 ]] || { echo 'This commit has not passed CI and staging'; exit 1; }
       - name: Deploy immutable image
         env:
           DEPLOY_HOST: ${{ vars.PRODUCTION_HOST }}

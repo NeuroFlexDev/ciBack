@@ -6,7 +6,7 @@ Page numbers are one-based PDF pages, preserved in every source citation.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import hashlib
 import json
@@ -32,9 +32,13 @@ def main():
     parser.add_argument("--lessons", type=int, default=6)
     parser.add_argument("--max-calls", type=int, default=60)
     parser.add_argument("--max-tokens", type=int, default=600000)
+    parser.add_argument("--max-rubles", type=float, default=150,
+                        help="Conservative text-generation reservation cap for this isolated evaluation")
     args = parser.parse_args()
     if not 1 <= args.lessons <= 100:
         parser.error("--lessons must be between 1 and 100")
+    if args.max_rubles <= 0:
+        parser.error("--max-rubles must be positive")
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root))
     out = args.output_dir.resolve()
@@ -74,6 +78,7 @@ def main():
     file_hash = hashlib.sha256(content).hexdigest()
     with pymupdf.open(stream=content, filetype="pdf") as pdf:
         page_count = len(pdf)
+        full_text_size = sum(len(page.get_text()) for page in pdf)
     try:
         first, last = map(int, args.pages.split("-")) if args.pages else (1, page_count)
         if not 1 <= first <= last <= page_count:
@@ -90,6 +95,14 @@ def main():
     Base.metadata.create_all(engine)
     session = SessionLocal()
     report = dict(success=False, scope=identity, stages=[], repairs=[], prompt_sizes=[])
+    budget_path = out / "text-budget.json"
+    previous_report = out / "report.json"
+    # Reservations survive process restarts; reusing an output directory must
+    # not silently grant another paid budget. This evaluator is sequential.
+    previous_budget = (json.loads(budget_path.read_text()).get("reserved_rub", "0") if budget_path.exists()
+                       else json.loads(previous_report.read_text()).get("text_budget_reserved_rub", "0")
+                       if previous_report.exists() else "0")
+    report["text_budget_reserved_rub"] = previous_budget
     from app.ai.models import model_policy
     report["model_policy"] = {role: asdict(model_policy(role)) for role in (
         "ingestion", "competency_mapper", "course_architect", "lesson_writer", "assessment", "critic_qa")}
@@ -108,7 +121,31 @@ def main():
         print(json.dumps(event, ensure_ascii=False), flush=True)
 
     def tracked_generate(*a, **kw):
+        from fastapi import HTTPException
+        def stop_before_request(message):
+            error = HTTPException(402, message)
+            error.request_sent = False
+            raise error
         role = kw.get("agent_role")
+        # Evaluation-only budget, sequential calls. Prices are an explicit
+        # snapshot; unknown models stop rather than silently bypassing the cap.
+        from decimal import Decimal
+        from app.ai import gateway
+        from app.services.generation_service import agent_messages
+        prices = {"openai/gpt-5.4-mini": (83, 497), "anthropic/claude-sonnet-4.6": (332, 1658),
+                  "google/gemini-2.5-flash": (33, 276)}
+        chosen = kw.get("model") or (model_policy(role).fallback if kw.get("fallback_model") else model_policy(role).model)
+        if chosen not in prices or kw.get("provider", "vsellm") != "vsellm":
+            stop_before_request("Evaluation price snapshot missing for selected provider/model")
+        rate_in, rate_out = prices[chosen]
+        estimated_in = gateway.token_count(agent_messages(render_prompt(a[0], **kw), expect_json=True,
+                                                         repair_feedback=kw.get("repair_feedback", "")))
+        reservation = Decimal(estimated_in * rate_in + kw["max_tokens"] * rate_out) / 1_000_000
+        consumed = Decimal(str(report.get("text_budget_reserved_rub", "0")))
+        if consumed + reservation > Decimal(str(args.max_rubles)):
+            stop_before_request("Isolated evaluation text budget reached")
+        report["text_budget_reserved_rub"] = str(consumed + reservation)
+        dump(budget_path, {"reserved_rub": report["text_budget_reserved_rub"]})
         report["prompt_sizes"].append(dict(agent=role, bytes=len(render_prompt(a[0], **kw).encode())))
         if kw.get("repair_feedback"):
             report["repairs"].append(dict(agent=role, diagnostic=kw["repair_feedback"][:3000]))
@@ -129,12 +166,17 @@ def main():
             from app.services.document_processing import ExtractedBlock
             blocks = [ExtractedBlock(**b) for b in json.loads(blocks_path.read_text())]
         else:
-            blocks = extract_blocks(content, "application/pdf")
+            # OCR only the requested pages, preserving original page numbers.
+            # Extracting the whole textbook can require OCR on unrelated covers.
+            with pymupdf.open(stream=content, filetype="pdf") as pdf, pymupdf.open() as selected_pdf:
+                selected_pdf.insert_pdf(pdf, from_page=first - 1, to_page=last - 1)
+                blocks = [replace(block, page=block.page + first - 1 if block.page is not None else None)
+                          for block in extract_blocks(selected_pdf.tobytes(), "application/pdf")]
             dump(blocks_path, [asdict(b) for b in blocks])
         selected = [b for b in blocks if first <= b.page <= last]
         chunks_data = chunk_blocks(selected, max_chars=settings.DOCUMENT_CHUNK_CHARS,
                                    overlap_chars=settings.DOCUMENT_CHUNK_OVERLAP_CHARS)
-        full_size = sum(len(b.text) for b in blocks)
+        full_size = full_text_size
         selected_size = sum(len(c["text"]) for c in chunks_data)
         report["extraction"] = dict(pdf_pages=page_count, full_characters=full_size,
             full_book_over_limit=full_size > settings.AI_MAX_SOURCE_CHARS,
@@ -230,8 +272,9 @@ def main():
             if not report["success"] and course.current_graph is None:
                 course.status = "generation_failed"
             session.commit()
-        report["calls"] = [dict(agent=c.agent, model=c.model, status=c.status, input_tokens=c.input_tokens,
-            output_tokens=c.output_tokens, cached_tokens=c.cached_tokens, latency_ms=c.latency_ms, error_code=c.error_code)
+        report["calls"] = [dict(id=c.id, agent=c.agent, model=c.model, status=c.status, input_tokens=c.input_tokens,
+            output_tokens=c.output_tokens, cached_tokens=c.cached_tokens, latency_ms=c.latency_ms, error_code=c.error_code,
+            routing=c.routing)
             for c in session.query(AICall).order_by(AICall.id).all()]
         dump(out / "agent-artifacts.json", [dict(agent=a.agent, sequence=a.sequence, status=a.status,
             payload=a.payload, error=a.error) for a in session.query(AgentArtifact).all()])

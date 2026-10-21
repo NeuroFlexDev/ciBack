@@ -249,6 +249,24 @@ class PipelineService:
     fail_enqueue = fail_run
 
     @staticmethod
+    def pause_enqueue(db: Session, run_id: int) -> None:
+        """Keep the accepted job resumable when its queue is unavailable."""
+        run = db.get(GenerationRun, run_id)
+        # An enqueue acknowledgement may be lost after a worker starts. Do not
+        # overwrite running work in that case.
+        if run is not None:
+            db.refresh(run)
+        if run is not None and run.status == GenerationRunStatus.QUEUED.value:
+            run.status = GenerationRunStatus.PAUSED.value
+            run.error_code = "queue_unavailable"
+            run.error = run.error_message = None
+            run.retryable = True
+            course = db.get(Course, run.course_id)
+            if course is not None:
+                course.status = CourseStatus.READY.value if course.current_graph else CourseStatus.CONFIGURED.value
+            db.commit()
+
+    @staticmethod
     def get_document(db: Session, document_id: int, owner_id: int):
         document = PipelineRepository.get_owned_document(db, document_id, owner_id)
         if document is None or document.status == DocumentStatus.ARCHIVED.value:
@@ -267,6 +285,11 @@ class PipelineService:
         run = PipelineService.get_run(db, run_id, owner_id)
         data = {column.name: getattr(run, column.name) for column in run.__table__.columns}
         data["run_id"] = run.id
+        from app.ai.offline import GENERATION_PAUSED, GENERATION_QUEUED
+        data["status_notice"] = (GENERATION_PAUSED if run.status == "paused" else
+            GENERATION_QUEUED if run.status == "queued" and run.error_code == "ai_unavailable" else None)
+        if data["status_notice"]:
+            data["error"] = None
         data["stages"] = []
         if run.run_type == GenerationRunType.GRAPH_GENERATION.value:
             codes = [item[0] for item in PipelineService.GENERATION_STAGES]
@@ -316,9 +339,17 @@ class PipelineService:
         db: Session, run_id: int, owner_id: int
     ) -> GenerationRun:
         original = PipelineService.get_run(db, run_id, owner_id)
+        # Serialize retries for the course, then refresh status after acquiring
+        # the lock: another request may already have resumed this same run.
+        course = PipelineRepository.get_owned_course(
+            db, original.course_id, owner_id, for_update=True
+        )
+        if course is None:
+            raise HTTPException(status_code=404, detail="Курс не найден")
+        db.refresh(original)
         if (
             original.run_type != GenerationRunType.GRAPH_GENERATION.value
-            or original.status != GenerationRunStatus.FAILED.value
+            or original.status not in {GenerationRunStatus.FAILED.value, GenerationRunStatus.PAUSED.value}
             or not original.retryable
         ):
             raise HTTPException(
@@ -344,11 +375,16 @@ class PipelineService:
                 status_code=409,
                 detail={"code": "retry_input_unavailable", "message": "Исходные версии документов недоступны"},
             )
-        course = PipelineRepository.get_owned_course(
-            db, original.course_id, owner_id, for_update=True
-        )
-        if course is None:
-            raise HTTPException(status_code=404, detail="Курс не найден")
+        if original.status == GenerationRunStatus.PAUSED.value:
+            # Resume the SAME run to preserve LangGraph checkpoints and usage.
+            original.status = GenerationRunStatus.QUEUED.value
+            original.queued_at = datetime.utcnow()
+            original.finished_at = None
+            original.error = original.error_code = original.error_message = None
+            original.attempt += 1
+            course.status = CourseStatus.GENERATING.value
+            db.commit()
+            return original
         retry = GenerationRun(
             owner_id=owner_id,
             course_id=original.course_id,
@@ -457,7 +493,7 @@ class PipelineService:
                 for chunk_model in chunk_models
             ]
             from app.ai import gateway
-            if gateway.configured():
+            if gateway.configured() or settings.ENV != "test":
                 from app.ai.retrieval import persist_embeddings
                 embedding_ids = persist_embeddings(db, chunk_models)
             else:
@@ -760,5 +796,13 @@ class PipelineService:
                 failed_run.latency_ms = _elapsed_ms(started)
             if failed_course is not None:
                 failed_course.status = CourseStatus.GENERATION_FAILED.value
+            from app.ai.providers import AIUnavailable
+            if isinstance(exc, AIUnavailable) and failed_run is not None:
+                from app.ai.offline import GENERATION_PAUSED
+                failed_run.status = GenerationRunStatus.PAUSED.value
+                failed_run.error_code = "ai_unavailable"
+                failed_run.error_message = GENERATION_PAUSED
+                if failed_course is not None:
+                    failed_course.status = CourseStatus.READY.value if failed_course.current_graph else CourseStatus.CONFIGURED.value
             db.commit()
             raise PipelineRunFailed(run_id, error, 502) from exc

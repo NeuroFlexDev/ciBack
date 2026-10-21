@@ -1,5 +1,5 @@
 import re
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 
 class AuthCredentials(BaseModel):
@@ -12,6 +12,20 @@ class AuthCredentials(BaseModel):
         value = value.strip().lower()
         if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
             raise ValueError("Укажите корректный email")
+        return value
+
+
+class RegistrationCredentials(AuthCredentials):
+    full_name: str = Field(default="", max_length=160)
+    terms_accepted: StrictBool
+    legal_version: str = Field(min_length=1, max_length=32)
+    marketing_accepted: StrictBool = False
+
+    @field_validator("terms_accepted")
+    @classmethod
+    def accepted_terms(cls, value):
+        if not value:
+            raise ValueError("Примите пользовательское соглашение")
         return value
 
 

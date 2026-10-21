@@ -1,5 +1,10 @@
 name: lernium
 
+x-logging: &logging
+  driver: journald
+  options:
+    tag: "lernium-{{.Name}}"
+
 x-backend-environment: &backend-environment
   ENV: prod
   DEBUG: "false"
@@ -9,11 +14,12 @@ x-backend-environment: &backend-environment
   JWT_ALG: HS256
   ACCESS_TOKEN_TTL_MINUTES: "15"
   REFRESH_TOKEN_TTL_MINUTES: "1440"
-  REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+  REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
+  CONTACT_REQUESTS_ENABLED: ${CONTACT_REQUESTS_ENABLED:-false}
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-https://dev.platform.lernium.ru}
   AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
   AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-20}
-  CORS_ORIGINS: https://dev.platform.lernium.ru
+  CORS_ORIGINS: ${CORS_ORIGINS:-https://dev.platform.lernium.ru}
   UPLOAD_DIR: /data/uploads
   MAX_DOCUMENT_SIZE_MB: "25"
   DOCUMENT_CHUNK_CHARS: "2000"
@@ -48,6 +54,17 @@ x-backend-environment: &backend-environment
   AI_MAX_REVISIONS: ${AI_MAX_REVISIONS:-2}
   AI_QA_MIN_SCORE: ${AI_QA_MIN_SCORE:-0.8}
   AI_CACHE_TTL_SECONDS: ${AI_CACHE_TTL_SECONDS:-86400}
+  AI_ROUTING_MODE: ${AI_ROUTING_MODE:-adaptive}
+  AI_PROVIDERS: ${AI_PROVIDERS:-[]}
+  AI_PROVIDER_COOLDOWN_SECONDS: ${AI_PROVIDER_COOLDOWN_SECONDS:-60}
+  AI_TOKEN_FORECAST_PATH: ${AI_TOKEN_FORECAST_PATH:-app/ai/data/token_forecast.json}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  AI_ROUTING_CANDIDATES: ${AI_ROUTING_CANDIDATES:-[]}
+  AI_ROUTING_MIN_SAMPLES: ${AI_ROUTING_MIN_SAMPLES:-10}
+  AI_ROUTING_MIN_PASS_RATE: ${AI_ROUTING_MIN_PASS_RATE:-0.85}
+  AI_ROUTING_HISTORY_LIMIT: ${AI_ROUTING_HISTORY_LIMIT:-200}
+  AI_ROUTING_COOLDOWN_SECONDS: ${AI_ROUTING_COOLDOWN_SECONDS:-300}
   AI_OCR_ENABLED: ${AI_OCR_ENABLED:-true}
   AI_OCR_MAX_PAGES: ${AI_OCR_MAX_PAGES:-30}
   AI_CHAT_CONTEXT_TOKENS: ${AI_CHAT_CONTEXT_TOKENS:-12000}
@@ -61,6 +78,8 @@ x-backend-environment: &backend-environment
 
 services:
   caddy:
+    logging: *logging
+    profiles: [edge]
     image: caddy:2.10-alpine
     restart: unless-stopped
     network_mode: host
@@ -79,6 +98,7 @@ services:
         condition: service_started
 
   frontend:
+    logging: *logging
     image: ${FRONTEND_IMAGE:-ghcr.io/neuroflexdev/cifront:main}
     restart: unless-stopped
     ports:
@@ -96,12 +116,14 @@ services:
       start_period: 10s
 
   landing:
+    logging: *logging
     image: ${LANDING_IMAGE:-ghcr.io/neuroflexdev/cilanding:main}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8081:80"
 
   backend:
+    logging: *logging
     image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
     restart: unless-stopped
     init: true
@@ -135,6 +157,7 @@ services:
         condition: service_healthy
 
   worker:
+    logging: *logging
     image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
     restart: unless-stopped
     init: true
@@ -156,6 +179,7 @@ services:
         condition: service_healthy
 
   migrate:
+    logging: *logging
     image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
     command:
       - alembic
@@ -169,6 +193,7 @@ services:
         condition: service_healthy
 
   db:
+    logging: *logging
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
@@ -186,6 +211,7 @@ services:
       retries: 20
 
   redis:
+    logging: *logging
     image: redis:7-alpine
     restart: unless-stopped
     command:

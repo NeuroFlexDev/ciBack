@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "scope": "base_tokens_without_retries_or_repairs",
+  "models": {
+    "ingestion|openai/gpt-5.4-mini": {
+      "samples": 3,
+      "courses": 3,
+      "input_per_byte": 0.24404934687953556,
+      "output_per_unit": 329.0052356020942,
+      "prompt_bytes_per_unit": 2533.511686848775,
+      "output_coefficients": null,
+      "prompt_bytes_range": [
+        13780,
+        21156
+      ]
+    },
+    "competency_mapper|openai/gpt-5.4-mini": {
+      "samples": 3,
+      "courses": 3,
+      "input_per_byte": 0.22788363388907792,
+      "output_per_unit": 703.5,
+      "prompt_bytes_per_unit": 3918.6666666666665,
+      "output_coefficients": null,
+      "prompt_bytes_range": [
+        11756,
+        14530
+      ]
+    },
+    "course_architect|openai/gpt-5.4-mini": {
+      "samples": 3,
+      "courses": 3,
+      "input_per_byte": 0.22310662778784773,
+      "output_per_unit": 381.6666666666667,
+      "prompt_bytes_per_unit": 4702.0,
+      "output_coefficients": null,
+      "prompt_bytes_range": [
+        12689,
+        18808
+      ]
+    },
+    "lesson_writer|openai/gpt-5.4-mini": {
+      "samples": 7,
+      "courses": 3,
+      "input_per_byte": 0.23495378536654202,
+      "output_per_unit": 1161.0,
+      "prompt_bytes_per_unit": 14173.0,
+      "output_coefficients": [
+        -31.072271028804543,
+        85.71191190887977,
+        -0.31072271028813525
+      ],
+      "prompt_bytes_range": [
+        12423,
+        18649
+      ]
+    },
+    "assessment|openai/gpt-5.4-mini": {
+      "samples": 3,
+      "courses": 2,
+      "input_per_byte": 0.23022034031208344,
+      "output_per_unit": 1259.0,
+      "prompt_bytes_per_unit": 13231.5,
+      "output_coefficients": null,
+      "prompt_bytes_range": [
+        25506,
+        44024
+      ]
+    },
+    "critic_qa|anthropic/claude-sonnet-4.6": {
+      "samples": 4,
+      "courses": 2,
+      "input_per_byte": 0.2767248088615898,
+      "output_per_unit": 1907.5,
+      "prompt_bytes_per_unit": 40993.0,
+      "output_coefficients": null,
+      "prompt_bytes_range": [
+        51140,
+        61692
+      ]
+    }
+  },
+  "samples": 23,
+  "excluded_samples": 18,
+  "courses": 3
+}

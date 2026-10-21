@@ -178,7 +178,7 @@ def test_retry_rejects_when_course_has_active_run(client, db_session, auth_user,
     assert response.json()["detail"]["code"] == "generation_run_active"
 
 
-def test_retry_queue_failure_persists_new_failed_attempt(client, db_session, auth_user, auth_headers, monkeypatch):
+def test_retry_queue_failure_preserves_paused_attempt(client, db_session, auth_user, auth_headers, monkeypatch):
     course = make_course(db_session, owner_id=auth_user.id)
     document = Document(
         storage_key="queue.txt", owner_id=auth_user.id, course_id=course.id,
@@ -198,8 +198,8 @@ def test_retry_queue_failure_persists_new_failed_attempt(client, db_session, aut
 
     response = client.post(f"/api/generation-runs/{original.id}/retry", headers=auth_headers)
 
-    assert response.status_code == 503
+    assert response.status_code == 202
     retry = db_session.query(GenerationRun).filter_by(retry_of_run_id=original.id).one()
     assert (retry.status, retry.error_code, retry.retryable) == (
-        "failed", "queue_unavailable", True
+        "paused", "queue_unavailable", True
     )

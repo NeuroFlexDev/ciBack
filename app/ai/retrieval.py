@@ -1,5 +1,6 @@
 """Persistent embeddings + lexical retrieval, always scoped by database ACL first."""
 import hashlib
+import logging
 import math
 from langchain_openai import OpenAIEmbeddings
 from sqlalchemy.orm import Session
@@ -10,11 +11,13 @@ from app.models.ai_state import ChunkEmbedding
 from app.repositories.retrieval import RetrievalRepository
 from app.services.vector_store import VectorMatch, VectorSearchFilters
 
+logger = logging.getLogger(__name__)
+
 
 def embedding_client():
     return OpenAIEmbeddings(model=settings.AI_MODEL_EMBEDDING,
         api_key=settings.VSELLM_API_KEY.get_secret_value(), base_url=settings.VSELLM_BASE_URL,
-        check_embedding_ctx_length=False, max_retries=2, request_timeout=30, chunk_size=16)
+        check_embedding_ctx_length=False, max_retries=0, request_timeout=10, chunk_size=16)
 
 
 def persist_embeddings(db: Session, chunks: list) -> list[str]:
@@ -23,12 +26,21 @@ def persist_embeddings(db: Session, chunks: list) -> list[str]:
         ChunkEmbedding.model == settings.AI_MODEL_EMBEDDING).all()}
     missing = [chunk for chunk in chunks if chunk.id not in existing or
                existing[chunk.id].text_hash != hashlib.sha256(chunk.text.encode()).hexdigest()]
-    vectors = embedding_client().embed_documents([chunk.text for chunk in missing]) if missing else []
-    if len(vectors) != len(missing):
-        raise ValueError("Embedding provider returned an invalid batch")
+    lexical_ids = [f"chunk:{chunk.id}" for chunk in chunks]
+    if missing and "vsellm" not in gateway.available_provider_ids():
+        return lexical_ids
+    try:
+        vectors = embedding_client().embed_documents([chunk.text for chunk in missing]) if missing else []
+        if len(vectors) != len(missing) or any(
+            not vector or not all(math.isfinite(x) for x in vector) for vector in vectors
+        ):
+            raise ValueError("Embedding provider returned an invalid batch")
+    except Exception as exc:
+        # The chunks already live in the DB. Lexical retrieval remains usable;
+        # a later explicit reindex can fill missing vectors. Never catch DB errors.
+        logger.warning("Semantic indexing unavailable; lexical index retained (%s)", type(exc).__name__)
+        return lexical_ids
     for chunk, vector in zip(missing, vectors, strict=True):
-        if not vector or not all(math.isfinite(x) for x in vector):
-            raise ValueError("Embedding provider returned an invalid vector")
         row = existing.get(chunk.id) or ChunkEmbedding(chunk_id=chunk.id, model=settings.AI_MODEL_EMBEDDING)
         row.text_hash = hashlib.sha256(chunk.text.encode()).hexdigest()
         row.vector = vector
@@ -38,8 +50,9 @@ def persist_embeddings(db: Session, chunks: list) -> list[str]:
 
 
 class PersistentVectorStore:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, *, local_only: bool = False):
         self.db = db
+        self.local_only = local_only
 
     def search(self, query: str, filters: VectorSearchFilters, limit: int) -> list[VectorMatch]:
         if not filters.allowed_chunk_ids or not query.strip():
@@ -53,7 +66,7 @@ class PersistentVectorStore:
         scores = {item["id"]: 1 / (60 + i) for i, item in enumerate(lexical, 1)}
         rows = self.db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(by_id),
             ChunkEmbedding.model == settings.AI_MODEL_EMBEDDING).all()
-        if rows and gateway.configured():
+        if rows and not self.local_only and "vsellm" in gateway.available_provider_ids():
             try:
                 vector = embedding_client().embed_query(query)
                 norm = math.sqrt(sum(x*x for x in vector)) or 1

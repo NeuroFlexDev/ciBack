@@ -126,7 +126,7 @@ def create_course(
     Создает курс в базе данных.
     """
     try:
-        logger.info("Получен запрос на создание курса: %s", course.json())
+        logger.info("Course creation requested")
         new_course = Course(
             name=course.title,
             description=course.description,

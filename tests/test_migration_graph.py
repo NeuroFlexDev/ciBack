@@ -41,6 +41,8 @@ EXPECTED_TABLES = BASE_TABLES | {
     "course_source_links",
     "course_update_proposals",
     "password_resets",
+    "legal_receipts",
+    "legal_requests",
 }
 
 def test_alembic_revision_graph_has_one_connected_head():
@@ -133,9 +135,16 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         text=True,
         env=env,
     )
-    # The latest revision adds account recovery; rolling it back must retain
-    # the AI persistence tables created by the preceding revision.
-    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - {"password_resets"}) | {"alembic_version"}
+    # Rolling back legal receipts removes only the two new legal tables.
+    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - {"legal_receipts", "legal_requests"}) | {"alembic_version"}
+    column_code = (
+        "import json; from sqlalchemy import create_engine, inspect; "
+        f"engine = create_engine({env['DATABASE_URL']!r}); "
+        "print(json.dumps([c['name'] for c in inspect(engine).get_columns('ai_calls')]))"
+    )
+    columns = subprocess.run([sys.executable, "-c", column_code], check=True,
+                             capture_output=True, text=True, env=env)
+    assert "routing" in json.loads(columns.stdout)
 
     for arguments in (("upgrade", "head"), ("check",), ("downgrade", "base")):
         subprocess.run(

@@ -37,5 +37,5 @@ def model_policy(role: str) -> ModelPolicy:
     if fallback == model:
         fallback = settings.AI_MODEL_REASONING
     if role == "critic_qa" and fallback == writer:
-        fallback = fast
+        fallback = fast if fast != writer else critic
     return ModelPolicy(model, fallback, output, purpose)

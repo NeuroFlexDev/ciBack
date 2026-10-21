@@ -22,6 +22,9 @@ if [[ ! -f .env ]]; then
         'POSTGRES_DB=cidb' \
         "JWT_SECRET=${jwt_secret}" \
         'PUBLIC_HOST=dev.platform.lernium.ru' \
+        'COMPOSE_PROFILES=edge' \
+        'REGISTRATION_ENABLED=false' \
+        'CONTACT_REQUESTS_ENABLED=false' \
         'SMTP_HOST=' \
         'SMTP_PORT=587' \
         'SMTP_USER=' \

@@ -1,7 +1,7 @@
 {$PUBLIC_HOST:dev.platform.lernium.ru} {
     encode zstd gzip
 
-    @backend path /api/* /docs* /openapi.json
+    @backend path /api/*
     handle @backend {
         reverse_proxy 127.0.0.1:8000
     }

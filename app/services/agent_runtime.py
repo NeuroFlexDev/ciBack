@@ -17,7 +17,7 @@ from app.repositories.pipeline import PipelineRepository
 from app.models.generation_run import GenerationRun
 from app.models.ai_state import AICall, AIResponseCache
 from app.core.config import settings
-from app.ai import gateway
+from app.ai import gateway, routing, token_forecast
 from app.ai.models import model_policy
 
 
@@ -126,10 +126,11 @@ class AgentRuntime:
         normalize_response: Callable[[dict], dict] | None = None,
     ) -> ArtifactModel:
         policy = model_policy(agent)
-        live = gateway.configured()
+        live = gateway.configured() or settings.ENV != "test"
         output_limit = policy.max_output_tokens if live else max_tokens
         input_fingerprint = _fingerprint(template_name, response_model, {
             **prompt_context, "_models": [policy.model, policy.fallback], "_max_tokens": output_limit,
+            **routing.cache_policy(),
         })
         cache_key = hashlib.sha256(f"{self.owner_id}:{self.course_id}:{input_fingerprint}".encode()).hexdigest()
         stored = PipelineRepository.get_agent_artifact(
@@ -157,24 +158,63 @@ class AgentRuntime:
         last_error: Exception | None = None
         started = time.perf_counter()
         repair_feedback = ""
+        excluded_models: set[str] = set()
+        min_tier = 0
         for attempt in range(1, self.max_attempts + 1):
             attempt_started = time.perf_counter()
             use_fallback = attempt > 1 and (attempt == self.max_attempts or not isinstance(last_error, (ValidationError, ValueError)))
             call = None
+            decision = None
+            reported_usage = None
             try:
                 if live and cached is None:
                     # Reserve worst-case usage before sending. Failed calls still consume budget.
                     from app.services.generation_service import render_prompt, agent_messages
-                    estimate = gateway.token_count(agent_messages(render_prompt(template_name, **prompt_context),
-                        expect_json=True, repair_feedback=repair_feedback))
+                    messages = agent_messages(render_prompt(template_name, **{**prompt_context, "external_context": ""}),
+                                              expect_json=True, repair_feedback=repair_feedback)
+                    estimate = gateway.token_count(messages)
+                    request_features = token_forecast.features(messages, agent, prompt_context)
+                    request_features["is_revision"] = (sequence > 0 if agent in {"competency_mapper", "course_architect"}
+                                                       else sequence >= 1000)
+                    from app.ai.providers import route_id
+                    predictions = {route_id(item.provider, item.model): token_forecast.predict(
+                        token_forecast.current_model(), role=agent, model_id=item.model,
+                        request_features=request_features, max_output_tokens=output_limit,
+                    ) for item in routing.enabled_candidates(agent)}
+                    baseline_model = policy.fallback if use_fallback else policy.model
+                    predictions[route_id("vsellm", baseline_model)] = token_forecast.predict(
+                        token_forecast.current_model(), role=agent, model_id=baseline_model,
+                        request_features=request_features, max_output_tokens=output_limit)
                     if estimate > settings.AI_MAX_INPUT_TOKENS:
                         raise HTTPException(413, "AI context budget exceeded; split the document or course")
-                    previous = self.db.query(AICall).filter(AICall.run_id == self.run_id).all()
+                    previous = self.db.query(AICall).filter(AICall.run_id == self.run_id,
+                                                          AICall.status != "unavailable").all()
                     consumed = sum(item.input_tokens + item.output_tokens for item in previous)
                     if len(previous) >= settings.AI_MAX_CALLS_PER_RUN or consumed + estimate + output_limit > settings.AI_MAX_TOKENS_PER_RUN:
                         raise HTTPException(402, "AI run budget exhausted")
+                    if settings.AI_ROUTING_MODE != "off":
+                        history = self.db.query(AICall).join(GenerationRun).filter(
+                            GenerationRun.owner_id == self.owner_id, AICall.agent == agent,
+                            AICall.routing.isnot(None),
+                            AICall.status.in_(["completed", "failed"]),
+                        ).order_by(AICall.id.desc()).limit(settings.AI_ROUTING_HISTORY_LIMIT).all()
+                        decision = routing.choose_route(
+                            role=agent, baseline_model=policy.fallback if use_fallback else policy.model,
+                            input_tokens=estimate, output_tokens=output_limit,
+                            history=[item.routing for item in history if item.routing],
+                            excluded_models=excluded_models, min_tier=min_tier,
+                            available_providers=gateway.available_provider_ids(),
+                            forecast=predictions,
+                        )
+                    selected_model = decision.selected_model if decision else (policy.fallback if use_fallback else policy.model)
+                    selected_provider = decision.selected_provider if decision else "vsellm"
+                    metadata = decision.metadata if decision else {"selected_model": selected_model, "selected_provider": selected_provider}
+                    metadata = {**metadata, "forecast": token_forecast.predict(token_forecast.current_model(),
+                        role=agent, model_id=selected_model, request_features=request_features, max_output_tokens=output_limit),
+                        "observation": {"features": request_features, "attempt": attempt, "sequence": sequence,
+                                        "max_output_tokens": output_limit, "usage_reported": False}}
                     call = AICall(run_id=self.run_id, agent=agent,
-                                  model=policy.fallback if use_fallback else policy.model,
+                                  model=selected_model, routing=metadata,
                                   status="reserved", input_tokens=estimate, output_tokens=output_limit)
                     self.db.add(call)
                     self.db.commit()
@@ -185,8 +225,9 @@ class AgentRuntime:
                     expect_json=True,
                     max_tokens=output_limit,
                     agent_role=agent,
-                    fallback_model=use_fallback,
+                    fallback_model=use_fallback if decision is None else False,
                     repair_feedback=repair_feedback,
+                    **({"model": decision.selected_model, "provider": decision.selected_provider} if decision else {}),
                     **prompt_context,
                 )
                 if (
@@ -198,12 +239,18 @@ class AgentRuntime:
                     raise LegacyGraphResponse(raw)
                 used_model = raw.pop("_model", None) if isinstance(raw, dict) else None
                 usage = raw.pop("_usage", {}) if isinstance(raw, dict) else {}
+                usage_reported = raw.pop("_usage_reported", False) if isinstance(raw, dict) else False
+                used_provider = raw.pop("_provider", "vsellm") if isinstance(raw, dict) else "vsellm"
+                if usage_reported:
+                    reported_usage = usage
                 if call:
                     call.status = "received"
                     call.model = used_model or call.model
                     call.input_tokens = usage.get("input_tokens", call.input_tokens)
                     call.output_tokens = usage.get("output_tokens", call.output_tokens)
                     call.cached_tokens = usage.get("cached_tokens", 0)
+                    call.routing = {**call.routing, "observation": {**call.routing["observation"],
+                                                                   "usage_reported": usage_reported}}
                     self.db.commit()
                 if self.source_catalog:
                     if normalize_response is not None:
@@ -232,6 +279,7 @@ class AgentRuntime:
                 if call:
                     call.status = "completed"
                     call.latency_ms = max(0, int((time.perf_counter() - attempt_started) * 1000))
+                    call.routing = routing.record_outcome(call.routing, outcome="contract_pass", usage=reported_usage)
                 if live and cached is None and settings.AI_CACHE_TTL_SECONDS:
                     self.db.merge(AIResponseCache(key=cache_key, owner_id=self.owner_id,
                         course_id=self.course_id, model=used_model or policy.model,
@@ -247,10 +295,30 @@ class AgentRuntime:
                 if call:
                     call.status = "failed"
                     usage = getattr(exc, "ai_usage", {})
+                    if getattr(exc, "request_sent", None) is False:
+                        call.status = "unavailable"
+                        usage = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
                     call.input_tokens = usage.get("input_tokens", call.input_tokens)
                     call.output_tokens = usage.get("output_tokens", call.output_tokens)
                     call.cached_tokens = usage.get("cached_tokens", call.cached_tokens)
                     call.model = getattr(exc, "ai_model", None) or call.model
+                    if getattr(exc, "ai_usage", None):
+                        call.routing = {**call.routing, "observation": {**call.routing["observation"], "usage_reported": True}}
+                    failure_kind = getattr(exc, "ai_failure_kind", None)
+                    if isinstance(exc, (ValidationError, ValueError)) or failure_kind in {"invalid_json", "truncated", "empty"}:
+                        outcome = "contract_fail"
+                    elif gateway.retryable(exc):
+                        outcome = "provider_error"
+                    else:
+                        outcome = "runtime_error"
+                    call.routing = routing.record_outcome(call.routing, outcome=outcome,
+                                                         usage=getattr(exc, "ai_usage", None) or reported_usage)
+                    if decision and settings.AI_ROUTING_MODE == "adaptive":
+                        from app.ai.providers import route_id
+                        excluded_models.add(route_id(decision.selected_provider, decision.selected_model))
+                        tier = decision.metadata.get("tier")
+                        if tier is not None and outcome == "contract_fail":
+                            min_tier = max(min_tier, tier + 1)
                     call.latency_ms = max(0, int((time.perf_counter() - attempt_started) * 1000))
                     call.error_code = gateway.safe_error(exc)
                     if isinstance(exc, ValidationError):

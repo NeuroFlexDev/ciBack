@@ -49,8 +49,7 @@ def launch_generation(
     try:
         enqueue_generation(run.id)
     except Exception:
-        PipelineService.fail_enqueue(db, run.id)
-        raise HTTPException(status_code=503, detail={"code": "queue_unavailable", "message": "Сервис генерации временно недоступен"})
+        PipelineService.pause_enqueue(db, run.id)
     return GenerationRunAccepted(
         run_id=run.id, course_id=course_id, status=run.status,
         status_url=f"/api/generation-runs/{run.id}",
@@ -109,6 +108,9 @@ def generate_graph(
             db, course_id=course_id, owner_id=current_user.id, force=force
         )
     except PipelineRunFailed as exc:
+        from app.ai.providers import AIUnavailable
+        if isinstance(exc.__cause__, AIUnavailable):
+            return PipelineService.get_run(db, exc.run_id, current_user.id)
         raise _translate_failure(exc)
 
 
@@ -170,11 +172,7 @@ def retry_generation_run(
     try:
         enqueue_generation(run.id)
     except Exception:
-        PipelineService.fail_run(db, run.id, code="queue_unavailable")
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "queue_unavailable", "message": "Сервис генерации временно недоступен"},
-        )
+        PipelineService.pause_enqueue(db, run.id)
     return GenerationRunAccepted(
         run_id=run.id,
         course_id=run.course_id,

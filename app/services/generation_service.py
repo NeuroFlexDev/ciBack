@@ -171,6 +171,7 @@ def generate_from_prompt(
     max_tokens: int = MAX_OUTPUT_TOKENS,
     agent_role: str = "chat",
     fallback_model: bool = False,
+    provider: str | None = None,
     repair_feedback: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
@@ -182,7 +183,8 @@ def generate_from_prompt(
     """
     resolved_engine = ENGINE_ALIASES.get(engine, engine)
     factory = _get_factory(engine, resolved_engine)
-    use_vsellm = engine == "vsellm" or (gateway.configured() and engine == DEFAULT_ENGINE)
+    from app.core.config import settings
+    use_vsellm = engine == "vsellm" or (engine == DEFAULT_ENGINE and (gateway.configured() or settings.ENV != "test"))
     if factory is None and not use_vsellm:
         raise HTTPException(400, f"Неподдерживаемый движок генерации: {engine}")
 
@@ -210,10 +212,23 @@ def generate_from_prompt(
     if use_vsellm:
         response = gateway.invoke_messages(agent_role, agent_messages(final_prompt,
             expect_json=expect_json, repair_feedback=repair_feedback),
-            model=model, max_tokens=max_tokens, json_mode=expect_json, fallback=fallback_model)
-        parsed = _json_object(response["text"]) if expect_json else {"text": response["text"]}
+            model=model, max_tokens=max_tokens, json_mode=expect_json, fallback=fallback_model,
+            **({"provider": provider} if provider else {}))
+        try:
+            parsed = _json_object(response["text"]) if expect_json else {"text": response["text"]}
+        except HTTPException as exc:
+            # Invalid JSON still costs tokens. Preserve the provider's usage so
+            # routing does not learn from the conservative reservation instead.
+            if response.get("usage_reported"):
+                exc.ai_usage = response["usage"]
+            exc.ai_model = response["model"]
+            exc.ai_provider = response.get("provider", "vsellm")
+            exc.ai_failure_kind = "invalid_json"
+            raise
         parsed["_model"] = response["model"]
         parsed["_usage"] = response["usage"]
+        parsed["_usage_reported"] = response.get("usage_reported", False)
+        parsed["_provider"] = response.get("provider", "vsellm")
         return parsed
 
     logger.info(

@@ -13,6 +13,9 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
 os.environ["ENV"] = "test"
 os.environ["DEBUG"] = "false"
 os.environ["VSELLM_API_KEY"] = ""
+os.environ["AI_ROUTING_MODE"] = "off"
+os.environ["AI_ROUTING_CANDIDATES"] = "[]"
+os.environ["AI_PROVIDERS"] = "[]"
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-only-jwt-secret-at-least-32-bytes"
 

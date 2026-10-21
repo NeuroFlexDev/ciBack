@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 
+from app.services.legal_service import CATALOG
 from app.core.config import settings
 from app.core.security import (
     TokenExpiredError,
@@ -87,7 +88,7 @@ def test_access_token_with_invalid_payload_is_rejected(payload):
 def test_register_login_and_me(client):
     credentials = {"email": "  USER@example.com ", "password": "password123"}
 
-    registered = client.post("/api/auth/register", json=credentials)
+    registered = client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]})
     assert registered.status_code == 200
     registered_body = registered.json()
     assert registered_body["token_type"] == "bearer"
@@ -111,15 +112,15 @@ def test_register_login_and_me(client):
 def test_duplicate_registration_is_rejected(client):
     credentials = {"email": "duplicate@example.com", "password": "password123"}
 
-    assert client.post("/api/auth/register", json=credentials).status_code == 200
-    duplicate = client.post("/api/auth/register", json=credentials)
+    assert client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]}).status_code == 200
+    duplicate = client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]})
 
     assert duplicate.status_code == 409
 
 
 def test_login_with_wrong_password_is_rejected(client):
     credentials = {"email": "login@example.com", "password": "password123"}
-    assert client.post("/api/auth/register", json=credentials).status_code == 200
+    assert client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]}).status_code == 200
 
     response = client.post(
         "/api/auth/login",

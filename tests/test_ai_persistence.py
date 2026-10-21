@@ -55,6 +55,7 @@ def test_embeddings_reused_and_retrievable_after_store_recreation(db_session, au
             return [1.0, 0.0]
     monkeypatch.setattr(retrieval, 'embedding_client', lambda: Embedder())
     monkeypatch.setattr(retrieval.gateway, 'configured', lambda: True)
+    monkeypatch.setattr(retrieval.gateway, 'available_provider_ids', lambda: {"vsellm"})
     retrieval.persist_embeddings(db_session, [chunk]); db_session.commit()
     retrieval.persist_embeddings(db_session, [chunk]); db_session.commit()
     assert len(calls) == 1
