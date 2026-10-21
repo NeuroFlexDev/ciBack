@@ -51,6 +51,7 @@ class AuthService:
         user = UserRepository.get_by_email(db, normalize_email(email))
         if not user or not user.is_active or not verify_password(password, user.password_hash):
             raise _credentials_exception("Неверный email или пароль")
+        ensure_organization_active(user)
         if not user.password_hash.startswith("pbkdf2_sha256$600000$"):
             user.password_hash = hash_password(password)
             db.flush()
@@ -69,6 +70,7 @@ class AuthService:
             raise _credentials_exception("Пользователь не найден")
         if payload.get("ver", 0) != user.auth_version:
             raise _credentials_exception("Сеанс завершён. Войдите снова.")
+        ensure_organization_active(user)
         return user
 
     @staticmethod
@@ -91,3 +93,14 @@ def get_current_user(
     if credentials is None:
         raise _credentials_exception("Требуется аутентификация")
     return AuthService.get_user_from_token(db, credentials.credentials)
+
+
+def ensure_organization_active(user: User) -> None:
+    if user.organization_id and user.organization and not user.organization.is_active and not user.is_admin:
+        raise HTTPException(403, "Доступ организации приостановлен. Обратитесь к её администратору.")
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(403, "Доступ только для администратора Лерниума")
+    return user

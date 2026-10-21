@@ -45,7 +45,7 @@ def profile(payload: ProfileUpdate, db: Session = Depends(get_db), user: User = 
         raise HTTPException(422, "Укажите имя")
     user.full_name = name
     db.commit()
-    return UserResponse(id=user.id, email=user.email, full_name=user.full_name)
+    return UserResponse.model_validate(user)
 
 
 @router.post("/change-password")

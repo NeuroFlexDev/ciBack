@@ -193,6 +193,8 @@ class PipelineService:
                 + "agentic-pipeline-v2:" + runtime_signature()
             ).encode()
         ).hexdigest()
+        from app.services.organization_access import check_generation_limit
+        check_generation_limit(db, owner_id)
         now = datetime.utcnow()
         run = GenerationRun(
             owner_id=owner_id,
@@ -385,6 +387,8 @@ class PipelineService:
             course.status = CourseStatus.GENERATING.value
             db.commit()
             return original
+        from app.services.organization_access import check_generation_limit
+        check_generation_limit(db, owner_id)
         retry = GenerationRun(
             owner_id=owner_id,
             course_id=original.course_id,

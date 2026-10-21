@@ -7,6 +7,8 @@ from app.models.domain_enums import CourseStatus
 class CourseDraftRepository:
     @staticmethod
     def create(db: Session, owner_id: int) -> Course:
+        from app.services.organization_access import check_course_limit
+        check_course_limit(db, owner_id)
         draft = Course(owner_id=owner_id, status=CourseStatus.DRAFT.value)
         db.add(draft)
         db.commit()

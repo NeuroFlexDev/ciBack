@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, func
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import relationship
 
 from app.database.db import Base
@@ -13,6 +13,10 @@ class User(Base):
     full_name = Column(String(160), nullable=False, default="", server_default="")
     auth_version = Column(Integer, nullable=False, default=0, server_default="0")
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    is_admin = Column(Boolean, nullable=False, default=False, server_default="false")
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    organization_role = Column(String(16), nullable=False, default="member", server_default="member")
+    organization = relationship("Organization", foreign_keys=[organization_id])
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     courses = relationship("Course", back_populates="owner")

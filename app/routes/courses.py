@@ -125,6 +125,8 @@ def create_course(
     """
     Создает курс в базе данных.
     """
+    from app.services.organization_access import check_course_limit
+    check_course_limit(db, current_user.id)
     try:
         logger.info("Course creation requested")
         new_course = Course(

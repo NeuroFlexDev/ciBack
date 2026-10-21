@@ -21,7 +21,7 @@ def register(payload: RegistrationCredentials, db: Session = Depends(get_db)):
     # Account and all receipts are committed by get_db as one transaction.
     return AuthResponse(
         access_token=token,
-        user=UserResponse(id=user.id, email=user.email, full_name=user.full_name),
+        user=UserResponse.model_validate(user),
     )
 
 
@@ -30,10 +30,10 @@ def login(payload: AuthCredentials, db: Session = Depends(get_db)):
     user, token = AuthService.authenticate(db, payload.email, payload.password)
     return AuthResponse(
         access_token=token,
-        user=UserResponse(id=user.id, email=user.email, full_name=user.full_name),
+        user=UserResponse.model_validate(user),
     )
 
 
 @router.get("/auth/me", response_model=UserResponse, summary="Текущий пользователь")
 def me(current_user: User = Depends(get_current_user)):
-    return UserResponse(id=current_user.id, email=current_user.email, full_name=current_user.full_name)
+    return UserResponse.model_validate(current_user)

@@ -41,6 +41,9 @@ EXPECTED_TABLES = BASE_TABLES | {
     "course_source_links",
     "course_update_proposals",
     "password_resets",
+    "organizations",
+    "invitations",
+    "admin_events",
     "legal_receipts",
     "legal_requests",
 }
@@ -136,7 +139,7 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         env=env,
     )
     # Rolling back legal receipts removes only the two new legal tables.
-    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - {"legal_receipts", "legal_requests"}) | {"alembic_version"}
+    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - {"organizations", "invitations", "admin_events"}) | {"alembic_version"}
     column_code = (
         "import json; from sqlalchemy import create_engine, inspect; "
         f"engine = create_engine({env['DATABASE_URL']!r}); "

@@ -243,6 +243,9 @@ class CourseContentService:
         if course is None:
             raise _course_not_found()
 
+        if replace_document_id is None:
+            from app.services.organization_access import check_source_limit
+            check_source_limit(db, owner_id, course_id)
         superseded = None
         if replace_document_id is not None:
             superseded = CourseContentRepository.get_current_owned_document(

@@ -35,7 +35,7 @@ def test_draft_requires_authentication(client):
     assert client.get("/api/courses/drafts").status_code == 401
 
 
-def test_drafts_are_owner_isolated_and_excluded_from_regular_list(
+def test_drafts_are_owner_isolated_and_visible_in_my_courses(
     client, db_session, auth_user, auth_headers
 ):
     foreign_user = User(
@@ -60,7 +60,8 @@ def test_drafts_are_owner_isolated_and_excluded_from_regular_list(
         json={"title": "No access"},
         headers=auth_headers,
     ).status_code == 404
-    assert client.get("/api/courses/", headers=auth_headers).json() == []
+    assert [item["id"] for item in client.get("/api/courses/", headers=auth_headers).json()] == [owned["id"]]
+    assert [item["id"] for item in client.get("/api/courses/?publication_status=draft", headers=auth_headers).json()] == [owned["id"]]
 
 
 def test_regular_course_is_ready_and_soft_deleted(

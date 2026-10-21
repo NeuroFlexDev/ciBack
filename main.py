@@ -15,6 +15,8 @@ from app.core.http_security import SecurityMiddleware
 from app.routes import account
 from app.routes import legal
 app.add_middleware(SecurityMiddleware)
+from app.routes import administration
+app.include_router(administration.router, prefix="/api", tags=["Administration"])
 app.include_router(account.router, prefix="/api", tags=["Account"])
 app.include_router(legal.router, prefix="/api", tags=["Legal"])
 from app.routes import ai_workspace

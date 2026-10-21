@@ -1,5 +1,5 @@
 import re
-from pydantic import BaseModel, Field, StrictBool, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, ConfigDict
 
 
 class AuthCredentials(BaseModel):
@@ -30,9 +30,13 @@ class RegistrationCredentials(AuthCredentials):
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     email: str
     full_name: str = ""
+    is_admin: bool = False
+    organization_id: int | None = None
+    organization_role: str = "member"
 
 
 class AuthResponse(BaseModel):
