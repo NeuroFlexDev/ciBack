@@ -1,4 +1,5 @@
 from typing import Literal
+from decimal import Decimal
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -142,10 +143,21 @@ def review_image(image_id: int, payload: ImageReview, db: Session = Depends(get_
     return images.image_out(item)
 
 
+class ResourceLimitsInput(BaseModel):
+    queued_limit: int = Field(ge=0, le=100000)
+    background_limit: int = Field(ge=0, le=1000)
+    interactive_limit: int = Field(ge=0, le=1000)
+    monthly_tokens: int = Field(ge=0, le=10**12)
+    monthly_ocr_pages: int = Field(ge=0, le=10**8)
+    monthly_rub: Decimal = Field(ge=0, le=10**10, allow_inf_nan=False, decimal_places=6)
+
+
 class MaterialPolicyInput(BaseModel):
     disk_bytes_limit: int = Field(ge=0, le=1024**5)
     image_monthly_limit: int = Field(ge=0, le=1000000)
     chat_monthly_limit: int = Field(ge=0, le=10000000)
+    resource_limits: ResourceLimitsInput | None = None
+    expected_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 @router.get("/admin/organizations/{organization_id}/material-policy")
@@ -155,10 +167,16 @@ def get_policy(organization_id: int, db: Session = Depends(get_db), user=Depends
     from app.services.material_quota import used_disk_bytes
     lock_org(db, organization_id)
     row = db.get(OrganizationMaterialPolicy, organization_id)
-    return {"disk_bytes_limit": row.disk_bytes_limit if row else 5 * 1024**3,
+    from app.services.ai_resources import organization_limits
+    limits = organization_limits(db, organization_id)
+    result = {"disk_bytes_limit": row.disk_bytes_limit if row else 5 * 1024**3,
             "image_monthly_limit": row.image_monthly_limit if row else settings.IMAGE_MONTHLY_LIMIT,
             "chat_monthly_limit": row.chat_monthly_limit if row else settings.AI_CHAT_MONTHLY_LIMIT,
-            "used_disk_bytes": used_disk_bytes(db, [], organization_id=organization_id)}
+            "used_disk_bytes": used_disk_bytes(db, [], organization_id=organization_id),
+            "resource_limits": {key: str(value) if isinstance(value, Decimal) else value for key, value in limits.items()}}
+    import hashlib, json
+    result["revision"] = hashlib.sha256(json.dumps({key: value for key, value in result.items() if key != "used_disk_bytes"}, sort_keys=True).encode()).hexdigest()
+    return result
 
 
 @router.put("/admin/organizations/{organization_id}/material-policy")
@@ -166,10 +184,12 @@ def put_policy(organization_id: int, payload: MaterialPolicyInput, db: Session =
     from app.models.materials import OrganizationMaterialPolicy
     from app.services.organization_access import lock_org, audit
     lock_org(db, organization_id)
+    if payload.expected_revision is not None and get_policy(organization_id, db, user)["revision"] != payload.expected_revision:
+        raise HTTPException(409, {"code": "resource_policy_conflict", "message": "Квоты изменены другим оператором. Ваш черновик сохранён; сравните текущие значения."})
     row = db.get(OrganizationMaterialPolicy, organization_id) or OrganizationMaterialPolicy(organization_id=organization_id)
-    for key, value in payload.model_dump().items():
+    for key, value in payload.model_dump(mode="json", exclude_none=True, exclude={"expected_revision"}).items():
         setattr(row, key, value)
     db.add(row)
-    audit(db, user, "organization.material_policy", "organization", organization_id, **payload.model_dump())
+    audit(db, user, "organization.material_policy", "organization", organization_id, **payload.model_dump(mode="json", exclude_none=True))
     db.commit()
     return get_policy(organization_id, db, user)

@@ -15,6 +15,17 @@ from app.models.course import Course
 from app.models.user import User
 
 ACTIVE = {"queued", "running"}
+RESOURCE_SETTINGS = {"queued_limit": "AI_ORG_QUEUED_LIMIT", "background_limit": "AI_ORG_BACKGROUND_LIMIT",
+    "interactive_limit": "AI_ORG_INTERACTIVE_LIMIT", "monthly_tokens": "AI_ORG_MONTHLY_TOKENS",
+    "monthly_ocr_pages": "AI_ORG_MONTHLY_OCR_PAGES", "monthly_rub": "AI_ORG_MONTHLY_RUB"}
+
+
+def organization_limits(db, organization_id):
+    from app.models.materials import OrganizationMaterialPolicy
+    row = db.get(OrganizationMaterialPolicy, organization_id) if organization_id else None
+    overrides = (row.resource_limits or {}) if row else {}
+    return {key: (Decimal(overrides[key]) if key == "monthly_rub" else int(overrides[key]))
+        if key in overrides else getattr(settings, setting) for key, setting in RESOURCE_SETTINGS.items()}
 
 
 class CapacityBusy(HTTPException):
@@ -42,20 +53,8 @@ def locked(db):
     from app.models.materials import CourseImage
     for row in db.query(AIResourceUsage).filter(AIResourceUsage.status == "running", AIResourceUsage.expires_at < datetime.utcnow()):
         row.status, row.finished_at = "unknown", datetime.utcnow()
-        if row.lane == "background" and row.run_id:
-            run = db.get(GenerationRun, row.run_id)
-            if run and run.status in {"queued", "running"}:
-                run.status, run.cancel_requested = "paused", True
-                run.error_code = "worker_result_unknown"
-                run.error_message = "Рабочий процесс не подтвердил завершение. Этапы сохранены; автоматический платный повтор остановлен."
-                run.finished_at = datetime.utcnow()
-                course = db.get(Course, run.course_id)
-                if course:
-                    course.status = "ready" if course.current_graph_id else "configured"
-        elif row.operation == "image":
-            image = db.get(CourseImage, int(row.key.split(":")[-1]))
-            if image and image.status == "generating":
-                image.status, image.error_code, image.size_bytes = "failed", "image_result_unknown", 0
+        # Do not lock domain rows while holding the resource mutex: authoring
+        # acquires those locks first. Polling reconciles expired jobs separately.
     for row in db.query(AIResourceUsage).filter(AIResourceUsage.lane == "background", AIResourceUsage.status == "queued"):
         run = db.get(GenerationRun, row.run_id) if row.run_id else None
         terminal = bool(run and (run.status not in {"queued", "running"} or run.cancel_requested))
@@ -86,19 +85,20 @@ def _capacity(db, owner_id, organization_id, lane, state, *, exclude=None):
     if exclude:
         query = query.filter(AIResourceUsage.id != exclude)
     category = "INTERACTIVE" if lane == "interactive" else ("QUEUED" if state == "queued" else "BACKGROUND")
-    if query.count() >= getattr(settings, f"AI_INSTALL_{category}_LIMIT") or scoped(query, organization_id, owner_id).count() >= getattr(settings, f"AI_ORG_{category}_LIMIT"):
+    org_limit = organization_limits(db, organization_id)[category.lower() + "_limit"]
+    if query.count() >= getattr(settings, f"AI_INSTALL_{category}_LIMIT") or scoped(query, organization_id, owner_id).count() >= org_limit:
         raise CapacityBusy()
 
 
 def _budget(db, owner_id, organization_id, tokens, pages, cost, run_id=None):
     month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     query = db.query(AIResourceUsage).filter(AIResourceUsage.created_at >= month)
+    limits = organization_limits(db, organization_id)
     for suffix, subset in (("INSTALL", query), ("ORG", scoped(query, organization_id, owner_id))):
         spent = subset.with_entities(func.coalesce(func.sum(AIResourceUsage.tokens), 0),
             func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0), func.coalesce(func.sum(AIResourceUsage.cost_rub), 0)).one()
-        if (spent[0] + tokens > getattr(settings, f"AI_{suffix}_MONTHLY_TOKENS") or
-            spent[1] + pages > getattr(settings, f"AI_{suffix}_MONTHLY_OCR_PAGES") or
-            spent[2] + cost > getattr(settings, f"AI_{suffix}_MONTHLY_RUB")):
+        limit = lambda name: limits[name.lower()] if suffix == "ORG" else getattr(settings, f"AI_INSTALL_{name}")
+        if (spent[0] + tokens > limit("MONTHLY_TOKENS") or spent[1] + pages > limit("MONTHLY_OCR_PAGES") or spent[2] + cost > limit("MONTHLY_RUB")):
             raise CapacityBusy("ai_resource_budget", "Исчерпан месячный бюджет AI или обработки документов. Сохранённые материалы доступны.")
     if run_id and cost:
         used = db.query(func.coalesce(func.sum(AIResourceUsage.cost_rub), 0)).filter(AIResourceUsage.run_id == run_id).scalar()
@@ -176,6 +176,11 @@ def text_price(role, input_tokens, output_tokens, *, model=None, provider=None):
     if provider is None:
         pairs.update((item.provider, item.model) for item in enabled_candidates(role))
         pairs.add(("vsellm", policy.fallback))
+    if settings.AI_LOCAL_ONLY:
+        pairs = {(name, selected) for name, selected in pairs if registry().get(name) and registry()[name].local}
+        if not pairs:
+            from app.ai.providers import AIUnavailable
+            raise AIUnavailable()
     costs = []
     for provider_id, model_id in pairs:
         configured = registry().get(provider_id)
@@ -214,8 +219,40 @@ def usage_summary(db, owner_id):
     month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     query = scoped(db.query(AIResourceUsage).filter(AIResourceUsage.created_at >= month), org_id, owner_id)
     values = query.with_entities(func.coalesce(func.sum(AIResourceUsage.tokens), 0), func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0), func.coalesce(func.sum(AIResourceUsage.cost_rub), 0)).one()
+    limits = organization_limits(db, org_id)
+    from app.models.materials import CourseImage
+    from app.services.material_quota import material_policy, used_disk_bytes
+    material = material_policy(db, db.get(User, owner_id))
+    active = scoped(db.query(AIResourceUsage), org_id, owner_id)
+    courses = db.query(Course.id).filter(Course.organization_id == org_id)
+    if org_id is None:
+        courses = courses.filter(Course.owner_id == owner_id)
+    images = db.query(CourseImage).filter(CourseImage.course_id.in_(courses), CourseImage.prompt.is_not(None), CourseImage.created_at >= month).count()
     return {"month": month.date().isoformat(), "tokens_reserved_or_used": values[0], "ocr_pages_reserved_or_used": values[1],
-        "cost_rub_reserved_upper_bound": str(values[2]), "tokens_limit": settings.AI_ORG_MONTHLY_TOKENS,
-        "ocr_pages_limit": settings.AI_ORG_MONTHLY_OCR_PAGES, "cost_rub_limit": str(settings.AI_ORG_MONTHLY_RUB),
-        "background_running_limit": settings.AI_ORG_BACKGROUND_LIMIT, "queued_limit": settings.AI_ORG_QUEUED_LIMIT,
-        "interactive_running_limit": settings.AI_ORG_INTERACTIVE_LIMIT}
+        "cost_rub_reserved_upper_bound": str(values[2]), "tokens_limit": limits["monthly_tokens"],
+        "ocr_pages_limit": limits["monthly_ocr_pages"], "cost_rub_limit": str(limits["monthly_rub"]),
+        "background_running_limit": limits["background_limit"], "queued_limit": limits["queued_limit"],
+        "interactive_running_limit": limits["interactive_limit"], "resource_limits": {key: str(value) if isinstance(value, Decimal) else value for key, value in limits.items()},
+        "used_disk_bytes": used_disk_bytes(db, [owner_id], organization_id=org_id), "disk_bytes_limit": material["disk_bytes_limit"],
+        "images_this_month": images, "image_monthly_limit": material["image_monthly_limit"],
+        "interactive_requests_this_month": query.filter(AIResourceUsage.lane == "interactive", AIResourceUsage.operation != "embedding").count(),
+        "chat_monthly_limit": material["chat_monthly_limit"],
+        "background_running": active.filter_by(lane="background", status="running").count(),
+        "interactive_running": active.filter_by(lane="interactive", status="running").count(),
+        "queued": active.filter_by(lane="background", status="queued").count()}
+
+
+def reconcile_expired_run(db, run):
+    row = db.query(AIResourceUsage).filter_by(key=f"generation:{run.id}").first()
+    if row and row.expires_at and row.expires_at < datetime.utcnow() and run.status in {"running", "queued"}:
+        course = db.execute(select(Course).where(Course.id == run.course_id).with_for_update()).scalar_one_or_none()
+        db.refresh(run)
+        if run.status not in {"running", "queued"}:
+            return
+        run.status, run.cancel_requested, run.retryable = "paused", True, True
+        run.error_code = "worker_result_unknown"
+        run.error_message = "Рабочий процесс не подтвердил завершение. Автоматический платный повтор остановлен; этапы сохранены."
+        run.finished_at = datetime.utcnow()
+        if course:
+            course.status = "ready" if course.current_graph_id else "configured"
+        db.commit()

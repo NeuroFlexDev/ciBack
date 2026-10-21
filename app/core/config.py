@@ -2,7 +2,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, model_validator, AnyHttpUrl
+from pydantic import BaseModel, Field, SecretStr, model_validator, field_validator, AnyHttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class AIRoutingCandidate(BaseModel):
@@ -167,6 +167,13 @@ class Settings(BaseSettings):
         if len(providers) != len(set(providers)):
             raise ValueError("AI_PROVIDERS must have unique IDs")
         return self
+
+    @field_validator("IMAGE_PRICE_RUB", "EMBEDDING_RUB_PER_MILLION", mode="before")
+    @classmethod
+    def blank_optional_price(cls, value):
+        # Compose passes absent optional values as an empty string. Missing
+        # pricing must disable paid dispatch, never turn into a zero price.
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def max_document_bytes(self) -> int:

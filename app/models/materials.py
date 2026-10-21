@@ -8,6 +8,7 @@ class OrganizationMaterialPolicy(Base):
     disk_bytes_limit = Column(BigInteger, nullable=False, default=5 * 1024**3)
     image_monthly_limit = Column(Integer, nullable=False, default=50)
     chat_monthly_limit = Column(Integer, nullable=False, default=1000)
+    resource_limits = Column(JSON, nullable=False, default=dict)
 
 
 class ScopedAIUsage(Base):

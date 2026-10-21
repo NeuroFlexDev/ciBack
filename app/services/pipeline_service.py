@@ -261,6 +261,8 @@ class PipelineService:
     @staticmethod
     def get_run_status(db: Session, run_id: int, owner_id: int) -> dict:
         run = PipelineService.get_run(db, run_id, owner_id)
+        from app.services.ai_resources import reconcile_expired_run
+        reconcile_expired_run(db, run)
         data = {column.name: getattr(run, column.name) for column in run.__table__.columns}
         data["run_id"] = run.id
         from app.ai.offline import GENERATION_PAUSED, GENERATION_QUEUED

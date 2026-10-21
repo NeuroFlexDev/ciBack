@@ -136,3 +136,37 @@ def test_transport_timeout_is_not_retried_and_reservation_is_retained(db_session
     row = db_session.query(AIResourceUsage).one()
     assert row.status == "unknown" and row.tokens > 50 and row.cost_rub > 0
 
+
+def test_operator_policy_changes_only_selected_organization(client, db_session, auth_user, auth_headers):
+    first, second = Organization(name="Low budget"), Organization(name="Default budget")
+    db_session.add_all([first, second]); db_session.flush()
+    auth_user.is_admin, auth_user.organization_id = True, first.id
+    db_session.commit()
+    payload = {"disk_bytes_limit": 100000, "chat_monthly_limit": 30, "image_monthly_limit": 2,
+        "resource_limits": {"queued_limit": 2, "background_limit": 1, "interactive_limit": 1,
+            "monthly_tokens": 10, "monthly_ocr_pages": 3, "monthly_rub": "0.5"}}
+    payload["expected_revision"] = client.get(f"/api/admin/organizations/{first.id}/material-policy", headers=auth_headers).json()["revision"]
+    response = client.put(f"/api/admin/organizations/{first.id}/material-policy", headers=auth_headers, json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["resource_limits"]["monthly_rub"] == "0.5"
+    assert client.put(f"/api/admin/organizations/{first.id}/material-policy", headers=auth_headers, json=payload).status_code == 409
+    with pytest.raises(resources.CapacityBusy):
+        resources.reserve(db_session, owner_id=auth_user.id, operation="chat", tokens=11)
+    db_session.rollback()
+    auth_user.organization_id = second.id
+    db_session.commit()
+    resources.reserve(db_session, owner_id=auth_user.id, operation="chat", tokens=11)
+    db_session.commit()
+    assert resources.usage_summary(db_session, auth_user.id)["tokens_limit"] == settings.AI_ORG_MONTHLY_TOKENS
+    auth_user.organization_id, auth_user.is_admin = first.id, False
+    db_session.commit()
+    response = client.get("/api/materials/resource-usage", headers=auth_headers)
+    assert response.status_code == 200 and response.json()["tokens_limit"] == 10
+    assert client.put(f"/api/admin/organizations/{first.id}/material-policy", headers=auth_headers, json=payload).status_code == 403
+
+
+def test_empty_compose_prices_are_unconfigured_not_free():
+    from app.core.config import Settings
+    config = Settings(_env_file=None, DATABASE_URL="sqlite:///:memory:", JWT_SECRET="test-only-config-secret-32-characters", IMAGE_PRICE_RUB="", EMBEDDING_RUB_PER_MILLION="   ")
+    assert config.IMAGE_PRICE_RUB is None and config.EMBEDDING_RUB_PER_MILLION is None
+
