@@ -106,6 +106,7 @@ class LearningAssignment(Base):
     progress_revision = Column(Integer, nullable=False, default=0)
     completed_lessons = Column(JSON, nullable=False, default=list)
     last_lesson_id = Column(Integer, nullable=True)
+    last_item_key = Column(String(64), nullable=True)
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     completed_at = Column(DateTime, nullable=True)
     prerequisite_id = Column(Integer, ForeignKey('learning_assignments.id'), nullable=True)
@@ -210,4 +211,24 @@ class LearningPublicationApproval(Base):
     decision = Column(String(16), nullable=False)
     comment = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class SupportAccessGrant(Base):
+    __tablename__ = 'support_access_grants'
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False, index=True)
+    operator_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    scope_type = Column(String(16), nullable=False)
+    scope_id = Column(Integer, nullable=False)
+    reason = Column(Text, nullable=False)
+    requested_hours = Column(Integer, nullable=False)
+    revision = Column(Integer, nullable=False, default=1)
+    status = Column(String(16), nullable=False, default='pending')
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    decided_at = Column(DateTime, nullable=True)
+    decided_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    decision_comment = Column(Text, nullable=False, default='')
+    expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(Integer, ForeignKey('users.id'), nullable=True)
 

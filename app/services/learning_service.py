@@ -340,6 +340,7 @@ def assignment_summary(db, row):
         'state': row.state, 'status': 'revoked' if row.state != 'active' else 'locked' if locked else 'completed' if row.completed_at else 'in_progress' if row.completed_lessons or responses else 'assigned',
         'due_at': row.due_at, 'created_at': row.created_at, 'completed_at': row.completed_at,
         'completed_lessons': row.completed_lessons, 'lesson_count': len(lesson_ids), 'last_lesson_id': row.last_lesson_id,
+        'last_item_key': row.last_item_key,
         'progress_revision': row.progress_revision, 'progress_percent': round(100 * len(set(row.completed_lessons) & lesson_ids) / len(lesson_ids)) if lesson_ids else 0,
         'points': points, 'max_points': max_points, 'score_percent': round(100 * points / max_points, 2) if max_points else None,
         'pending_reviews': sum(r.status == 'pending_review' for r in responses), 'rules': row.rules, 'rules_revision': row.rules_revision,

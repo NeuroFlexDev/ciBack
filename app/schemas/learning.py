@@ -157,6 +157,11 @@ class ProgressInput(StrictInput):
     completed: bool = True
 
 
+class BookmarkInput(StrictInput):
+    expected_revision: int = Field(ge=0)
+    item_key: str = Field(min_length=1, max_length=64)
+
+
 class AnswerInput(StrictInput):
     expected_revision: int = Field(default=0, ge=0)
     attempt: int = Field(default=1, ge=1, le=100)

@@ -260,6 +260,31 @@ def update_person(user_id: int, payload: PersonInput, db: Session = Depends(get_
     return {'user_id': user_id, **payload.model_dump()}
 
 
+@router.get('/team/people/export')
+def export_people(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = svc.require_manager(db, user)
+    rows = db.query(User).filter(User.organization_id == org_id).order_by(User.id).all()
+    people = {p.user_id: p for p in db.query(LearningPerson).filter_by(organization_id=org_id)}
+    departments = {d.id: d.name for d in db.query(LearningDepartment).filter_by(organization_id=org_id)}
+    keys = ['user_id', 'full_name', 'email', 'is_active', 'role', 'department_id', 'department', 'position', 'external_id', 'attributes']
+    stream = io.StringIO(newline='')
+    writer = csv.DictWriter(stream, fieldnames=keys)
+    writer.writeheader()
+    for member in rows:
+        person = people.get(member.id)
+        item = {'user_id': member.id, 'full_name': member.full_name, 'email': member.email,
+            'is_active': member.is_active, 'role': member.organization_role,
+            'department_id': person.department_id if person else None,
+            'department': departments.get(person.department_id, '') if person else '',
+            'position': person.position if person else '', 'external_id': person.external_id if person else '',
+            'attributes': json.dumps(person.attributes if person else {}, ensure_ascii=False, sort_keys=True)}
+        writer.writerow({k: "'" + v if isinstance(v, str) and v.lstrip().startswith(('=', '+', '-', '@')) else v for k, v in item.items()})
+    audit(db, user, 'learning.people_exported', 'organization', org_id, organization_id=org_id, count=len(rows))
+    db.commit()
+    return Response('\ufeff' + stream.getvalue(), media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': 'attachment; filename="learning-people.csv"', 'Cache-Control': 'no-store'})
+
+
 @router.get('/team/members/{user_id}/roles')
 def get_roles(user_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.require_manager(db, user)
@@ -591,9 +616,28 @@ def progress(assignment_id: int, payload: ProgressInput, db: Session = Depends(g
     # Completion is monotonic; opening an earlier lesson never erases progress.
     row.completed_lessons = sorted(completed)
     row.last_lesson_id = payload.lesson_id
+    row.last_item_key = f'lesson:{payload.lesson_id}'
     row.progress_revision += 1
     db.flush()
     svc.update_completion(db, row)
+    db.commit()
+    return svc.assignment_summary(db, row)
+
+
+@router.put('/learning/assignments/{assignment_id}/bookmark')
+def bookmark(assignment_id: int, payload: BookmarkInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    row = svc.learner_assignment(db, user, assignment_id, lock=True)
+    snapshot = svc.snapshot_for(db, row.course_version_id)
+    allowed = {f"lesson:{l['id']}" for m in snapshot['modules'] for l in m['lessons']}
+    allowed.update(a['id'] for a in svc.assessments(snapshot))
+    if payload.item_key not in allowed:
+        raise HTTPException(404, 'Элемент не найден в назначенной версии')
+    if row.progress_revision != payload.expected_revision:
+        raise HTTPException(409, {'message': 'Место продолжения изменилось на другом устройстве. Обновите данные.', 'current_revision': row.progress_revision})
+    row.last_item_key = payload.item_key
+    if payload.item_key.startswith('lesson:'):
+        row.last_lesson_id = int(payload.item_key.split(':')[1])
+    row.progress_revision += 1
     db.commit()
     return svc.assignment_summary(db, row)
 
