@@ -192,6 +192,8 @@ def _assessment(db, item, kind):
 
 def build_publication_snapshot(db, course, modules):
     data = {'course': {'id': course.id, 'title': course.name, 'description': course.description or '', 'revision': course.content_revision}, 'modules': [], 'assessments': []}
+    from app.services.source_release import manifest
+    data['sources'] = manifest(db, course.id)
     for module in modules:
         data['modules'].append({
             'id': module.id, 'title': module.title, 'description': module.description or '',
@@ -248,6 +250,8 @@ def create_publication_snapshot(db, course, version, modules):
     if db.get(PublishedLearningContent, version.id):
         raise HTTPException(409, 'Опубликованный снимок уже существует')
     data = build_publication_snapshot(db, course, modules)
+    from app.services.source_release import pin_sources
+    pin_sources(db, version.id, data.get('sources', []))
     db.add(PublishedLearningContent(course_version_id=version.id, organization_id=course_org(db, course), snapshot=data))
     db.flush()
     event(db, course.organization_id, 'course.published', f'course-version:{version.id}:published', {'course_id': course.id, 'course_version_id': version.id, 'revision': version.revision})

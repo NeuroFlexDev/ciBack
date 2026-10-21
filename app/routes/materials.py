@@ -13,6 +13,40 @@ from app.services.feature_access import require_feature, feature_enabled
 router = APIRouter()
 
 
+class SourceRelease(BaseModel):
+    learner_visible: bool
+    confirm_original_safe: bool = False
+    expected_revision: int = Field(ge=0)
+    document_version: int = Field(ge=1)
+    content_hash: str = Field(min_length=64, max_length=128)
+
+
+@router.get("/courses/{course_id}/source-release")
+def source_release_list(course_id: int, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+        db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.source_release import list_sources
+    return list_sources(db, user, course_id, offset, limit)
+
+
+@router.put("/courses/{course_id}/source-release/{document_id}")
+def source_release_update(course_id: int, document_id: int, payload: SourceRelease,
+        db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.source_release import set_release
+    return set_release(db, user, course_id, document_id, payload)
+
+
+@router.get("/courses/{course_id}/source-release/{document_id}/content")
+def source_release_content(course_id: int, document_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.source_release import author_download
+    return author_download(db, user, course_id, document_id)
+
+
+@router.get("/learning/assignments/{assignment_id}/sources/{document_id}/content")
+def learner_source_content(assignment_id: int, document_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.source_release import learner_download
+    return learner_download(db, user, assignment_id, document_id)
+
+
 @router.get("/materials/resource-usage")
 def resource_usage(db: Session = Depends(get_db), user=Depends(get_current_user)):
     from app.services.ai_resources import usage_summary

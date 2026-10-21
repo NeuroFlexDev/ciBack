@@ -2,6 +2,19 @@ from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Uniq
 from app.database.db import Base
 
 
+class PublishedSourceFile(Base):
+    """Pins immutable originals; normal source removal must never delete these files."""
+    __tablename__ = "published_source_files"
+    course_version_id = Column(Integer, ForeignKey("course_versions.id", ondelete="CASCADE"), primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="RESTRICT"), primary_key=True)
+    document_version = Column(Integer, nullable=False)
+    content_hash = Column(String(128), nullable=False)
+    storage_key = Column(String(1024), nullable=False)
+    filename = Column(String(512), nullable=False)
+    mime_type = Column(String(255), nullable=False)
+    size_bytes = Column(BigInteger, nullable=False)
+
+
 class OrganizationMaterialPolicy(Base):
     __tablename__ = "organization_material_policy"
     organization_id = Column(Integer, ForeignKey("organizations.id"), primary_key=True)

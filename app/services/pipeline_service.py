@@ -466,6 +466,9 @@ class PipelineService:
                 previous = db.get(Document, document.supersedes_document_id)
                 if previous is None or previous.document_key != document.document_key:
                     raise ValueError("Некорректная цепочка версий документа")
+                if previous.learner_visible:
+                    course = PipelineRepository.get_owned_course(db, document.course_id, owner_id, for_update=True)
+                    course.content_revision += 1
                 previous.is_current = False
                 db.flush()
                 document.is_current = True

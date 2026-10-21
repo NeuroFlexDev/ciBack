@@ -89,6 +89,7 @@ class Document(Base, BaseModelMixin):
     mime_type = Column(String(255), nullable=False)
     size_bytes = Column(BigInteger, nullable=False)
     processing_error = Column(Text, nullable=True)
+    learner_visible = Column(Boolean, nullable=False, default=False, server_default=text("false"))
 
     owner = relationship("User", back_populates="documents")
     course = relationship("Course", back_populates="documents")

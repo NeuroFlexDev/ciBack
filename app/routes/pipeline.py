@@ -48,11 +48,14 @@ def preflight_generation(course_id: int, payload: GenerationRunCreate,
 @router.delete("/documents/{document_id}", status_code=204)
 def delete_document(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     document = PipelineService.get_document(db, document_id, current_user.id)
+    course = PipelineRepository.get_owned_course(db, document.course_id, current_user.id, for_update=True)
     if PipelineRepository.active_graph_run(db, document.course_id, current_user.id):
         raise HTTPException(409, "Остановите генерацию перед удалением источника")
     # Preserve historical files/chunks for immutable publications and their audit.
     # Live retrieval excludes archived documents; caches are invalidated now.
     document.is_deleted, document.is_current, document.status = True, False, "archived"
+    if document.learner_visible:
+        course.content_revision += 1
     from app.models.ai_state import AIResponseCache, ChatMemory
     from app.models.chat import Chat
     db.query(AIResponseCache).filter_by(course_id=document.course_id).delete(synchronize_session=False)
