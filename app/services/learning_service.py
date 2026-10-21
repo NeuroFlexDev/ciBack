@@ -160,13 +160,30 @@ def _assessment(db, item, kind):
         for rubric in item.assessment_rubrics:
             if not rubric.is_deleted:
                 criteria.extend(deepcopy(rubric.criteria or []))
+    if not definition:
+        normalized = []
+        for criterion in criteria:
+            if 'max_points' in criterion:
+                normalized.append(criterion)
+                continue
+            # Generated rubrics use weighted levels; preserve their scale in the immutable version.
+            levels = criterion.get('levels') or []
+            weight = criterion.get('weight')
+            if isinstance(weight, (int, float)) and levels and all(isinstance(level.get('score'), (int, float)) for level in levels):
+                normalized.append({'id': criterion.get('id'), 'title': criterion.get('title'),
+                    'description': criterion.get('description', ''),
+                    'max_points': weight * max(level['score'] for level in levels),
+                    'levels': [{'title': level.get('title', ''), 'description': level.get('description', ''), 'points': weight * level['score']} for level in levels]})
+            else:
+                normalized.append(criterion)  # Publication validation reports incomplete legacy rubrics.
+        criteria = normalized
     return {
         'id': f'{kind}:{item.id}', 'revision': definition.revision if definition else getattr(item, 'revision', 1),
         'question': item.question if kind == 'test' else item.name,
         'description': '' if kind == 'test' else item.description or '',
         'question_type': definition.question_type if definition else ('single' if kind == 'test' else 'open'),
         'answers': _answers(item.answers) if kind == 'test' else [],
-        'max_points': definition.max_points if definition else 1.0,
+        'max_points': definition.max_points if definition else sum(c.get('max_points', 0) for c in criteria) if criteria else 1.0,
         'criteria': criteria,
         'grading_mode': definition.grading_mode if definition else ('automatic' if kind == 'test' else 'manual'),
         'correct_answers': deepcopy(definition.correct_answers) if definition else default_correct,
@@ -185,6 +202,24 @@ def build_publication_snapshot(db, course, modules):
         })
     data['assessments'] = [_assessment(db, t, 'test') for t in sorted(course.final_tests, key=lambda x: (x.position, x.id)) if not t.is_deleted]
     return data
+
+
+def validate_assessment_publication(db, course, modules):
+    from pydantic import ValidationError
+    from app.schemas.learning import AssessmentInput
+    problems = []
+    for item in assessments(build_publication_snapshot(db, course, modules)):
+        try:
+            AssessmentInput.model_validate({k: item[k] for k in ['question_type', 'correct_answers', 'max_points', 'grading_mode']} | {
+                'criteria': [{k: v for k, v in criterion.items() if k in {'id', 'title', 'description', 'max_points'}} for criterion in item['criteria']]})
+            if item['question_type'] != 'open' and (not item['answers'] or len(set(item['answers'])) != len(item['answers']) or any(answer not in item['answers'] for answer in item['correct_answers'])):
+                raise ValueError('Укажите разные варианты и правильный ответ из их числа')
+        except (ValidationError, ValueError, TypeError, KeyError):
+            problems.append({'id': item['id'], 'question': item['question'],
+                'message': 'Проверьте тип ответа, ключ, баллы и критерии оценивания. Открытый ответ требует критериев и проверки преподавателем.'})
+    if problems:
+        raise HTTPException(422, {'code': 'assessment_not_ready',
+            'message': 'Перед публикацией завершите настройки оценивания заданий', 'assessments': problems})
 
 
 def content_digest(snapshot):
@@ -249,7 +284,7 @@ def public_snapshot(db, assignment):
         safe = {k: v for k, v in item.items() if k in {'id', 'revision', 'question', 'description', 'question_type', 'answers', 'max_points', 'criteria', 'grading_mode'}}
         item.clear()
         item.update(safe)
-        item['criteria'] = [{k: v for k, v in c.items() if k in {'id', 'title', 'description', 'max_points'}} for c in item.get('criteria', []) if isinstance(c, dict)]
+        item['criteria'] = [{k: v for k, v in c.items() if k in {'id', 'title', 'description', 'max_points', 'levels'}} for c in item.get('criteria', []) if isinstance(c, dict)]
     return data
 
 

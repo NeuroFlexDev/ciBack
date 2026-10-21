@@ -27,7 +27,7 @@ def test_coauthor_images_keep_tenant_after_owner_transfer(client, db_session, wo
 def test_ai_grade_proposal_is_scoped_idempotent_and_never_final(client, db_session, world, monkeypatch):
     course, _, _, _, task, _ = publish(client, db_session, world['author'], assessment=False)
     metadata = {'question_type': 'open', 'grading_mode': 'ai_assisted', 'max_points': 4,
-                'criteria': [{'id': 'accuracy', 'title': 'Accuracy', 'max_points': 4}], 'expected_revision': 0}
+                'criteria': [{'id': 'accuracy', 'title': 'Accuracy', 'max_points': 4}], 'expected_revision': 1}
     assert client.put(f'/api/tasks/{task.id}/assessment-settings', headers=headers(world['author']), json=metadata).status_code == 200
     assert client.post(f'/api/courses/{course.id}/publish', headers=headers(world['author'])).status_code == 200
     config = settings_for(db_session, world['org'].id)

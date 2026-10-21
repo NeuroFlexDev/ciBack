@@ -94,6 +94,12 @@ def get_current_user(
     if credentials is None:
         raise _credentials_exception("Требуется аутентификация")
     user = AuthService.get_user_from_token(db, credentials.credentials)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        path = request.url.path
+        author_paths = ("/api/courses/", "/api/modules/", "/api/lessons/", "/api/tests/", "/api/tasks/", "/api/documents/", "/api/generation-runs/")
+        if path.startswith(author_paths) and not path.endswith(("/assignments", "/cancel", "/export", "/export.csv", "/export.xlsx")):
+            from app.services.feature_access import require_feature
+            require_feature(db, user.organization_id, 'authoring')
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not user.is_admin:
         recovery_paths = ("/api/auth/", "/api/admin/", "/api/billing", "/api/integrations/", "/api/legal/", "/api/me", "/api/change-password")
         if not request.url.path.startswith(recovery_paths) and not request.url.path.endswith(("/export", "/export.xlsx", "/export.csv")):

@@ -22,8 +22,8 @@ class CoursePublicationService:
 
     @staticmethod
     def _validate(course: Course, db: Session) -> tuple[list, list]:
-        if course.status != "ready":
-            raise HTTPException(status_code=409, detail="Only a ready course can be published")
+        if course.status == "generating":
+            raise HTTPException(status_code=409, detail="Дождитесь завершения или отмены генерации")
         if CoursePublicationRepository.active_generation(db, course.id):
             raise HTTPException(status_code=409, detail="Course generation is still active")
         if not (course.name or "").strip():
@@ -138,6 +138,8 @@ class CoursePublicationService:
             course = CoursePublicationRepository.owned_course(db, course_id, owner_id, lock=True)
             if course is None:
                 raise HTTPException(status_code=404, detail="Course not found")
+            from app.services.feature_access import require_feature
+            require_feature(db, course.organization_id, 'authoring')
             if course.publication_status == "published":
                 from app.models.learning import PublishedLearningContent
                 if db.get(PublishedLearningContent, db.query(CourseVersion.id).filter_by(course_id=course.id, revision=course.content_revision).scalar() or 0) is None:
@@ -153,7 +155,8 @@ class CoursePublicationService:
                         "revision": course.content_revision,
                     }
             modules, _ = CoursePublicationService._validate(course, db)
-            from app.services.learning_service import validate_publication_approval
+            from app.services.learning_service import validate_publication_approval, validate_assessment_publication
+            validate_assessment_publication(db, course, modules)
             validate_publication_approval(db, course, modules)
             import importlib.util
             if importlib.util.find_spec('app.services.image_service'):
@@ -162,6 +165,7 @@ class CoursePublicationService:
             published_at = datetime.utcnow()
             CoursePublicationService._snapshot(db, course, owner_id, published_at, modules)
             course.publication_status = "published"
+            course.status = "ready"
             course.published_at = published_at
             db.commit()
             db.refresh(course)

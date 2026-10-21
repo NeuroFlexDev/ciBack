@@ -19,6 +19,7 @@ from app.models.theory import Theory
 from app.schemas.course_editor import OrderItem
 from app.services.course_publication_service import CoursePublicationService
 from app.core.config import settings
+from app.services.feature_access import require_feature
 
 
 def _not_found(label: str = "Object") -> HTTPException:
@@ -36,6 +37,8 @@ class CourseEditorService:
         course = (query.with_for_update() if lock else query).first()
         if course is None:
             raise _not_found("Course")
+        if lock:
+            require_feature(db, course.organization_id, 'authoring')
         if course.status == "generating":
             raise HTTPException(status_code=409, detail="Course is being generated")
         return course
@@ -46,7 +49,7 @@ class CourseEditorService:
         module = (query.with_for_update() if lock else query).first()
         if module is None:
             raise _not_found("Module")
-        CourseEditorService._course(db, module.course_id, owner_id)
+        CourseEditorService._course(db, module.course_id, owner_id, lock)
         return module
 
     @staticmethod
@@ -55,7 +58,7 @@ class CourseEditorService:
         lesson = (query.with_for_update() if lock else query).first()
         if lesson is None:
             raise _not_found("Lesson")
-        CourseEditorService._course(db, lesson.module.course_id, owner_id)
+        CourseEditorService._course(db, lesson.module.course_id, owner_id, lock)
         return lesson
 
     @staticmethod
@@ -64,7 +67,7 @@ class CourseEditorService:
         test = (query.with_for_update() if lock else query).first()
         if test is None:
             raise _not_found("Test")
-        CourseEditorService._course(db, test.module.course_id if test.module_id else test.course_id, owner_id)
+        CourseEditorService._course(db, test.module.course_id if test.module_id else test.course_id, owner_id, lock)
         return test
 
     @staticmethod

@@ -7,6 +7,7 @@ from app.models.user import User
 from app.models.course import Course
 from app.models.document import Document
 from app.models.generation_run import GenerationRun
+from app.services.feature_access import require_feature
 
 
 def audit(db, actor, action, target_type, target_id, **details):
@@ -42,6 +43,7 @@ def check_seat(db, org):
 
 def check_course_limit(db: Session, owner_id: int):
     user = db.get(User, owner_id)
+    require_feature(db, user.organization_id if user else None, 'authoring')
     if user and user.organization_id:
         from app.models.learning import LearningRoleGrant
         if user.organization_role != 'author' and not db.query(LearningRoleGrant).filter_by(
@@ -57,6 +59,7 @@ def check_course_limit(db: Session, owner_id: int):
 
 def check_source_limit(db: Session, owner_id: int, course_id: int):
     user = db.get(User, owner_id)
+    require_feature(db, user.organization_id if user else None, 'authoring')
     if user and user.organization_id:
         org = lock_org(db, user.organization_id)
         if not org.is_active:
@@ -69,6 +72,7 @@ def check_source_limit(db: Session, owner_id: int, course_id: int):
 
 def check_generation_limit(db: Session, owner_id: int):
     user = db.get(User, owner_id)
+    require_feature(db, user.organization_id if user else None, 'authoring')
     if user and user.organization_id:
         org = lock_org(db, user.organization_id)
         if not org.is_active:

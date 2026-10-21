@@ -80,6 +80,10 @@ def update_delivery(org_id: int, payload: DeliveryInput, db: Session = Depends(g
     if len(json.dumps(payload.delivery, ensure_ascii=False)) > 30000:
         raise HTTPException(422, 'Слишком большой набор настроек поставки')
     row.features, row.delivery = payload.features, payload.delivery
+    for key in ['profile', 'languages', 'role_labels', 'ai_context']:
+        value = getattr(payload, key)
+        if value is not None:
+            setattr(row, key, value)
     row.revision += 1
     audit(db, user, 'organization.delivery_changed', 'organization', org_id, organization_id=org_id, revision=row.revision)
     db.commit()

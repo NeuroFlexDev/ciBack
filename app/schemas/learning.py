@@ -40,6 +40,15 @@ class DeliveryInput(StrictInput):
     expected_revision: int = Field(ge=1)
     features: dict[Literal['learning', 'authoring', 'assistant', 'ai_grading', 'programs', 'integrations', 'images'], bool] = Field(default_factory=dict)
     delivery: dict[str, Any] = Field(default_factory=dict)
+    profile: Literal['business', 'education', 'training_center', 'government', 'individual'] | None = None
+    languages: list[Literal['ru', 'en']] | None = Field(default=None, min_length=1, max_length=2)
+    role_labels: dict[str, str] | None = None
+    ai_context: dict[str, str] | None = None
+
+    @field_validator('role_labels', 'ai_context')
+    @classmethod
+    def bounded_optional_text(cls, value):
+        return SettingsInput.bounded_text(value) if value is not None else None
 
 
 class GroupInput(StrictInput):

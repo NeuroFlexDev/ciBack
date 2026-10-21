@@ -12,7 +12,7 @@ from app.models.theory import Theory
 from app.models.test import Test as Question
 from app.models.task import Task
 from app.models.user import User
-from app.models.learning import LearningAssignment, LearningResponse, LearningGradeEvent, PublishedLearningContent
+from app.models.learning import LearningAssignment, LearningResponse, LearningGradeEvent, PublishedLearningContent, AssessmentDefinition
 
 
 def headers(user):
@@ -51,6 +51,9 @@ def publish(client, db, author, *, name='Onboarding', assessment=True, practice=
     if practice:
         t = Task(module_id=m.id, name='Explain', description='Describe the process')
         db.add(t)
+        db.flush()
+        db.add(AssessmentDefinition(task_id=t.id, question_type='open', grading_mode='manual', max_points=1,
+            correct_answers=[], criteria=[{'id': 'explanation', 'title': 'Completeness of explanation', 'description': 'Describe the process correctly', 'max_points': 1}], revision=1))
     db.commit()
     result = client.post(f'/api/courses/{c.id}/publish', headers=headers(author))
     assert result.status_code == 200, result.text
@@ -80,6 +83,41 @@ def test_management_directory_includes_unpublished_courses_without_content(clien
     assert result.json()['items'] == [{'id': own.id, 'title': 'First draft', 'status': own.status}]
     assert client.get('/api/team/course-directory', headers=headers(world['learner'])).status_code == 403
     assert client.get('/api/team/course-directory', headers=headers(world['foreign'])).status_code == 403
+
+
+def test_disabled_authoring_blocks_new_writes_but_preserves_reads_and_existing_learning(client, db_session, world):
+    from app.services.learning_service import settings_for
+    course, module, lesson, _, _, _ = publish(client, db_session, world['author'])
+    assignment = assign(client, world, course)
+    config = settings_for(db_session, world['org'].id)
+    config.features = {**config.features, 'authoring': False}
+    db_session.commit()
+    author = headers(world['author'])
+    assert client.get(f'/api/courses/{course.id}/structure', headers=author).status_code == 200
+    for path, payload in [('/api/courses/drafts', {}), (f'/api/courses/{course.id}/modules/', {'title': 'Denied'})]:
+        result = client.post(path, headers=author, json=payload)
+        assert result.status_code == 403, result.text
+        assert result.json()['detail']['code'] == 'feature_unavailable'
+    assert client.put(f'/api/lessons/{lesson.id}', headers=author, json={'content': 'Denied', 'expected_revision': lesson.revision}).status_code == 403
+    assert client.get(f'/api/learning/assignments/{assignment["id"]}', headers=headers(world['learner'])).status_code == 200
+    assert client.put(f'/api/learning/assignments/{assignment["id"]}/progress', headers=headers(world['learner']),
+        json={'expected_revision': 0, 'lesson_id': lesson.id, 'completed': True}).status_code == 200
+
+
+def test_operator_delivery_profile_is_versioned_and_unavailable_to_customer_owner(client, db_session, world):
+    operator = User(email='operator-profile@example.test', password_hash='unused', is_admin=True)
+    db_session.add(operator); db_session.commit()
+    path = f'/api/admin/organizations/{world["org"].id}/delivery'
+    assert client.get(path, headers=headers(world['owner'])).status_code == 403
+    current = client.get(path, headers=headers(operator)).json()
+    payload = {'expected_revision': current['revision'], 'features': {'authoring': False}, 'delivery': {'deployment_mode': 'cloud'},
+        'profile': 'training_center', 'languages': ['ru', 'en'], 'role_labels': {'member': 'Слушатель'}, 'ai_context': {'audience': 'New specialists'}}
+    saved = client.put(path, headers=headers(operator), json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()['profile'] == 'training_center'
+    assert saved.json()['languages'] == ['ru', 'en']
+    assert saved.json()['ai_context']['audience'] == 'New specialists'
+    assert client.put(path, headers=headers(operator), json=payload).status_code == 409
 
 
 def test_complete_snapshot_safe_learner_and_cross_tenant_isolation(client, db_session, world):
@@ -162,7 +200,7 @@ def test_server_grading_reveal_policy_and_versioned_attempt_rules(client, db_ses
 def test_manual_review_scope_criteria_and_append_only_grade_history(client, db_session, world):
     c, _, _, _, task, _ = publish(client, db_session, world['author'], assessment=False)
     # Change assessment config and republish before assignment.
-    meta = {'question_type': 'open', 'grading_mode': 'manual', 'max_points': 4, 'criteria': [{'id': 'accuracy', 'title': 'Accuracy', 'max_points': 4}], 'expected_revision': 0}
+    meta = {'question_type': 'open', 'grading_mode': 'manual', 'max_points': 4, 'criteria': [{'id': 'accuracy', 'title': 'Accuracy', 'max_points': 4}], 'expected_revision': 1}
     assert client.put(f'/api/tasks/{task.id}/assessment-settings', headers=headers(world['author']), json=meta).status_code == 200
     assert client.post(f'/api/courses/{c.id}/publish', headers=headers(world['author'])).status_code == 200
     a = assign(client, world, c)
