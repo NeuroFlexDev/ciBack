@@ -62,7 +62,7 @@ INTEGRATION_TABLES = {
 }
 PRE_INTEGRATION_TABLES = EXPECTED_TABLES | LEARNING_TABLES | MATERIAL_TABLES
 AI_RESOURCE_TABLES = {"ai_resource_mutex", "ai_resource_usage", "ai_thread_references"}
-EXPECTED_TABLES = PRE_INTEGRATION_TABLES | INTEGRATION_TABLES | AI_RESOURCE_TABLES
+EXPECTED_TABLES = PRE_INTEGRATION_TABLES | INTEGRATION_TABLES | AI_RESOURCE_TABLES | {"support_access_grants"}
 
 def test_alembic_revision_graph_has_one_connected_head():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
