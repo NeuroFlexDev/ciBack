@@ -45,6 +45,13 @@ class DeliveryInput(StrictInput):
     role_labels: dict[str, str] | None = None
     ai_context: dict[str, str] | None = None
 
+    @field_validator('delivery')
+    @classmethod
+    def neutral_resource_profile(cls, value):
+        if 'resource_profile' in value and value['resource_profile'] not in ('pilot', 'team', 'organization', 'custom'):
+            raise ValueError('Выберите профиль ресурсов: пилот, команда, организация или индивидуальный')
+        return value
+
     @field_validator('role_labels', 'ai_context')
     @classmethod
     def bounded_optional_text(cls, value):
