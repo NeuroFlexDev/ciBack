@@ -35,6 +35,8 @@ class Measurements:
         self.stop_reason = None
         self.inflight = 0
         self.peak_inflight = 0
+        self.active_users = 0
+        self.phase_users = defaultdict(lambda: {'started': 0, 'finished': 0, 'peak_active': 0})
 
     def permit(self):
         if self.stop_reason: return False
@@ -74,10 +76,14 @@ async def request(client, metrics, phase, session, method, path, endpoint, paylo
         response = await client.request(method, path, headers={'Authorization': 'Bearer '+session['token']}, json=payload)
         metrics.record(phase, endpoint, time.monotonic()-started, response.status_code, len(response.content))
         if response.status_code not in expected:
-            if response.status_code in {403, 404, 409, 422}:
+            if 300 <= response.status_code < 500 and response.status_code != 429:
                 metrics.stop_reason = 'unexpected_application_contract_or_fixture_state'
             return None
-        return response.json() if response.content else {}
+        try:
+            return response.json() if response.content else {}
+        except ValueError:
+            metrics.stop_reason = 'invalid_json_response'
+            return None
     except (httpx.TimeoutException, httpx.TransportError):
         metrics.record(phase, endpoint, time.monotonic()-started, 0)
         return None
@@ -149,6 +155,22 @@ async def learner(client, metrics, name, session, phase_index, duration, delay, 
         await asyncio.sleep(think_seconds*rng.uniform(0.75, 1.25))
 
 
+async def tracked_learner(client, metrics, name, session, phase_index, duration, delay, seed, think_seconds):
+    start = time.monotonic()+delay
+    while time.monotonic()<start and not metrics.stop_reason:
+        await asyncio.sleep(min(0.5,start-time.monotonic()))
+    if metrics.stop_reason: return
+    stats = metrics.phase_users[name]
+    stats['started'] += 1
+    metrics.active_users += 1
+    stats['peak_active'] = max(stats['peak_active'], metrics.active_users)
+    try:
+        await learner(client,metrics,name,session,phase_index,duration,0,seed,think_seconds)
+    finally:
+        stats['finished'] += 1
+        metrics.active_users -= 1
+
+
 async def run(bundle, *, quick=False, max_requests=20000, transport=None):
     validate_bundle(bundle, quick=quick)
     metrics = Measurements(max_requests)
@@ -168,12 +190,13 @@ async def run(bundle, *, quick=False, max_requests=20000, transport=None):
             raise ValueError('Cross-organization denial not confirmed')
         for phase_index, (name, count, duration, ramp) in enumerate(phases):
             phase_start = time.monotonic(); before = metrics.requests
-            await asyncio.gather(*(learner(client, metrics, name, session, phase_index, duration,
-                ramp*index/max(1,count-1), index, 0.03 if quick else 3.0)
+            await asyncio.gather(*(tracked_learner(client, metrics, name, session, phase_index, duration,
+                ramp*index/max(1,count-1), index, 0.03 if quick else 5.0)
                 for index, session in enumerate(bundle['sessions'][:count])))
             elapsed = time.monotonic()-phase_start
             summaries.append({'phase': name, 'configured_sessions': count, 'hold_seconds_per_user': duration,
                 'ramp_seconds': ramp, 'actual_seconds': round(elapsed, 2),
+                'mean_think_seconds': 0.03 if quick else 5.0, 'actual_sessions': metrics.phase_users[name],
                 'requests_per_second': round((metrics.requests-before)/elapsed,2)})
             if metrics.stop_reason: break
     report = {'run_id': bundle['run_id'], 'checked_at': datetime.now(timezone.utc).isoformat(),

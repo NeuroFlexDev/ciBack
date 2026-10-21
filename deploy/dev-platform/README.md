@@ -111,7 +111,8 @@ python -m scripts.load_platform --bundle /protected/load.json --report /reports/
 ```
 
 The fixed phases are 25 users (90s hold, 15s ramp), 100 (120s/30s), 300 (180s/60s),
-then a 300-user spike (45s, no ramp), with three-second jittered think time. Each learner
+then a 300-user spike (45s, no ramp), with five-second jittered think time (roughly
+18,000 requests across all phases, below the 20,000-request ceiling). Each learner
 has a different JWT and a different assignment for each phase. Real routes check identity,
 cross-organization denial, list/detail/results, answer drafts, immutable submissions
 and optimistic progress revisions. No successful responses are synthesized. The test
