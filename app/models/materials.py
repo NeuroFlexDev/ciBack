@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, JSON, func, BigInteger
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, JSON, func, BigInteger, Index
 from app.database.db import Base
 
 
@@ -26,8 +26,13 @@ class OrganizationMaterialPolicy(Base):
 
 class ScopedAIUsage(Base):
     __tablename__ = "scoped_ai_usage"
+    __table_args__ = (Index("ix_scoped_ai_tenant_month", "organization_id", "created_at"),)
     id = Column(Integer, primary_key=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # Frozen at admission. Unknown legacy ownership must never be inferred from
+    # the employee's current organization after a transfer.
+    organization_id = Column(Integer, ForeignKey("organizations.id", name="fk_scoped_ai_usage_organization"), nullable=True)
+    scope_status = Column(String(24), nullable=False, default="legacy_unknown", server_default="legacy_unknown")
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)
     operation = Column(String(32), nullable=False)
     status = Column(String(24), nullable=False)
@@ -64,9 +69,12 @@ class CourseImage(Base):
 
 class LearnerAssistantMessage(Base):
     __tablename__ = "learner_assistant_messages"
-    __table_args__ = (UniqueConstraint("owner_id", "request_id", name="uq_learner_assistant_request"),)
+    __table_args__ = (UniqueConstraint("owner_id", "request_id", name="uq_learner_assistant_request"),
+                     Index("ix_learner_assistant_tenant_month", "organization_id", "created_at"))
     id = Column(Integer, primary_key=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", name="fk_learner_assistant_messages_organization"), nullable=True)
+    scope_status = Column(String(24), nullable=False, default="legacy_unknown", server_default="legacy_unknown")
     assignment_id = Column(Integer, nullable=False, index=True)
     course_version_id = Column(Integer, ForeignKey("course_versions.id"), nullable=False)
     lesson_id = Column(Integer, nullable=False)

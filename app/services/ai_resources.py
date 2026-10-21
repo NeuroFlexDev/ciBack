@@ -205,9 +205,23 @@ def text_price(role, input_tokens, output_tokens, *, model=None, provider=None):
     return max(costs)
 
 
-def completion(db, owner_id, course_id, role, messages, *, invoke=None, **kwargs):
+def completion(db, owner_id, course_id, role, messages, *, invoke=None, expected_principal=None, **kwargs):
     from app.ai import gateway
     from app.ai.models import model_policy
+    if expected_principal is not None:
+        # Receipt insertion commits before provider admission. A membership
+        # change in this gap must not charge a different tenant or send the old
+        # tenant's context with the new identity. Locks stay org→user→resource.
+        from app.services.organization_access import lock_member
+        from app.models.administration import Organization
+        try:
+            user = lock_member(db, owner_id, expected_auth_version=expected_principal[1])
+            organization = db.get(Organization, user.organization_id) if user.organization_id else None
+            if user.organization_id != expected_principal[0] or (organization and not organization.is_active):
+                raise HTTPException(403, {"code": "ai_access_revoked", "message": "Доступ изменился до отправки AI-запроса."})
+        except HTTPException as error:
+            error.request_sent = False
+            raise
     output = kwargs.get("max_tokens") or model_policy(role).max_output_tokens
     tokens = gateway.token_count(messages)
     row = reserve(db, owner_id=owner_id, course_id=course_id, operation=role, lane="interactive",
@@ -237,6 +251,8 @@ def usage_summary(db, owner_id):
     if org_id is None:
         courses = courses.filter(Course.owner_id == owner_id)
     images = db.query(CourseImage).filter(CourseImage.course_id.in_(courses), CourseImage.prompt.is_not(None), CourseImage.created_at >= month).count()
+    from app.services.interactive_quota import monthly_requests
+    requests = monthly_requests(db, owner_id, org_id, month=month)
     return {"month": month.date().isoformat(), "tokens_reserved_or_used": values[0], "ocr_pages_reserved_or_used": values[1],
         "cost_rub_reserved_upper_bound": str(values[2]), "tokens_limit": limits["monthly_tokens"],
         "ocr_pages_limit": limits["monthly_ocr_pages"], "cost_rub_limit": str(limits["monthly_rub"]),
@@ -244,7 +260,9 @@ def usage_summary(db, owner_id):
         "interactive_running_limit": limits["interactive_limit"], "resource_limits": {key: str(value) if isinstance(value, Decimal) else value for key, value in limits.items()},
         "used_disk_bytes": used_disk_bytes(db, [owner_id], organization_id=org_id), "disk_bytes_limit": material["disk_bytes_limit"],
         "images_this_month": images, "image_monthly_limit": material["image_monthly_limit"],
-        "interactive_requests_this_month": query.filter(AIResourceUsage.lane == "interactive", AIResourceUsage.operation != "embedding").count(),
+        "interactive_requests_this_month": requests["confirmed"],
+        "interactive_requests_own_legacy_unattributed": requests["legacy_unattributed"],
+        "interactive_requests_admission_total": requests["admission_total"],
         "chat_monthly_limit": material["chat_monthly_limit"],
         "background_running": active.filter_by(lane="background", status="running").count(),
         "interactive_running": active.filter_by(lane="interactive", status="running").count(),

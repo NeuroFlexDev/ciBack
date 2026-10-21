@@ -2,11 +2,11 @@
 from datetime import datetime, timedelta
 import json
 from fastapi import HTTPException
-from sqlalchemy import select
 from app.ai import gateway
 from app.core.config import settings
-from app.models.materials import LearnerAssistantMessage, ScopedAIUsage
-from app.models.user import User
+from app.models.materials import LearnerAssistantMessage
+from app.services.organization_access import lock_member
+from app.services.interactive_quota import admit_request
 
 
 def assignment_context(db, user, assignment_id, *, new_request=True):
@@ -37,34 +37,24 @@ def message_out(item):
 def send_message(db, user, assignment_id, lesson_id, question, request_id):
     from app.services.ai_access_boundary import principal_stamp, refresh_principal
     user_id, stamp = user.id, principal_stamp(user)
+    user = lock_member(db, user_id, expected_auth_version=stamp[1])
+    if principal_stamp(user) != stamp:
+        raise HTTPException(403, "Доступ изменился до начала запроса")
     assignment, snapshot = assignment_context(db, user, assignment_id)
     version_id = assignment.course_version_id
     lessons = {lesson["id"]: lesson for module in snapshot["modules"] for lesson in module["lessons"]}
     lesson = lessons.get(lesson_id)
     if not lesson:
         raise HTTPException(404, "Урок не найден в назначенной версии курса")
-    db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
     expire_history(db, user.id)
     existing = db.query(LearnerAssistantMessage).filter_by(owner_id=user.id, request_id=request_id).first()
     if existing:
         if existing.assignment_id != assignment_id or existing.lesson_id != lesson_id or existing.question != question:
             raise HTTPException(409, "Этот ключ сообщения уже использован")
         return existing
-    owner_ids = [user.id]
-    if user.organization_id:
-        from app.services.organization_access import lock_org, member_ids
-        org = lock_org(db, user.organization_id)
-        if not org.is_active:
-            raise HTTPException(403, "Организация приостановлена")
-        owner_ids = member_ids(db, org.id)
-    start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    count = db.query(LearnerAssistantMessage).filter(LearnerAssistantMessage.owner_id.in_(owner_ids),
-        LearnerAssistantMessage.created_at >= start).count()
-    count += db.query(ScopedAIUsage).filter(ScopedAIUsage.owner_id.in_(owner_ids), ScopedAIUsage.created_at >= start).count()
-    from app.services.material_quota import material_policy
-    if count >= material_policy(db, user)["chat_monthly_limit"]:
-        raise HTTPException(429, {"code": "assistant_limit", "message": "Достигнут месячный лимит помощника. Урок и отправка ответа доступны."})
-    item = LearnerAssistantMessage(owner_id=user.id, assignment_id=assignment_id,
+    admit_request(db, user)
+    item = LearnerAssistantMessage(owner_id=user.id, organization_id=assignment.organization_id, scope_status="captured",
+        assignment_id=assignment_id,
         course_version_id=assignment.course_version_id, lesson_id=lesson_id, request_id=request_id,
         question=question, status="pending")
     db.add(item); db.commit(); db.refresh(item)
@@ -101,7 +91,7 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
         from app.services.ai_resources import completion
         from app.models.course_version import CourseVersion
         assigned_course = db.get(CourseVersion, assignment.course_version_id).course_id
-        response = completion(db, user.id, assigned_course, "chat", messages, max_tokens=2000, json_mode=True)
+        response = completion(db, user.id, assigned_course, "chat", messages, expected_principal=stamp, max_tokens=2000, json_mode=True)
         try:
             current_user = refresh_principal(db, user_id, stamp)
             current_assignment, _ = assignment_context(db, current_user, assignment_id)

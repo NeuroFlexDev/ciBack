@@ -1,11 +1,10 @@
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func
 from app.core.config import settings
 from app.models.materials import CourseImage, OrganizationMaterialPolicy
 from app.models.document import Document
 from app.models.course import Course
-from app.models.user import User
-from app.services.organization_access import lock_org, member_ids
+from app.services.organization_access import lock_org, lock_member, member_ids
 
 
 def material_policy(db, user):
@@ -28,7 +27,7 @@ def used_disk_bytes(db, owner_ids, *, organization_id=None):
 
 
 def check_storage(db, user, additional_bytes):
-    db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
+    user = lock_member(db, user.id, expected_auth_version=user.auth_version)
     owner_ids = [user.id]
     if user.organization_id:
         org = lock_org(db, user.organization_id)
