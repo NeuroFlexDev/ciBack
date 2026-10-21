@@ -194,10 +194,13 @@ def test_admin_bootstrap_preserves_password_and_revokes_old_tokens(client, db_se
 def test_synchronous_graph_endpoint_cannot_bypass_monthly_limit(client, db_session):
     from tests.test_upload_pipeline import _course_and_document
     from app.models.generation_run import GenerationRun
+    from app.models.document import DocumentChunk
     o = org(db_session, generation_limit=0)
     u = member(db_session, o, role='author')
     course, document, _ = _course_and_document(db_session, u)
     document.status = 'indexed'
+    db_session.add(DocumentChunk(document_id=document.id, document_version=document.version,
+        chunk_index=0, text='Valid indexed source for generation', metadata_json={}))
     db_session.commit()
     result = client.post(f'/api/courses/{course.id}/generate-graph?force=true', headers=headers(u))
     assert result.status_code == 409, result.text

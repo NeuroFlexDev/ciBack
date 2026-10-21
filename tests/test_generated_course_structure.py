@@ -43,7 +43,8 @@ def test_materialization_and_step5_contract(client, db_session, auth_user, auth_
     response = client.get(f"/api/courses/{course.id}/structure", headers=auth_headers)
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"course_id", "title", "description", "status", "metrics", "modules_timeline"}
+    assert set(body) == {"course_id", "title", "description", "status", "metrics", "modules_timeline", "content_revision"}
+    assert body["content_revision"] == course.content_revision
     assert body["status"] == "ready"
     assert [item["title"] for item in body["modules_timeline"]] == ["First", "Second"]
     assert [item["order"] for item in body["modules_timeline"]] == [1, 2]
@@ -73,6 +74,7 @@ def test_metrics_exclude_soft_deleted_and_include_assessments(client, db_session
     assert body["modules_timeline"][0]["tasks_count"] == 1
     detail = client.get(f"/api/modules/{module.id}", headers=auth_headers).json()
     assert detail["tasks"][0]["name"] == "Practice"
+    assert detail["tasks"][0]["revision"] == 1
 
 
 def test_step5_tenant_isolation(client, db_session, auth_user, auth_headers):

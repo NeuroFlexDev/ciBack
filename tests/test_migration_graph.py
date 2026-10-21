@@ -54,7 +54,13 @@ LEARNING_TABLES = {
     "learning_assignments", "learning_group_enrollments", "learning_responses", "learning_grade_events",
     "learning_programs", "learning_program_enrollments", "organization_ownership_transfers", "learning_publication_approvals",
 }
-EXPECTED_TABLES |= LEARNING_TABLES
+MATERIAL_TABLES = {"organization_material_policy", "scoped_ai_usage", "course_images", "learner_assistant_messages"}
+INTEGRATION_TABLES = {
+    "outbound_messages", "integration_keys", "integration_operations", "webhook_endpoints",
+    "oidc_providers", "external_identities", "oidc_sessions", "billing_accounts", "billing_invoices",
+    "payment_events", "lti_platforms", "lti_resources", "lti_identities", "lti_sessions", "lti_grade_bindings",
+}
+EXPECTED_TABLES |= LEARNING_TABLES | MATERIAL_TABLES | INTEGRATION_TABLES
 
 def test_alembic_revision_graph_has_one_connected_head():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
@@ -146,8 +152,8 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         text=True,
         env=env,
     )
-    # Rolling back the learning feature keeps the pre-existing administration and legal data.
-    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - LEARNING_TABLES) | {"alembic_version"}
+    # Rolling back integrations preserves learning, materials and pre-existing customer data.
+    assert set(json.loads(result.stdout)) == (EXPECTED_TABLES - INTEGRATION_TABLES) | {"alembic_version"}
     column_code = (
         "import json; from sqlalchemy import create_engine, inspect; "
         f"engine = create_engine({env['DATABASE_URL']!r}); "
