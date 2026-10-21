@@ -118,6 +118,46 @@ def test_operator_delivery_profile_is_versioned_and_unavailable_to_customer_owne
     assert saved.json()['languages'] == ['ru', 'en']
     assert saved.json()['ai_context']['audience'] == 'New specialists'
     assert client.put(path, headers=headers(operator), json=payload).status_code == 409
+def test_reminders_respect_frozen_window_membership_and_transaction_deduplication(client, db_session, world, monkeypatch):
+    from app.services import mail_service
+    from app.services.learning_reminders import queue_due_reminders
+    from app.models.learning import LearningProgramEnrollment
+    from app.models.administration import AdminEvent
+    messages = []
+    monkeypatch.setattr(mail_service, 'configured', lambda: True)
+    monkeypatch.setattr(mail_service, 'queue_mail', lambda *args, **kwargs: messages.append((args[1:], kwargs)), raising=False)
+    c, _, _, _, _, _ = publish(client, db_session, world['author'])
+    now = datetime.utcnow()
+    first = assign(client, world, c, due_at=(now + timedelta(days=2)).isoformat())
+    second = assign(client, world, c, target=world['second'], due_at=(now + timedelta(days=2)).isoformat())
+    # The window is frozen on enrollment, not read from a subsequently edited program.
+    from app.models.learning import LearningProgram
+    program = LearningProgram(organization_id=world['org'].id, title='Program', steps=[], reminder_days=10)
+    db_session.add(program)
+    db_session.flush()
+    db_session.add(LearningProgramEnrollment(organization_id=world['org'].id, program_id=program.id,
+        program_revision=1, user_id=world['second'].id, cycle_key='window-test',
+        snapshot={'title': 'Program', 'reminder_days': 1}, assignment_ids=[second['id']]))
+    db_session.commit()
+    report = queue_due_reminders(db_session, now=now, limit=1)
+    assert report['queued'] == 1 and report['more']
+    next_report = queue_due_reminders(db_session, now=now, after_id=report['next_cursor'])
+    assert next_report['queued'] == 0
+    db_session.commit()
+    assert queue_due_reminders(db_session, now=now)['queued'] == 0
+    assert len(messages) == 1 and f'/learning/{first["id"]}' in messages[0][0][2]
+    # A receipt is not retained if the mail transaction rolls back.
+    future = now + timedelta(days=1, minutes=1)
+    assert queue_due_reminders(db_session, now=future)['queued'] == 1
+    db_session.rollback()
+    assert queue_due_reminders(db_session, now=future)['queued'] == 1
+    db_session.rollback()
+    world['second'].is_active = False
+    db_session.commit()
+    assert queue_due_reminders(db_session, now=future)['queued'] == 0
+    assert db_session.query(AdminEvent).filter_by(action='learning.reminder_queued').count() == 1
+    monkeypatch.setattr(mail_service, 'configured', lambda: False)
+    assert queue_due_reminders(db_session, now=future)['reason'] == 'mail_not_configured'
 
 
 def test_complete_snapshot_safe_learner_and_cross_tenant_isolation(client, db_session, world):
