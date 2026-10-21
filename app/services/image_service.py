@@ -209,12 +209,15 @@ def enqueue_image(image_id):
 
 def validate_course_images(db, course_id):
     course_id = getattr(course_id, "id", course_id)
-    from app.models.lesson import Lesson
-    from app.models.module import Module
-    from app.models.theory import Theory
-    contents = db.query(Theory.content).join(Lesson).join(Module).filter(Module.course_id == course_id,
-               Module.is_deleted.is_(False), Lesson.is_deleted.is_(False), Theory.is_deleted.is_(False)).all()
-    ids = {int(value) for (content,) in contents for value in re.findall(r"/api/images/(\d+)/content", content or "")}
+    from app.services.learning_service import build_publication_snapshot
+    from app.services.protected_image_refs import image_ids_in
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Курс не найден")
+    # The same snapshot is rendered in author review, learner and support views.
+    # Theory-only validation misses references in task descriptions and rubrics.
+    modules = sorted((module for module in course.modules if not module.is_deleted), key=lambda module: (module.position, module.id))
+    ids = image_ids_in(build_publication_snapshot(db, course, modules))
     if not ids:
         return
     approved = {item.id for item in db.query(CourseImage).filter(CourseImage.id.in_(ids),

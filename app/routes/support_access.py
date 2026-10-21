@@ -1,8 +1,6 @@
 """Explicit support grants never add author permissions or impersonate members."""
 from copy import deepcopy
 from datetime import datetime, timedelta
-import json
-import re
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -176,13 +174,15 @@ def read_content(grant_id: int, db: Session = Depends(get_db), user=Depends(requ
 def read_image(grant_id: int, image_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
     grant, obj = permitted(db, grant_id, user)
     snapshot = content_for(db, grant, obj)
-    if not re.search(r'/api/images/' + str(image_id) + r'/content(?![\w/])', json.dumps(snapshot)):
+    from app.services.protected_image_refs import image_ids_in
+    if image_id not in image_ids_in(snapshot):
         raise HTTPException(404, 'Изображение не относится к разрешённому объекту')
     from app.models.materials import CourseImage
     from app.services import image_service
     image = db.get(CourseImage, image_id)
     course_id = obj.id if grant.scope_type == 'course' else db.get(CourseVersion, obj.course_version_id).course_id
-    if not image or image.course_id != course_id or not image.storage_key:
+    course = db.get(Course, course_id)
+    if not image or image.course_id != course_id or not course or course.organization_id != grant.organization_id or not image.storage_key:
         raise HTTPException(404, 'Изображение не найдено')
     try:
         content = image_service.storage().read_bytes(image.storage_key)

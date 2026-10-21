@@ -314,13 +314,22 @@ def learner_assignment(db, user, assignment_id, *, lock=False, allow_revoked=Fal
 def authorized_learning_image(db, user, image_id):
     if not user.organization_id:
         return False
-    needle = re.compile(r'(?:/api)?/images/' + re.escape(str(image_id)) + r'/content(?:\b|[?#])')
-    query = db.query(LearningAssignment).filter_by(user_id=user.id, organization_id=user.organization_id, state='active')
+    from app.models.materials import CourseImage
+    from app.services.protected_image_refs import image_ids_in
+    image = db.get(CourseImage, image_id)
+    course = db.get(Course, image.course_id) if image else None
+    if not image or image.status != 'approved' or not course or course.organization_id != user.organization_id:
+        return False
+    query = db.query(LearningAssignment).join(CourseVersion, CourseVersion.id == LearningAssignment.course_version_id).filter(
+        LearningAssignment.user_id == user.id, LearningAssignment.organization_id == user.organization_id,
+        LearningAssignment.state == 'active', CourseVersion.course_id == image.course_id)
     for row in query:
-        if row.prerequisite_id and not db.get(LearningAssignment, row.prerequisite_id).completed_at:
-            continue
+        if row.prerequisite_id:
+            previous = db.get(LearningAssignment, row.prerequisite_id)
+            if not previous or not previous.completed_at:
+                continue
         snapshot = db.get(PublishedLearningContent, row.course_version_id)
-        if snapshot and needle.search(json.dumps(snapshot.snapshot, ensure_ascii=False)):
+        if snapshot and snapshot.organization_id == row.organization_id and image_id in image_ids_in(snapshot.snapshot):
             return True
     return False
 
