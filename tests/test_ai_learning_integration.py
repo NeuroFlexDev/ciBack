@@ -51,12 +51,13 @@ def test_ai_grade_proposal_is_scoped_idempotent_and_never_final(client, db_sessi
     calls = []
     def invoke(*args, **kwargs):
         calls.append(args)
-        return {'text': json.dumps({'points': 3, 'feedback': 'Three points supported by response.', 'criteria_scores': [{'id': 'accuracy', 'points': 3}]}), 'model': 'reviewed-model'}
+        return {'text': json.dumps({'points': 3, 'feedback': 'Three points supported by response.', 'criteria_scores': [{'id': 'accuracy', 'points': 3, 'rationale': 'The response states evidence, but lacks details.', 'evidence': ['Evidence']}]}), 'model': 'reviewed-model'}
     monkeypatch.setattr('app.ai.gateway.invoke_messages', invoke)
     assert client.post(path, headers=headers(world['learner']), json=request).status_code == 404
     result = client.post(path, headers=headers(world['reviewer']), json=request)
     assert result.status_code == 200, result.text
     assert result.json()['status'] == 'completed' and result.json()['points'] == 3
+    assert len(result.json()['assessment_hash']) == len(result.json()['answer_hash']) == 64
     assert client.post(path, headers=headers(world['reviewer']), json=request).json() == result.json()
     assert len(calls) == 1
     response = db_session.get(LearningResponse, submitted['id'])
