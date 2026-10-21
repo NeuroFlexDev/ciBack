@@ -23,6 +23,32 @@ def lock_org(db: Session, organization_id: int) -> Organization:
     return org
 
 
+def lock_member(db: Session, user_id: int, *, extra_org_ids=(), allow_inactive=False, expected_auth_version=None) -> User:
+    """Shared order for mixed locks: organizations by ID, then the user.
+
+    Probe current membership without a row lock, acquire every organization in
+    order, and then refresh the user under its lock. A concurrent membership
+    change aborts instead of acquiring a new organization after the user lock.
+    User-only password/MFA operations may lock only User, never a later org.
+    """
+    membership = db.execute(select(User.organization_id).where(User.id == user_id)).one_or_none()
+    if membership is None:
+        raise HTTPException(404, 'Участник не найден')
+    observed_org = membership[0]
+    for org_id in sorted({value for value in (*extra_org_ids, observed_org) if value is not None}):
+        lock_org(db, org_id)
+    user = db.execute(select(User).where(User.id == user_id).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, 'Участник не найден')
+    if user.organization_id != observed_org:
+        raise HTTPException(409, 'Организация участника изменилась. Обновите данные и повторите действие.')
+    if expected_auth_version is not None and (not user.is_active or user.auth_version != expected_auth_version):
+        raise HTTPException(401, 'Сеанс завершён. Войдите снова.', headers={'WWW-Authenticate': 'Bearer'})
+    if not allow_inactive and not user.is_active:
+        raise HTTPException(403, 'Доступ участника приостановлен')
+    return user
+
+
 def member_ids(db, org_id):
     return select(User.id).where(User.organization_id == org_id)
 
