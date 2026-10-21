@@ -216,6 +216,10 @@ class AgenticCoursePipeline:
         from app.ai.version import runtime_signature
         identity = _json([runtime_signature(), common, settings_snapshot, source_catalog]) + f"{settings.DATABASE_URL}:{self.runtime.owner_id}:{self.runtime.course_id}:{self.runtime.run_id}:{run.created_at}"
         thread_id = hashlib.sha256(identity.encode()).hexdigest()
+        from app.models.ai_resources import AIThreadReference
+        if self.runtime.db.get(AIThreadReference, thread_id) is None:
+            self.runtime.db.add(AIThreadReference(thread_id=thread_id, run_id=self.runtime.run_id))
+            self.runtime.db.commit()
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
         with checkpoint_store() as saver:
             graph = builder.compile(checkpointer=saver)

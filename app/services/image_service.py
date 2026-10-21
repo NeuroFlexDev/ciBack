@@ -131,7 +131,13 @@ def prepare_generation(db, user, course_id, prompt, request_id):
     check_storage(db, user, settings.IMAGE_MAX_BYTES)
     item = CourseImage(owner_id=user.id, course_id=course_id, prompt=prompt, request_id=request_id,
                        status="queued", provider=provider.id, model=settings.IMAGE_MODEL, size_bytes=settings.IMAGE_MAX_BYTES)
-    db.add(item); db.commit(); db.refresh(item)
+    from app.services.ai_resources import reserve
+    if not provider.local and settings.IMAGE_PRICE_RUB is None:
+        raise HTTPException(503, {"code": "image_price_unconfigured", "message": "Не настроен денежный лимит одного изображения"})
+    db.add(item); db.flush()
+    reserve(db, owner_id=user.id, course_id=course_id, operation="image", lane="background",
+        key=f"image:{item.id}", queued=True, cost=0 if provider.local else settings.IMAGE_PRICE_RUB)
+    db.commit(); db.refresh(item)
     return item, True
 
 
@@ -140,9 +146,14 @@ def execute_image_generation(image_id):
     from openai import OpenAI
     db = SessionLocal()
     item = None
+    claimed = False
     try:
         item = db.query(CourseImage).filter_by(id=image_id).with_for_update().first()
         if item is None or item.status != "queued":
+            return
+        from app.services.ai_resources import claim
+        claimed = claim(db, f"image:{image_id}")
+        if not claimed:
             return
         provider = providers.registry().get(item.provider)
         if not provider or not providers.available(provider):
@@ -160,6 +171,17 @@ def execute_image_generation(image_id):
         db.commit()
     except Exception as exc:
         db.rollback()
+        from app.services.ai_resources import CapacityBusy
+        if isinstance(exc, CapacityBusy) and not claimed:
+            from rq import get_current_job
+            job = get_current_job()
+            if job is not None and not job.retries_left:
+                item = db.get(CourseImage, image_id)
+                item.status, item.error_code, item.size_bytes = "failed", "image_capacity_unavailable", 0
+                from app.services.ai_resources import finish
+                finish(db, f"image:{image_id}", unsent=True)
+                return
+            raise
         if item is not None:
             item = db.get(CourseImage, image_id)
             item.status = "failed"
@@ -167,6 +189,9 @@ def execute_image_generation(image_id):
             item.error_code = "image_generation_failed"
             db.commit()
     finally:
+        if claimed:
+            from app.services.ai_resources import finish
+            finish(db, f"image:{image_id}", failed=db.get(CourseImage, image_id).status == "failed")
         db.close()
 
 
@@ -175,10 +200,11 @@ def enqueue_image(image_id):
         execute_image_generation(image_id)
         return
     from redis import Redis
-    from rq import Queue
+    from rq import Queue, Retry
     queue = Queue(settings.GENERATION_QUEUE_NAME, connection=Redis.from_url(settings.REDIS_URL))
     queue.enqueue("app.services.image_service.execute_image_generation", image_id,
-                  job_id=f"course-image-{image_id}", job_timeout=360, result_ttl=86400, failure_ttl=604800)
+                  job_id=f"course-image-{image_id}", job_timeout=360, result_ttl=86400, failure_ttl=604800,
+                  retry=Retry(max=20, interval=15))
 
 
 def validate_course_images(db, course_id):

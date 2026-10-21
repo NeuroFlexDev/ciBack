@@ -56,6 +56,8 @@ def test_embeddings_reused_and_retrievable_after_store_recreation(db_session, au
     monkeypatch.setattr(retrieval, 'embedding_client', lambda: Embedder())
     monkeypatch.setattr(retrieval.gateway, 'configured', lambda: True)
     monkeypatch.setattr(retrieval.gateway, 'available_provider_ids', lambda: {"vsellm"})
+    from app.core.config import AIProvider
+    monkeypatch.setattr(settings, 'AI_PROVIDERS', [AIProvider(id="vsellm", base_url="http://localhost:9999/v1", local=True)])
     retrieval.persist_embeddings(db_session, [chunk]); db_session.commit()
     retrieval.persist_embeddings(db_session, [chunk]); db_session.commit()
     assert len(calls) == 1

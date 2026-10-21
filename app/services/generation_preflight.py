@@ -28,6 +28,9 @@ def generation_preflight(documents, configuration):
             "lesson_count": count, "minimum_calls": minimum_calls,
             "calls_limit": settings.AI_MAX_CALLS_PER_RUN, "output_token_reservation": reserved_output,
             "tokens_limit": settings.AI_MAX_TOKENS_PER_RUN,
+            "cost_rub_hard_limit": str(settings.AI_MAX_RUB_PER_RUN),
+            "cost_scope": "Text generation calls including validation repairs; separate embedding, OCR and image reservations use organization/installation limits.",
+            "organization_monthly_cost_limit_rub": str(settings.AI_ORG_MONTHLY_RUB),
             "source_characters_limit": settings.AI_MAX_SOURCE_CHARS,
             "timeout_seconds": settings.AI_JOB_TIMEOUT_SECONDS,
             "note": "Расчёт нижней границы. Входной контекст, повторы и исправления используют оставшийся бюджет; расход каждого вызова проверяется сервером."}

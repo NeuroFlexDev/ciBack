@@ -43,24 +43,32 @@ def validate_container(content: bytes, mime_type: str) -> None:
 
 def _extract_child(connection, content: bytes, mime_type: str):
     try:
-        from app.services.document_processing import extract_blocks
+        from app.services.document_processing import extract_blocks, extraction_usage
+        usage = {"ocr_pages": 0}
+        extraction_usage.set(usage)
         blocks = extract_blocks(content, mime_type)
         if sum(len(block.text) for block in blocks) > settings.DOCUMENT_MAX_EXTRACTED_CHARS:
             raise ValueError("Извлечённый текст превышает лимит")
-        connection.send((True, blocks))
+        connection.send((True, (blocks, usage)))
     except Exception as exc:
         connection.send((False, str(exc) if isinstance(exc, ValueError) else "Не удалось обработать документ"))
     finally:
         connection.close()
 
 
-def bounded_extract_blocks(content: bytes, mime_type: str):
+def bounded_extract_blocks(content: bytes, mime_type: str, *, with_usage=False):
     validate_container(content, mime_type)
     # In production native parsers/OCR run in an expendable process. A thread
     # timeout cannot stop a decompression bomb or a blocked OCR engine.
     if settings.ENV == "test":
-        from app.services.document_processing import extract_blocks
-        return extract_blocks(content, mime_type)
+        from app.services.document_processing import extract_blocks, extraction_usage
+        usage = {"ocr_pages": 0}
+        token = extraction_usage.set(usage)
+        try:
+            blocks = extract_blocks(content, mime_type)
+            return (blocks, usage) if with_usage else blocks
+        finally:
+            extraction_usage.reset(token)
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
     process = context.Process(target=_extract_child, args=(sender, content, mime_type), daemon=True)
@@ -72,7 +80,7 @@ def bounded_extract_blocks(content: bytes, mime_type: str):
         ok, result = receiver.recv()
         if not ok:
             raise ValueError(result)
-        return result
+        return result if with_usage else result[0]
     finally:
         receiver.close()
         if process.is_alive():

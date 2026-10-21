@@ -186,6 +186,10 @@ class PipelineService:
         db.add(run)
         course.status = CourseStatus.GENERATING.value
         try:
+            db.flush()
+            from app.services.ai_resources import reserve
+            reserve(db, owner_id=owner_id, course_id=course_id, operation="generation", lane="background",
+                key=f"generation:{run.id}", run_id=run.id, queued=True)
             db.commit()
         except IntegrityError as exc:
             db.rollback()
@@ -400,6 +404,11 @@ class PipelineService:
         document.status = DocumentStatus.QUEUED.value
         document.processing_error = None
         db.add(run)
+        db.flush()
+        from app.services.ai_resources import reserve, finish
+        resource = reserve(db, owner_id=owner_id, course_id=document.course_id, operation="document", lane="background",
+            key=f"document:{run.id}", run_id=run.id, timeout=settings.DOCUMENT_PROCESSING_TIMEOUT_SECONDS,
+            pages=settings.AI_OCR_MAX_PAGES if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED else 0)
         db.commit()
         db.refresh(run)
         run_id = run.id
@@ -411,7 +420,9 @@ class PipelineService:
             db.commit()
 
             content = storage.read_bytes(document.storage_key)
-            blocks = extract_blocks(content, document.mime_type)
+            blocks, extraction_usage = extract_blocks(content, document.mime_type, with_usage=True)
+            resource.ocr_pages = extraction_usage.get("ocr_pages", resource.ocr_pages)
+            db.commit()
             if sum(len(block.text) for block in blocks) > settings.DOCUMENT_MAX_EXTRACTED_CHARS:
                 raise ValueError("Извлечённый текст превышает лимит; разделите документ")
             chunks = chunk_blocks(
@@ -466,8 +477,11 @@ class PipelineService:
                 "document_version": document.version,
                 "chunk_count": len(chunk_models),
                 "embedding_count": len(embedding_ids),
+                "semantic_embedding_count": sum(value.startswith("db:") for value in embedding_ids),
+                "ocr_pages": resource.ocr_pages,
             }
             db.commit()
+            finish(db, resource)
             if document.supersedes_document_id is not None:
                 try:
                     proposal = CourseUpdateService.analyze_replacement(
@@ -506,6 +520,7 @@ class PipelineService:
                 failed_document.status = DocumentStatus.FAILED.value
                 failed_document.processing_error = _safe_document_error(exc)
             db.commit()
+            finish(db, resource, failed=True)
             status_code = 422 if isinstance(exc, (ValueError, UnicodeError)) else 503
             raise PipelineRunFailed(run_id, error, status_code) from exc
 
@@ -609,6 +624,10 @@ class PipelineService:
         )
         if prepared_run is None:
             db.add(run)
+            db.flush()
+            from app.services.ai_resources import reserve
+            reserve(db, owner_id=owner_id, course_id=course_id, operation="generation", lane="background",
+                key=f"generation:{run.id}", run_id=run.id, timeout=settings.AI_JOB_TIMEOUT_SECONDS)
         course.status = CourseStatus.GENERATING.value
         db.commit()
         db.refresh(run)
@@ -770,3 +789,7 @@ class PipelineService:
                     failed_course.status = CourseStatus.READY.value if failed_course.current_graph else CourseStatus.CONFIGURED.value
             db.commit()
             raise PipelineRunFailed(run_id, error, 502) from exc
+        finally:
+            if prepared_run is None:
+                from app.services.ai_resources import finish
+                finish(db, f"generation:{run_id}", failed=db.get(GenerationRun, run_id).status not in {"succeeded", "completed"})

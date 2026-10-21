@@ -31,6 +31,7 @@ from .test import Test
 from .test_version import TestVersion
 from .theory import Theory
 from .user import User
+from .ai_resources import AIResourceMutex, AIResourceUsage, AIThreadReference
 from .learning import (OrganizationLearningSettings, LearningRoleGrant, LearningDepartment, LearningPerson,
     LearningGroup, LearningGroupMember, PublishedLearningContent, AssessmentDefinition, LearningAssignment,
     LearningGroupEnrollment, LearningResponse, LearningGradeEvent, LearningProgram,

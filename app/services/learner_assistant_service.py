@@ -95,7 +95,10 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
     try:
         if gateway.token_count(messages) > min(settings.AI_CHAT_CONTEXT_TOKENS, settings.AI_MAX_INPUT_TOKENS):
             raise HTTPException(413, "Урок превышает контекст помощника")
-        response = gateway.invoke_messages("chat", messages, max_tokens=2000, json_mode=True)
+        from app.services.ai_resources import completion
+        from app.models.course_version import CourseVersion
+        assigned_course = db.get(CourseVersion, assignment.course_version_id).course_id
+        response = completion(db, user.id, assigned_course, "chat", messages, max_tokens=2000, json_mode=True)
         result = json.loads(response["text"])
         cited = result.get("cited_lesson_ids", [])
         if not isinstance(result.get("answer"), str) or not result["answer"].strip() or not isinstance(cited, list):

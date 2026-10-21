@@ -32,7 +32,8 @@ def tracked_completion(db, owner_id, course_id, role, messages, *, invoke=None, 
     try:
         # Interactive operations use one bounded transport attempt. The user can
         # explicitly retry; a timeout never silently creates extra paid requests.
-        result = (invoke or gateway.invoke_messages)(role, messages, **kwargs)
+        from app.services.ai_resources import completion
+        result = completion(db, owner_id, course_id, role, messages, invoke=invoke, **kwargs)
         usage = result.get("usage") or {}
         record.input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", record.input_tokens))
         record.output_tokens = usage.get("output_tokens", usage.get("completion_tokens", record.output_tokens))

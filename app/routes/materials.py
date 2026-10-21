@@ -12,6 +12,12 @@ from app.services.feature_access import require_feature, feature_enabled
 router = APIRouter()
 
 
+@router.get("/materials/resource-usage")
+def resource_usage(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.ai_resources import usage_summary
+    return usage_summary(db, user.id)
+
+
 @router.get("/materials/capabilities")
 def material_capabilities(db: Session = Depends(get_db), user=Depends(get_current_user)):
     from app.ai import providers

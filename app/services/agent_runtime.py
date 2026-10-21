@@ -52,6 +52,9 @@ def _fingerprint(template_name: str, response_model: type[BaseModel], data: dict
 
 
 def _retryable(exc: Exception) -> bool:
+    from app.services.ai_resources import CapacityBusy
+    if isinstance(exc, CapacityBusy) or getattr(exc, "request_sent", None) is True:
+        return False
     if isinstance(exc, (TimeoutError, ConnectionError, ValidationError, ValueError)):
         return True
     return gateway.retryable(exc) or isinstance(exc, HTTPException) and exc.status_code in {429, 500, 502, 503, 504}
@@ -167,6 +170,7 @@ class AgentRuntime:
             attempt_started = time.perf_counter()
             use_fallback = attempt > 1 and (attempt == self.max_attempts or not isinstance(last_error, (ValidationError, ValueError)))
             call = None
+            resource = None
             decision = None
             reported_usage = None
             try:
@@ -192,6 +196,13 @@ class AgentRuntime:
                         raise HTTPException(413, "AI context budget exceeded; split the document or course")
                     previous = self.db.query(AICall).filter(AICall.run_id == self.run_id,
                                                           AICall.status != "unavailable").all()
+                    if any(item.agent == agent and item.status in {"reserved", "received"} and
+                           (item.routing or {}).get("observation", {}).get("sequence") == sequence for item in previous):
+                        # A worker died between dispatch and durable validation.
+                        # Checkpoint resume must not silently repeat a paid call.
+                        error = HTTPException(409, {"code": "ai_result_unknown", "message": "Результат предыдущего AI-запроса неизвестен. Автоматический платный повтор остановлен."})
+                        error.request_sent = False
+                        raise error
                     consumed = sum(item.input_tokens + item.output_tokens for item in previous)
                     if len(previous) >= settings.AI_MAX_CALLS_PER_RUN or consumed + estimate + output_limit > settings.AI_MAX_TOKENS_PER_RUN:
                         raise HTTPException(402, "AI run budget exhausted")
@@ -221,6 +232,11 @@ class AgentRuntime:
                                   status="reserved", input_tokens=estimate, output_tokens=output_limit)
                     self.db.add(call)
                     self.db.commit()
+                    from app.services.ai_resources import reserve, text_price
+                    resource = reserve(self.db, owner_id=self.owner_id, course_id=self.course_id,
+                        run_id=self.run_id, operation="generation_text", tokens=estimate + output_limit,
+                        cost=text_price(agent, estimate, output_limit, model=selected_model, provider=selected_provider))
+                    self.db.commit()
                 raw = copy.deepcopy(cached.payload) if cached else self.generate(
                     template_name,
                     include_external_context=False,
@@ -243,6 +259,10 @@ class AgentRuntime:
                 used_model = raw.pop("_model", None) if isinstance(raw, dict) else None
                 usage = raw.pop("_usage", {}) if isinstance(raw, dict) else {}
                 usage_reported = raw.pop("_usage_reported", False) if isinstance(raw, dict) else False
+                if resource:
+                    from app.services.ai_resources import finish
+                    finish(self.db, resource, usage=usage if usage_reported else None)
+                    resource = None
                 used_provider = raw.pop("_provider", "vsellm") if isinstance(raw, dict) else "vsellm"
                 if usage_reported:
                     reported_usage = usage
@@ -295,6 +315,10 @@ class AgentRuntime:
                     raise
                 last_error = exc
                 self.db.rollback()
+                if resource:
+                    from app.services.ai_resources import finish
+                    finish(self.db, resource, usage=getattr(exc, "ai_usage", None),
+                        unsent=getattr(exc, "request_sent", None) is False, failed=True)
                 if call:
                     call.status = "failed"
                     usage = getattr(exc, "ai_usage", {})

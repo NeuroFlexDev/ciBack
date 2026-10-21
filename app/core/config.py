@@ -81,6 +81,23 @@ class Settings(BaseSettings):
     EMBEDDING_PROVIDER: str = "vsellm"
     AI_CHAT_RETENTION_DAYS: int = Field(default=90, ge=1, le=3650)
     AI_CHAT_MONTHLY_LIMIT: int = Field(default=1000, ge=0)
+    AI_ORG_QUEUED_LIMIT: int = Field(default=8, ge=0)
+    AI_INSTALL_QUEUED_LIMIT: int = Field(default=64, ge=0)
+    AI_ORG_BACKGROUND_LIMIT: int = Field(default=2, ge=1)
+    AI_INSTALL_BACKGROUND_LIMIT: int = Field(default=4, ge=1)
+    AI_ORG_INTERACTIVE_LIMIT: int = Field(default=4, ge=1)
+    AI_INSTALL_INTERACTIVE_LIMIT: int = Field(default=16, ge=1)
+    AI_ORG_MONTHLY_TOKENS: int = Field(default=20_000_000, ge=0)
+    AI_INSTALL_MONTHLY_TOKENS: int = Field(default=200_000_000, ge=0)
+    AI_ORG_MONTHLY_OCR_PAGES: int = Field(default=10_000, ge=0)
+    AI_INSTALL_MONTHLY_OCR_PAGES: int = Field(default=100_000, ge=0)
+    AI_ORG_MONTHLY_RUB: Decimal = Field(default=Decimal("10000"), ge=0, allow_inf_nan=False)
+    AI_INSTALL_MONTHLY_RUB: Decimal = Field(default=Decimal("100000"), ge=0, allow_inf_nan=False)
+    AI_MAX_RUB_PER_RUN: Decimal = Field(default=Decimal("1000"), ge=0, allow_inf_nan=False)
+    # Remote images/embeddings require operator-approved prices. Local endpoints
+    # have zero external provider spend but still consume concurrency/token caps.
+    IMAGE_PRICE_RUB: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    EMBEDDING_RUB_PER_MILLION: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
     MAX_COURSE_MODULES: int = Field(default=100, ge=1)
     MAX_COURSE_LESSONS: int = Field(default=500, ge=1)
     MAX_LESSON_CONTENT_CHARS: int = Field(default=200_000, ge=1000)
