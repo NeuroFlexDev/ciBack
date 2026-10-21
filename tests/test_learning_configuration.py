@@ -1,5 +1,7 @@
 from sqlalchemy import update
 import pytest
+from datetime import datetime, timedelta
+from app.core.config import settings
 from app.models.generation_run import GenerationRun
 from app.models.user import User
 from app.models.learning import OrganizationLearningSettings, LearningAssignment
@@ -59,3 +61,14 @@ def test_running_generation_uses_current_access_not_stale_worker_identity(client
     assert not generation_access_active(db_session,run.id)
     db_session.execute(update(User).where(User.id == author.id).values(organization_role='author',organization_id=world['other_org'].id).execution_options(synchronize_session=False))
     assert not generation_access_active(db_session,run.id)
+
+
+def test_generation_deadline_applies_outside_rq_workers(client, db_session, world):
+    course, *_ = publish(client, db_session, world['author'], assessment=False, practice=False)
+    run=GenerationRun(owner_id=world['author'].id,course_id=course.id,run_type='graph_generation',status='running',
+                      started_at=datetime.utcnow()-timedelta(seconds=settings.AI_JOB_TIMEOUT_SECONDS+1))
+    db_session.add(run)
+    db_session.commit()
+    with pytest.raises(GenerationCancelled, match='лимит времени') as error:
+        check_cancelled(db_session,run.id)
+    assert error.value.code == 'time_limit'

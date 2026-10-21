@@ -775,7 +775,7 @@ class PipelineService:
             from app.services.generation_control import GenerationCancelled
             if isinstance(exc, GenerationCancelled) and failed_run is not None:
                 failed_run.status = GenerationRunStatus.PAUSED.value
-                failed_run.error_code = "user_cancelled"
+                failed_run.error_code = exc.code
                 failed_run.error_message = str(exc)
                 failed_run.retryable = True
                 if failed_course is not None:
