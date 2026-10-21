@@ -23,6 +23,12 @@ from app.routes import learning
 app.include_router(learning.router, prefix="/api", tags=["Learning"])
 app.include_router(account.router, prefix="/api", tags=["Account"])
 app.include_router(legal.router, prefix="/api", tags=["Legal"])
+from app.routes import integrations, billing, oidc, lti, operations
+app.include_router(integrations.router, prefix="/api", tags=["Integrations v1"])
+app.include_router(billing.router, prefix="/api", tags=["Billing"])
+app.include_router(oidc.router, prefix="/api", tags=["OIDC"])
+app.include_router(lti.router, prefix="/api", tags=["LTI 1.3"])
+app.include_router(operations.router, prefix="/api", tags=["Operations"])
 from app.routes import ai_workspace
 from app.routes import materials
 app.include_router(materials.router, prefix="/api", tags=["Materials"])

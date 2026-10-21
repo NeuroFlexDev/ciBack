@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -87,12 +87,19 @@ class AuthService:
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
     if credentials is None:
         raise _credentials_exception("Требуется аутентификация")
-    return AuthService.get_user_from_token(db, credentials.credentials)
+    user = AuthService.get_user_from_token(db, credentials.credentials)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not user.is_admin:
+        recovery_paths = ("/api/auth/", "/api/admin/", "/api/billing", "/api/integrations/", "/api/legal/", "/api/me", "/api/change-password")
+        if not request.url.path.startswith(recovery_paths) and not request.url.path.endswith(("/export", "/export.xlsx", "/export.csv")):
+            from app.services.billing_service import ensure_write_access
+            ensure_write_access(db, user.organization_id)
+    return user
 
 
 def ensure_organization_active(user: User) -> None:

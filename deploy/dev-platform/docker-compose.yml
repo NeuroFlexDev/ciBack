@@ -35,6 +35,10 @@ x-backend-environment: &backend-environment
   SMTP_PASS: ${SMTP_PASS:-}
   SMTP_FROM: ${SMTP_FROM:-}
   SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+  DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+  INTEGRATION_PRIVATE_HOSTS: ${INTEGRATION_PRIVATE_HOSTS:-}
+  YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+  YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
   VSELLM_API_KEY: ${VSELLM_API_KEY:-}
   VSELLM_BASE_URL: ${VSELLM_BASE_URL:-https://api.vsellm.ru/v1}
   AI_MODEL_FAST: ${AI_MODEL_FAST:-openai/gpt-5.4-mini}
@@ -191,6 +195,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  outbox:
+    logging: *logging
+    image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    command: ["python", "-m", "app.workers.outbox"]
+    environment: *backend-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   db:
     logging: *logging

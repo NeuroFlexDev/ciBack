@@ -1,5 +1,6 @@
 from .administration import Organization, Invitation, AdminEvent
 from .materials import CourseImage, LearnerAssistantMessage, OrganizationMaterialPolicy, ScopedAIUsage
+from .integrations import OutboundMessage, IntegrationKey, IntegrationOperation, WebhookEndpoint, OIDCProvider, ExternalIdentity, OIDCSession, BillingAccount, Invoice, PaymentEvent, LTIPlatform, LTIResource, LTIIdentity, LTISession, LTIGradeBinding
 from .approval import Approval
 from .account import PasswordReset
 from .legal import LegalReceipt, LegalRequest

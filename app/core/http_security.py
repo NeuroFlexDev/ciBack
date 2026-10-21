@@ -14,20 +14,24 @@ class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         request_id = uuid.uuid4().hex
         request.state.request_id = request_id
-        limited = request.url.path.startswith('/api/auth/') or request.url.path == '/api/legal/requests'
-        if settings.ENV != "test" and settings.AUTH_RATE_LIMIT_ENABLED and request.method == "POST" and limited:
+        limited = request.url.path.startswith(('/api/auth/', '/api/lti/')) or request.url.path in ('/api/legal/requests', '/api/billing/webhooks/yookassa')
+        state_creation = request.method == "GET" and (request.url.path.endswith('/start') or request.url.path.endswith('/login')) and limited
+        if settings.ENV != "test" and settings.AUTH_RATE_LIMIT_ENABLED and (request.method == "POST" or state_creation) and limited:
             # Use the ASGI peer address. Forwarded headers are accepted only from trusted proxies by uvicorn.
             peer = request.client.host if request.client else 'unknown'
             key = 'lernium:auth-rate:' + hashlib.sha256(peer.encode()).hexdigest()
+            client = None
             try:
                 from starlette.concurrency import run_in_threadpool
                 client = Redis.from_url(settings.REDIS_URL, socket_timeout=1, socket_connect_timeout=1)
                 count = await run_in_threadpool(client.eval, RATE_SCRIPT, 1, key)
-                client.close()
                 if count > settings.AUTH_RATE_LIMIT_PER_MINUTE:
                     return JSONResponse({"detail": "Слишком много попыток. Повторите через минуту.", "request_id": request_id}, status_code=429, headers={"Retry-After": "60", "X-Request-ID": request_id})
             except RedisError:
                 return JSONResponse({"detail": "Отправка временно недоступна. Повторите позже.", "request_id": request_id}, status_code=503, headers={"X-Request-ID": request_id})
+            finally:
+                if client:
+                    client.close()
         try:
             response = await call_next(request)
         except Exception:
