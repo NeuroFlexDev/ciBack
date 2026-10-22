@@ -772,6 +772,9 @@ class PipelineService:
                 failed_run.error_code = "generation_failed"
                 failed_run.error_message = "Не удалось сгенерировать курс"
                 failed_run.retryable = True
+                if getattr(exc, "ai_failure_kind", None) == "invalid_json":
+                    failed_run.error_code = "ai_invalid_response"
+                    failed_run.error_message = "Ответ AI не соответствует формату учебного материала. Завершённые этапы сохранены; можно повторить оставшийся этап."
                 if isinstance(exc, HTTPException) and exc.status_code in {402, 413, 422}:
                     failed_run.error_code = {402: "ai_budget_exhausted", 413: "ai_context_exceeded", 422: "ai_request_rejected"}[exc.status_code]
                     failed_run.error_message = {402: "Исчерпан лимит AI-запуска. Уменьшите курс или измените бюджет в настройках сервера.",

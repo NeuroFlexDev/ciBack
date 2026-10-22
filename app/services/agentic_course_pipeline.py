@@ -378,7 +378,7 @@ class AgenticCoursePipeline:
                     course_plan=plan_part, writer=writer_part, qa_feedback=qa_feedback,
                     revision=revision*1000+offset))
             except HTTPException as exc:
-                if exc.status_code != 413 or len(ids) < 2:
+                if exc.status_code != 413 or getattr(exc, "request_sent", False) or len(ids) < 2:
                     raise
                 for step, lesson in enumerate(course_plan.lessons[offset:offset+2]):
                     part_plan, part_writer = slice_curriculum(course_plan, writer, {lesson.id})
@@ -473,7 +473,7 @@ class AgenticCoursePipeline:
                 reports.append(self._review_batch(common=common, ingestion=ingestion, competency_map=competency_map,
                     course_plan=partial_plan, writer=partial, assessment=assessment_excerpt(assessment, partial_plan), revision=revision*1000+offset))
             except HTTPException as exc:
-                if exc.status_code != 413 or len(lessons) < 2:
+                if exc.status_code != 413 or getattr(exc, "request_sent", False) or len(lessons) < 2:
                     raise
                 for step, lesson in enumerate(lessons):
                     part_plan, part_writer = slice_curriculum(course_plan, writer, {lesson.id})
