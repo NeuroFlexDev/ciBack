@@ -1,6 +1,8 @@
 """Conversation memory belongs to one authenticated chat, never a global model."""
 import json
 from app.ai.gateway import invoke_messages as chat_completion, token_count
+from app.ai.context_budget import limits
+from app.ai.models import model_policy
 from app.core.config import settings
 from app.models.ai_state import ChatMemory
 from app.models.chat import ChatMessage
@@ -29,7 +31,7 @@ def conversation_context(db, chat_id: int, owner_id: int, latest: str, *, exclud
         older.append(recent.pop(0))
     while older:
         batch, size = [], 0
-        batch_limit = min(settings.AI_MAX_INPUT_TOKENS - 8000, 30000)
+        batch_limit = min(limits(model_policy("memory").model)[0] - 8000, 30000)
         while older and size + token_count(older[0].content) < batch_limit:
             message = older.pop(0)
             batch.append(message)
