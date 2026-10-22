@@ -1,3 +1,4 @@
+from .ai_control import AIControl
 from .business import BusinessPosition
 from .administration import Organization, Invitation, AdminEvent
 from .materials import CourseImage, LearnerAssistantMessage, OrganizationMaterialPolicy, ScopedAIUsage

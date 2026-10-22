@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import hashlib
 import json
@@ -204,7 +205,7 @@ class AgentRuntime:
                         error.request_sent = False
                         raise error
                     consumed = sum(item.input_tokens + item.output_tokens for item in previous)
-                    if settings.AI_ROUTING_MODE != "off":
+                    if ai_control.policy()["mode"] != "off":
                         history = self.db.query(AICall).join(GenerationRun).filter(
                             GenerationRun.owner_id == self.owner_id, AICall.agent == agent,
                             AICall.routing.isnot(None),
@@ -342,7 +343,7 @@ class AgentRuntime:
                         outcome = "runtime_error"
                     call.routing = routing.record_outcome(call.routing, outcome=outcome,
                                                          usage=getattr(exc, "ai_usage", None) or reported_usage)
-                    if decision and settings.AI_ROUTING_MODE == "adaptive":
+                    if decision and ai_control.policy()["mode"] == "adaptive":
                         from app.ai.providers import route_id
                         excluded_models.add(route_id(decision.selected_provider, decision.selected_model))
                         tier = decision.metadata.get("tier")

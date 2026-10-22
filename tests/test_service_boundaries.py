@@ -36,7 +36,7 @@ def test_operator_routes_absent_from_platform_and_no_tenant_api_in_admin(surface
     paths = platform.get("/openapi.json").json()["paths"]
     assert "/api/auth/login" in paths
     assert not any(path.startswith("/api/admin/") for path in paths)
-    for path in ('/api/admin/organizations', '/api/admin/operations', '/api/support/grants/1/content'):
+    for path in ('/api/admin/organizations', '/api/admin/operations', '/api/admin/ai', '/api/support/grants/1/content'):
         assert platform.get(path).status_code == 404
         assert path not in platform.get('/openapi.json').json()['paths']
     assert admin.get('/api/courses').status_code == 404

@@ -1,5 +1,6 @@
 """Durable supplemental evidence, scoped to the admitted generation run."""
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import hashlib
 import io
@@ -27,7 +28,7 @@ from app.services.source_catalog_service import build_source_catalog
 
 def search_plan(common: dict, sources: list[dict]) -> dict:
     """A transparent local coverage heuristic, not an LLM certainty score."""
-    if not common.get("web_search_enabled", True) or settings.AI_LOCAL_ONLY or not settings.WEB_SEARCH_ENABLED:
+    if not common.get("web_search_enabled", True) or ai_control.policy()["local_only"] or not settings.WEB_SEARCH_ENABLED:
         return {"status": "disabled", "reason": "author_or_delivery_setting", "queries": []}
     original = [item for item in sources if item.get("source_type") != "web_search"]
     chars = sum(len(item.get("quote", "")) for item in original)

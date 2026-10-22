@@ -175,7 +175,7 @@ def execute_image_generation(image_id):
         item.status = "generating"
         db.commit()  # At-most-once submission: a killed worker never blindly bills again.
         client = OpenAI(api_key=providers.credential(provider), base_url=str(provider.base_url),
-                        timeout=provider.timeout_seconds, max_retries=0)
+                        timeout=provider.timeout_seconds, max_retries=0, **providers.client_options(provider))
         request_started = True
         result = client.images.generate(prompt=item.prompt, **config["options"])
         author_result_access(db, owner_id, stamp, course_id, "images")

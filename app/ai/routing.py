@@ -1,5 +1,6 @@
 """Route each request among approved providers/models without extra inference."""
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import hashlib
 import json
@@ -9,7 +10,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from app.core.config import AIRoutingCandidate, settings
-from app.ai.providers import route_id
+from app.ai.providers import route_id, registry
 from app.ai.pricing import candidate_price, SNAPSHOT
 from app.ai.context_budget import effective_input_limit
 
@@ -22,10 +23,11 @@ def policy_fingerprint() -> str:
         "version": ROUTER_VERSION,
         "price_snapshot": SNAPSHOT,
         "endpoint": settings.VSELLM_BASE_URL,
-        "providers": [item.model_dump(mode="json") for item in settings.AI_PROVIDERS],
-        "candidates": [item.model_dump(mode="json") for item in settings.AI_ROUTING_CANDIDATES],
-        "min_samples": settings.AI_ROUTING_MIN_SAMPLES,
-        "min_pass_rate": settings.AI_ROUTING_MIN_PASS_RATE,
+        "providers": [item.model_dump(mode="json") for item in registry().values()],
+        "local_only": ai_control.policy()["local_only"],
+        "candidates": [item.model_dump(mode="json") for item in ai_control.candidates()],
+        "min_samples": ai_control.policy()["min_samples"],
+        "min_pass_rate": ai_control.policy()["min_pass_rate"],
         "history_limit": settings.AI_ROUTING_HISTORY_LIMIT,
         "cooldown": settings.AI_ROUTING_COOLDOWN_SECONDS,
     }
@@ -33,15 +35,15 @@ def policy_fingerprint() -> str:
 
 
 def cache_policy() -> dict:
-    if settings.AI_ROUTING_MODE == "off":
+    if ai_control.policy()["mode"] == "off":
         return {}
-    return {"_routing": policy_fingerprint(), "_routing_mode": settings.AI_ROUTING_MODE}
+    return {"_routing": policy_fingerprint(), "_routing_mode": ai_control.policy()["mode"]}
 
 
 def enabled_candidates(role: str) -> list[AIRoutingCandidate]:
-    if settings.AI_ROUTING_MODE == "off":
+    if ai_control.policy()["mode"] == "off":
         return []
-    return [item for item in settings.AI_ROUTING_CANDIDATES
+    return [item for item in ai_control.candidates()
             if item.approved and role in item.roles and item.json_mode
             and (role != "critic_qa" or item.independent_review and item.model != settings.AI_MODEL_WRITER)
             and (role != "vision" or item.vision)]
@@ -89,7 +91,7 @@ def choose_route(
     ranked = []
     candidates = enabled_candidates(role)
     baseline = candidate_price("vsellm", baseline_model, role)
-    if settings.AI_ROUTING_MODE != "off" and baseline and not any(
+    if ai_control.policy()["mode"] != "off" and baseline and baseline.approved and role in baseline.roles and not any(
             row.provider == "vsellm" and row.model == baseline_model for row in candidates):
         candidates.append(baseline)
     for candidate in candidates:
@@ -116,8 +118,8 @@ def choose_route(
             continue
         contracts = [row for row in samples if row["outcome"] != "provider_error"]
         passes = sum(row["outcome"] == "contract_pass" for row in contracts)
-        if (len(contracts) >= settings.AI_ROUTING_MIN_SAMPLES
-                and passes / len(contracts) < settings.AI_ROUTING_MIN_PASS_RATE):
+        if (len(contracts) >= ai_control.policy()["min_samples"]
+                and passes / len(contracts) < ai_control.policy()["min_pass_rate"]):
             continue
         # A fixed 9/10 prior avoids certainty from one success. This is a ranking
         # heuristic; it is not a calibrated probability of final course quality.
@@ -131,11 +133,11 @@ def choose_route(
     winner = ranked[0] if ranked else None
     proposed = winner[2].model if winner else baseline_model
     proposed_provider = winner[2].provider if winner else "vsellm"
-    selected = proposed if settings.AI_ROUTING_MODE == "adaptive" else baseline_model
-    selected_provider = proposed_provider if settings.AI_ROUTING_MODE == "adaptive" else "vsellm"
+    selected = proposed if ai_control.policy()["mode"] == "adaptive" else baseline_model
+    selected_provider = proposed_provider if ai_control.policy()["mode"] == "adaptive" else "vsellm"
     selected_candidate = candidate_price(selected_provider, selected, role)
     metadata = {
-        "version": ROUTER_VERSION, "mode": settings.AI_ROUTING_MODE, "policy": signature,
+        "version": ROUTER_VERSION, "mode": ai_control.policy()["mode"], "policy": signature,
         "selected_model": selected, "proposed_model": proposed,
         "selected_provider": selected_provider, "proposed_provider": proposed_provider,
         "baseline_model": baseline_model, "input_bucket": bucket,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import inspect
 import json
@@ -52,7 +53,7 @@ _JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n(.*)\r?\n```\Z", re.IGNORECA
 @lru_cache(maxsize=128)
 def get_cached_external_context(query: str, lang: str = "ru") -> str:
     from app.core.config import settings
-    if settings.AI_LOCAL_ONLY:
+    if ai_control.policy()["local_only"]:
         return ""
     try:
         results = aggregated_search(query=query, source="all", lang=lang)
@@ -198,7 +199,7 @@ def generate_from_prompt(
     factory = _get_factory(engine, resolved_engine)
     from app.core.config import settings
     use_vsellm = engine == "vsellm" or (engine == DEFAULT_ENGINE and (gateway.configured() or settings.ENV != "test"))
-    if settings.AI_LOCAL_ONLY:
+    if ai_control.policy()["local_only"]:
         use_vsellm = True
     if factory is None and not use_vsellm:
         raise HTTPException(400, f"Неподдерживаемый движок генерации: {engine}")

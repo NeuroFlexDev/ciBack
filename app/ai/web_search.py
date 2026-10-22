@@ -4,6 +4,7 @@ Provider URL annotations are required. Model-written Markdown links alone are
 not evidence. Retrieved text is a provider summary, not a verbatim page quote.
 """
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import ipaddress
 import json
@@ -55,7 +56,7 @@ def short_topic(value: str) -> str:
 
 def configured() -> bool:
     provider = registry().get(settings.WEB_SEARCH_PROVIDER)
-    return bool(settings.WEB_SEARCH_ENABLED and not settings.AI_LOCAL_ONLY and provider
+    return bool(settings.WEB_SEARCH_ENABLED and not ai_control.policy()["local_only"] and provider
                 and provider.enabled and not provider.local and credential(provider))
 
 
@@ -138,8 +139,11 @@ def search(query: str, *, transport=None) -> dict:
         raise SearchUnavailable("web_search_unconfigured")
     payload = request_payload(query)
     provider = registry()[settings.WEB_SEARCH_PROVIDER]
+    if provider._managed and transport is None:
+        from app.ai.managed_http import PinnedTransport
+        transport = PinnedTransport(provider)
     try:
-        with httpx.Client(timeout=settings.WEB_SEARCH_TIMEOUT_SECONDS, follow_redirects=False, transport=transport) as client:
+        with httpx.Client(timeout=settings.WEB_SEARCH_TIMEOUT_SECONDS, follow_redirects=False, transport=transport, trust_env=False) as client:
             with client.stream("POST", str(provider.base_url).rstrip("/") + "/responses",
                     headers={"Authorization": "Bearer " + credential(provider)}, json=payload) as response:
                 if response.status_code != 200:

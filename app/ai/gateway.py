@@ -1,5 +1,6 @@
 """Routed OpenAI-compatible text transport through LangChain; isolated credentials."""
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import json
 from typing import Any
@@ -60,7 +61,7 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
     allowed_models = {settings.AI_MODEL_FAST, settings.AI_MODEL_REASONING, settings.AI_MODEL_WRITER,
                       settings.AI_MODEL_CRITIC, settings.AI_MODEL_FALLBACK}
     static_models = set(allowed_models)
-    if settings.AI_ROUTING_MODE == "adaptive":
+    if ai_control.policy()["mode"] == "adaptive":
         allowed_models.update(item.model for item in enabled_candidates(role))
     if used_model not in allowed_models:
         raise HTTPException(422, "This model is not enabled by the server model policy")
@@ -96,8 +97,8 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         # Approval is for a provider/model pair. A model approved at another
         # endpoint must never silently leak into the baseline provider fallback.
         raise providers.AIUnavailable()
-    if used_model in static_models and provider == "vsellm":
-        candidate = None
+    if any(item.provider == provider and item.model == used_model and (not item.approved or role not in item.roles) for item in ai_control.candidates()):
+        raise providers.AIUnavailable()
     input_estimate = require_fits(messages, used_model, output_limit, provider)
     llm = ChatOpenAI(
         model=used_model,
@@ -107,6 +108,7 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         max_retries=0,
         max_tokens=output_limit,
         temperature=None,
+        **providers.client_options(selected_provider),
         **({"extra_body": candidate.extra_body} if candidate and candidate.extra_body else {}),
     )
     if json_mode:

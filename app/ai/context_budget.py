@@ -11,6 +11,7 @@ https://platform.claude.com/docs/en/models/sonnet-4-6/overview
 https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash
 """
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import hashlib
 import json
@@ -77,7 +78,7 @@ def effective_input_limit(model_limit: int) -> int:
 
 
 def limits(model: str, provider: str = "vsellm") -> tuple[int, int, int]:
-    candidate = next((item for item in settings.AI_ROUTING_CANDIDATES
+    candidate = next((item for item in ai_control.candidates()
                       if item.model == model and item.provider == provider), None)
     if candidate:
         return effective_input_limit(candidate.max_input_tokens), candidate.max_output_tokens, candidate.context_window
