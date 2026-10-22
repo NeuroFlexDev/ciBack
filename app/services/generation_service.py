@@ -44,7 +44,9 @@ SUPPORTED_ENGINES: dict[str, Callable[..., Any]] = {
 MAX_INPUT_TOKENS = 4000
 MAX_OUTPUT_TOKENS = 1024
 
-_JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
+# Only an envelope around the entire response may be unwrapped. Markdown
+# fences inside a JSON string are lesson content and must remain untouched.
+_JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n(.*)\r?\n```\Z", re.IGNORECASE | re.DOTALL)
 
 
 @lru_cache(maxsize=128)
@@ -145,19 +147,25 @@ def _create_client(
 
 
 def _json_object(raw: str) -> dict[str, Any]:
-    cleaned = raw.strip().lstrip("\ufeff")
-    fenced = _JSON_FENCE.search(cleaned)
-    if fenced is not None:
-        cleaned = fenced.group(1).strip()
-
+    cleaned = raw.strip().lstrip("\ufeff").strip()
     try:
         parsed = json.loads(cleaned)
-    except (TypeError, ValueError) as exc:
-        logger.warning("LLM JSON parsing failed error=%s", exc.__class__.__name__)
-        raise HTTPException(500, "Ошибка разбора JSON от LLM") from exc
+    except (TypeError, ValueError) as original:
+        fenced = _JSON_FENCE.fullmatch(cleaned)
+        try:
+            if fenced is None:
+                raise original
+            parsed = json.loads(fenced.group(1))
+        except (TypeError, ValueError) as exc:
+            logger.warning("LLM JSON parsing failed error=%s", exc.__class__.__name__)
+            error = HTTPException(500, "Ошибка разбора JSON от LLM")
+            error.ai_failure_kind = "invalid_json"
+            raise error from exc
 
     if not isinstance(parsed, dict):
-        raise HTTPException(500, "LLM должен вернуть JSON-объект")
+        error = HTTPException(500, "LLM должен вернуть JSON-объект")
+        error.ai_failure_kind = "invalid_json"
+        raise error
     return parsed
 
 

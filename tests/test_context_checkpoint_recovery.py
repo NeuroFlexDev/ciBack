@@ -135,3 +135,55 @@ def test_provider_context_error_keeps_unknown_usage_reservation(db_session, auth
     assert len(attempts) == 1
     call = db_session.query(AICall).one()
     assert call.status == "failed" and call.input_tokens > 0 and call.output_tokens == 6000
+
+
+@pytest.mark.parametrize("stage", ["assessment", "qa"])
+def test_sent_provider_context_error_does_not_trigger_outer_split(monkeypatch, stage):
+    from types import SimpleNamespace
+    from app.ai import curriculum
+    lessons = [SimpleNamespace(id=f"lesson:part{index}") for index in range(2)]
+    plan = SimpleNamespace(lessons=lessons)
+    writer = SimpleNamespace(lessons=lessons)
+    monkeypatch.setattr(curriculum, "slice_curriculum", lambda *args: (plan, writer))
+    monkeypatch.setattr(curriculum, "assessment_excerpt", lambda *args: None)
+    pipeline = AgenticCoursePipeline(runtime=None, checkpoint=lambda *args: None)
+    attempts = []
+    def rejected(**kwargs):
+        attempts.append(kwargs)
+        raise ContextBudgetExceeded(model=settings.AI_MODEL_FAST, input_tokens=100,
+            output_tokens=6000, input_limit=64000, context_window=400000, request_sent=True)
+    monkeypatch.setattr(pipeline, "_assess_batch" if stage == "assessment" else "_review_batch", rejected)
+    with pytest.raises(ContextBudgetExceeded):
+        if stage == "assessment":
+            pipeline._create_assessments(common={}, settings_snapshot={}, course_plan=plan,
+                writer=writer, qa_feedback=None, revision=0)
+        else:
+            pipeline._review(common={}, ingestion=None, competency_map=None, course_plan=plan,
+                writer=writer, assessment=None, revision=0)
+    assert len(attempts) == 1
+
+
+def test_assessment_local_context_split_keeps_every_lesson(monkeypatch):
+    from types import SimpleNamespace
+    from app.ai import curriculum
+    lessons = [SimpleNamespace(id=f"lesson:part{index}") for index in range(3)]
+    plan = SimpleNamespace(lessons=lessons)
+    def sliced(plan, writer, ids):
+        part = SimpleNamespace(lessons=[lesson for lesson in plan.lessons if lesson.id in ids])
+        return part, part
+    monkeypatch.setattr(curriculum, "slice_curriculum", sliced)
+    monkeypatch.setattr(curriculum, "merge_assessments", lambda parts: [lesson for part in parts for lesson in part])
+    pipeline = AgenticCoursePipeline(runtime=None, checkpoint=lambda *args: None)
+    attempts = []
+    def assessed(**kwargs):
+        ids = [lesson.id for lesson in kwargs["course_plan"].lessons]
+        attempts.append(ids)
+        if len(ids) > 1:
+            raise ContextBudgetExceeded(model=settings.AI_MODEL_FAST, input_tokens=65000,
+                output_tokens=6000, input_limit=64000, context_window=400000)
+        return ids
+    monkeypatch.setattr(pipeline, "_assess_batch", assessed)
+    result = pipeline._create_assessments(common={}, settings_snapshot={}, course_plan=plan,
+        writer=plan, qa_feedback=None, revision=0)
+    assert result == [lesson.id for lesson in lessons]
+    assert attempts == [["lesson:part0", "lesson:part1"], ["lesson:part0"], ["lesson:part1"], ["lesson:part2"]]

@@ -34,6 +34,8 @@ def available_provider_ids() -> set[str]:
 def safe_error(exc: Exception) -> str:
     if isinstance(exc, ContextBudgetExceeded):
         return "provider_context_exceeded" if exc.request_sent else "local_context_budget_exceeded"
+    if getattr(exc, "ai_failure_kind", None) == "invalid_json":
+        return "ai_invalid_json"
     status = getattr(exc, "status_code", None)
     return f"provider_http_{status}" if status else type(exc).__name__
 
