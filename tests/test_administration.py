@@ -124,7 +124,7 @@ def test_suspend_org_revokes_member_access_without_deleting_data(client,db_sessi
 
 
 def test_real_course_quota_and_generation_zero(client,db_session,admin):
-    o=org(db_session,course_limit=1,generation_limit=0);u=member(db_session,o,role='author')
+    o=org(db_session,course_limit=1,generation_limit=0);u=member(db_session,o,role='manager')
     assert client.post('/api/courses/drafts',headers=headers(u)).status_code==201
     assert client.post('/api/courses/drafts',headers=headers(u)).status_code==409
     assert client.post('/api/courses/',headers=headers(u),json={'title':'Bypass','description':'No','level':1,'language':1}).status_code==409
@@ -159,7 +159,7 @@ def test_source_quota_allows_replacement_and_frees_deleted_source(client, db_ses
     from app.api_catalog import app
     app.dependency_overrides[get_file_storage] = lambda: LocalFileStorage(tmp_path, 1024 * 1024)
     o = org(db_session, source_limit=1)
-    u = member(db_session, o, role='author')
+    u = member(db_session, o, role='manager')
     course_id = client.post('/api/courses/drafts', headers=headers(u)).json()['id']
     path = f'/api/courses/{course_id}/documents'
     source = {'file': ('source.txt', b'Source material for quota check', 'text/plain')}
@@ -197,7 +197,7 @@ def test_synchronous_graph_endpoint_cannot_bypass_monthly_limit(client, db_sessi
     from app.models.generation_run import GenerationRun
     from app.models.document import DocumentChunk
     o = org(db_session, generation_limit=0)
-    u = member(db_session, o, role='author')
+    u = member(db_session, o, role='manager')
     course, document, _ = _course_and_document(db_session, u)
     document.status = 'indexed'
     db_session.add(DocumentChunk(document_id=document.id, document_version=document.version,

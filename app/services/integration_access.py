@@ -59,6 +59,11 @@ def require_scope(scope):
         org = db.get(Organization, key.organization_id)
         if not org or not org.is_active or scope not in key.scopes:
             raise HTTPException(403, "Ключ не разрешает это действие")
+        if org.kind == 'business':
+            from app.models.user import User
+            issuer = db.get(User, key.created_by)
+            if not issuer or not issuer.is_active or issuer.organization_id != org.id or issuer.organization_role != 'owner':
+                raise HTTPException(403, 'Ключ компании требует действующего доступа владельца')
         ensure_integrations_enabled(db, org.id)
         if scope.endswith(":write"):
             from app.services.billing_service import ensure_write_access

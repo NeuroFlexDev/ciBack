@@ -30,10 +30,19 @@ def position_for(db, org_id, position_id, *, active=True):
 
 
 def accept_position(db, invitation, user):
+    if user.organization.kind == 'business':
+        from app.models.user import User
+        from app.services.business_hierarchy import MANAGER_ROLES, LEARNER_ROLES
+        if invitation.manager_id is not None:
+            manager = db.get(User, invitation.manager_id)
+            if (invitation.role not in LEARNER_ROLES or not manager or not manager.is_active
+                    or manager.organization_id != invitation.organization_id or manager.organization_role not in MANAGER_ROLES):
+                raise HTTPException(409, 'Руководитель приглашения изменился. Запросите новое приглашение.')
+        user.manager_id = invitation.manager_id
     if invitation.position_id is None:
         return
     position = position_for(db, invitation.organization_id, invitation.position_id)
-    if user.organization.kind != "business" or invitation.role != "member":
+    if user.organization.kind != "business" or invitation.role not in {"member", "candidate"}:
         raise HTTPException(409, "Параметры приглашения изменились. Запросите новое приглашение.")
     person = db.get(LearningPerson, user.id)
     if person is None:

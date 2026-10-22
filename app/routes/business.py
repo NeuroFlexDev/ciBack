@@ -16,6 +16,7 @@ from app.schemas.course_generation_settings import CourseGenerationSettingsUpdat
 from app.schemas.learning import LearningRules
 from app.services.auth_service import get_current_user
 from app.services.business_service import require_business, position_for
+from app.services.business_hierarchy import people_filter, require_person, resolve_manager, LEARNER_ROLES, clear_reporting_lines
 from app.services.organization_access import audit, check_course_limit, check_seat, lock_members
 from app.services import learning_service as learning
 
@@ -61,10 +62,24 @@ class EmployeeAccess(BaseModel):
     expected_auth_version: int = Field(ge=0)
 
 
+class ReportingLine(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    manager_id: int | None = Field(default=None, gt=0)
+    expected_manager_id: int | None = Field(gt=0)
+    expected_auth_version: int = Field(ge=0)
+
+
+class LearnerRole(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    role: Literal['member', 'candidate']
+    expected_auth_version: int = Field(ge=0)
+
+
 class InviteEmployee(BaseModel):
     model_config = ConfigDict(extra='forbid')
     email: str = Field(min_length=5, max_length=255)
-    role: Literal['manager', 'member'] = 'member'
+    role: Literal['manager', 'member', 'candidate'] = 'member'
+    manager_id: int | None = Field(default=None, gt=0)
     position_id: int | None = Field(default=None, gt=0)
     locale: Literal['ru', 'en'] = 'ru'
 
@@ -92,12 +107,16 @@ class PositionRegulation(BaseModel):
     expected_position_revision: int = Field(ge=1)
 
 
-def position_out(db, row):
-    employees = db.query(func.count(User.id)).join(LearningPerson, LearningPerson.user_id == User.id).filter(
-        User.organization_id == row.organization_id, User.is_active.is_(True), LearningPerson.position_id == row.id).scalar()
+def position_out(db, row, actor=None):
+    people = db.query(User).join(LearningPerson, LearningPerson.user_id == User.id).filter(
+        User.organization_id == row.organization_id, User.is_active.is_(True), LearningPerson.position_id == row.id)
+    if actor is not None:
+        people = people.filter(people_filter(actor))
+    employees = people.filter(User.organization_role == 'member').count()
+    candidates = people.filter(User.organization_role == 'candidate').count()
     courses = db.query(func.count(Course.id)).filter_by(organization_id=row.organization_id, position_id=row.id, is_deleted=False).scalar()
     return {**{k: getattr(row, k) for k in ['id', 'name', 'description', 'responsibilities', 'competencies', 'revision', 'is_archived']},
-            'employee_count': employees, 'course_count': courses}
+            'employee_count': employees, 'candidate_count': candidates, 'course_count': courses}
 
 
 def revision(row, expected):
@@ -120,7 +139,7 @@ def positions(archived: bool = False, offset: int = Query(0, ge=0), limit: int =
               db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user)
     query = db.query(BusinessPosition).filter_by(organization_id=org.id, is_archived=archived)
-    return {'total': query.count(), 'items': [position_out(db, p) for p in query.order_by(BusinessPosition.name, BusinessPosition.id).offset(offset).limit(limit)]}
+    return {'total': query.count(), 'items': [position_out(db, p, user) for p in query.order_by(BusinessPosition.name, BusinessPosition.id).offset(offset).limit(limit)]}
 
 
 @router.post('/positions', status_code=201)
@@ -130,13 +149,13 @@ def create_position(payload: PositionInput, db: Session = Depends(get_db), user=
     db.add(row); db.flush()
     audit(db, user, 'business.position_created', 'position', row.id, organization_id=org.id)
     db.commit()
-    return position_out(db, row)
+    return position_out(db, row, user)
 
 
 @router.get('/positions/{position_id}')
 def get_position(position_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user)
-    return position_out(db, position_for(db, org.id, position_id, active=False))
+    return position_out(db, position_for(db, org.id, position_id, active=False), user)
 
 
 @router.put('/positions/{position_id}')
@@ -151,7 +170,7 @@ def update_position(position_id: int, payload: PositionUpdate, db: Session = Dep
     db.query(LearningPerson).filter_by(organization_id=org.id, position_id=row.id).update({'position': row.name})
     audit(db, user, 'business.position_updated', 'position', row.id, organization_id=org.id, revision=row.revision)
     db.commit()
-    return position_out(db, row)
+    return position_out(db, row, user)
 
 
 @router.put('/positions/{position_id}/state')
@@ -168,14 +187,19 @@ def archive_position(position_id: int, payload: PositionState,
         db.query(Invitation).filter_by(organization_id=org.id, position_id=row.id, accepted_at=None, revoked_at=None).update({'revoked_at': datetime.utcnow()})
     audit(db, user, 'business.position_' + action, 'position', row.id, organization_id=org.id)
     db.commit()
-    return position_out(db, row)
+    return position_out(db, row, user)
 
 
 @router.get('/employees')
 def employees(q: str = Query('', max_length=100), offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+              role: Literal['manager', 'member', 'candidate'] | None = None, manager_id: int | None = Query(None, gt=0),
               db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user)
-    query = db.query(User).filter_by(organization_id=org.id)
+    query = db.query(User).filter(people_filter(user), User.is_admin.is_(False))
+    if role:
+        query = query.filter(User.organization_role.in_(['manager', 'admin']) if role == 'manager' else User.organization_role == role)
+    if manager_id is not None:
+        query = query.filter(User.manager_id == manager_id)
     if q.strip():
         query = query.filter(User.email.icontains(q.strip(), autoescape=True) | User.full_name.icontains(q.strip(), autoescape=True))
     from app.routes.administration import user_dict
@@ -184,12 +208,79 @@ def employees(q: str = Query('', max_length=100), offset: int = Query(0, ge=0), 
     return {'total': query.count(), 'items': [user_dict(r) | {'position_id': people[r.id].position_id if r.id in people else None, 'position_name': people[r.id].position if r.id in people else ''} for r in rows]}
 
 
+@router.get('/dashboard')
+def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    org = require_business(db, user)
+    from app.models.learning import LearningAssignment
+    people = db.query(User).filter(people_filter(user), User.is_active.is_(True), User.is_admin.is_(False)).all()
+    learners = [p for p in people if p.organization_role in LEARNER_ROLES]
+    person_ids = {p.id for p in learners}
+    assignments = db.query(LearningAssignment).filter_by(organization_id=org.id, state='active').filter(LearningAssignment.user_id.in_(person_ids)).all()
+    summaries = [(row, learning.assignment_summary(db, row)) for row in assignments]
+
+    def metrics(ids):
+        rows = [summary for row, summary in summaries if row.user_id in ids]
+        return {'assigned': len(rows), 'completed': sum(r['status'] == 'completed' for r in rows),
+                'in_progress': sum(r['status'] == 'in_progress' for r in rows),
+                'pending_reviews': sum(r['pending_reviews'] for r in rows),
+                'overdue': sum(r['due_at'] is not None and learning.utc(r['due_at']) < datetime.utcnow() and r['status'] != 'completed' for r in rows)}
+
+    managers = []
+    if user.organization_role == 'owner':
+        for manager in db.query(User).filter(User.organization_id == org.id, User.organization_role.in_(['manager', 'admin']), User.is_admin.is_(False)).order_by(User.full_name, User.id):
+            reports = [p for p in learners if p.manager_id == manager.id]
+            managers.append({'id': manager.id, 'full_name': manager.full_name, 'email': manager.email, 'is_active': manager.is_active,
+                'employees': sum(p.organization_role == 'member' for p in reports), 'candidates': sum(p.organization_role == 'candidate' for p in reports),
+                **metrics({p.id for p in reports})})
+    return {'scope': 'company' if user.organization_role == 'owner' else 'team', 'company_name': org.name,
+            'employees': sum(p.organization_role == 'member' for p in learners),
+            'candidates': sum(p.organization_role == 'candidate' for p in learners),
+            'unassigned': sum(p.manager_id is None for p in learners),
+            'managers': managers, 'metrics': metrics(person_ids)}
+
+
+@router.put('/employees/{user_id}/reporting-line')
+def reporting_line(user_id: int, payload: ReportingLine, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    ids = [user.id, user_id] + ([payload.manager_id] if payload.manager_id else [])
+    identities = lock_members(db, ids, allow_inactive=True, expected_auth_versions={user.id: user.auth_version})
+    actor, target = identities[user.id], identities[user_id]
+    org = require_business(db, actor, owner=True)
+    require_person(db, actor, target)
+    if target.organization_role not in LEARNER_ROLES:
+        raise HTTPException(422, 'Руководитель назначается сотруднику или кандидату')
+    if target.manager_id != payload.expected_manager_id or target.auth_version != payload.expected_auth_version:
+        raise HTTPException(409, 'Участник уже изменён. Обновите список перед сохранением.')
+    target.manager_id = resolve_manager(db, actor, org.id, target.organization_role, payload.manager_id)
+    target.auth_version += 1
+    audit(db, actor, 'business.reporting_line_changed', 'user', target.id, organization_id=org.id, manager_id=target.manager_id)
+    db.commit()
+    return {'user_id': target.id, 'manager_id': target.manager_id, 'auth_version': target.auth_version}
+
+
+@router.put('/employees/{user_id}/role')
+def learner_role(user_id: int, payload: LearnerRole, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    identities = lock_members(db, [user.id, user_id], allow_inactive=True, expected_auth_versions={user.id: user.auth_version})
+    actor, target = identities[user.id], identities[user_id]
+    org = require_business(db, actor)
+    require_person(db, actor, target)
+    if target.organization_role not in LEARNER_ROLES:
+        raise HTTPException(422, 'Можно изменить только статус сотрудника или кандидата')
+    if target.auth_version != payload.expected_auth_version:
+        raise HTTPException(409, 'Участник уже изменён. Обновите список перед сохранением.')
+    target.organization_role = payload.role
+    target.auth_version += 1
+    audit(db, actor, 'business.learner_role_changed', 'user', target.id, organization_id=org.id, role=target.organization_role)
+    db.commit()
+    return {'user_id': target.id, 'role': target.organization_role, 'results_preserved': True}
+
+
 @router.put('/employees/{user_id}/position')
 def assign_position(user_id: int, payload: EmployeePosition, db: Session = Depends(get_db), user=Depends(get_current_user)):
     identities = lock_members(db, [user.id, user_id], expected_auth_versions={user.id: user.auth_version})
     org = require_business(db, identities[user.id])
     target = identities[user_id]
-    if target.organization_id != org.id or target.is_admin or target.organization_role != 'member':
+    require_person(db, user, target)
+    if target.organization_role not in LEARNER_ROLES:
         raise HTTPException(404, 'Сотрудник не найден в компании')
     row = db.get(LearningPerson, target.id)
     if (row.position_id if row else None) != payload.expected_position_id:
@@ -209,11 +300,15 @@ def appoint_manager(user_id: int, payload: ManagerInput, db: Session = Depends(g
     identities = lock_members(db, [user.id, user_id], expected_auth_versions={user.id: user.auth_version})
     org = require_business(db, identities[user.id], owner=True)
     target = identities[user_id]
-    if target.organization_id != org.id or target.is_admin or target.organization_role not in {'member', 'manager'}:
+    if target.organization_id != org.id or target.is_admin or target.organization_role not in {'member', 'candidate', 'manager', 'admin'}:
         raise HTTPException(404, 'Сотрудник или управляющий не найден')
     if target.auth_version != payload.expected_auth_version:
         raise HTTPException(409, 'Доступ сотрудника уже изменён. Обновите список.')
+    if target.organization_role in {'manager', 'admin'} and payload.role == 'member':
+        clear_reporting_lines(db, target)
     target.organization_role = payload.role
+    if payload.role == 'manager':
+        target.manager_id = None
     target.auth_version += 1
     person = db.get(LearningPerson, target.id)
     if person and payload.role == 'manager':
@@ -229,9 +324,10 @@ def employee_access(user_id: int, payload: EmployeeAccess, db: Session = Depends
         expected_auth_versions={user.id: user.auth_version})
     actor, target = identities[user.id], identities[user_id]
     org = require_business(db, actor)
-    if target.organization_id != org.id or target.is_admin or target.id == actor.id or target.organization_role not in {'member', 'manager'}:
+    require_person(db, actor, target)
+    if target.id == actor.id or target.organization_role not in {'member', 'candidate', 'manager', 'admin'}:
         raise HTTPException(404, 'Сотрудник или управляющий не найден')
-    if target.organization_role == 'manager' and actor.organization_role != 'owner':
+    if target.organization_role in {'manager', 'admin'} and actor.organization_role != 'owner':
         raise HTTPException(403, 'Доступом управляющего распоряжается владелец компании')
     if target.auth_version != payload.expected_auth_version:
         raise HTTPException(409, 'Доступ сотрудника уже изменён. Обновите список.')
@@ -249,7 +345,7 @@ def employee_access(user_id: int, payload: EmployeeAccess, db: Session = Depends
 def invite(payload: InviteEmployee, db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user, owner=payload.role == 'manager')
     from app.routes.administration import make_invitation, InviteInput
-    return make_invitation(db, user, InviteInput(email=payload.email, organization_id=org.id, role=payload.role, locale=payload.locale), position_id=payload.position_id)
+    return make_invitation(db, user, InviteInput(email=payload.email, organization_id=org.id, role=payload.role, manager_id=payload.manager_id, locale=payload.locale), position_id=payload.position_id)
 
 
 @router.get('/invitations')
@@ -258,7 +354,7 @@ def invitations(db: Session = Depends(get_db), user=Depends(get_current_user)):
     from app.routes.administration import invitation_dict
     query = db.query(Invitation).filter_by(organization_id=org.id, accepted_at=None, revoked_at=None).filter(Invitation.expires_at > datetime.utcnow())
     if user.organization_role != 'owner':
-        query = query.filter_by(role='member')
+        query = query.filter(Invitation.manager_id == user.id, Invitation.role.in_(LEARNER_ROLES))
     return {'items': [invitation_dict(i) | {'position_id': i.position_id} for i in query.order_by(Invitation.id.desc()).limit(100)]}
 
 
@@ -266,7 +362,7 @@ def invitations(db: Session = Depends(get_db), user=Depends(get_current_user)):
 def revoke_invitation(invitation_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user, lock=True)
     row = db.query(Invitation).filter_by(id=invitation_id, organization_id=org.id, accepted_at=None, revoked_at=None).first()
-    if not row or (row.role != 'member' and user.organization_role != 'owner'):
+    if not row or (user.organization_role != 'owner' and (row.role not in LEARNER_ROLES or row.manager_id != user.id)):
         raise HTTPException(404, 'Приглашение не найдено')
     row.revoked_at = datetime.utcnow()
     audit(db, user, 'invitation.revoked', 'invitation', row.id, organization_id=org.id)
@@ -346,7 +442,7 @@ def assign_course(position_id: int, course_id: int, payload: RevisionInput, db: 
     if config.features.get('learning') is False:
         raise HTTPException(403, 'Обучение не включено в поставку организации')
     targets = db.query(User).join(LearningPerson, LearningPerson.user_id == User.id).filter(
-        User.organization_id == org.id, User.is_active.is_(True), User.organization_role == 'member', LearningPerson.position_id == position.id).all()
+        people_filter(user), User.is_active.is_(True), User.organization_role.in_(LEARNER_ROLES), LearningPerson.position_id == position.id).all()
     if not targets:
         raise HTTPException(409, 'На эту должность ещё не назначены сотрудники')
     rules = LearningRules.model_validate(config.rules).model_dump()

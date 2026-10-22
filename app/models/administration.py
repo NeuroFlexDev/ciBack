@@ -22,13 +22,14 @@ class Organization(Base):
 
 class Invitation(Base):
     __tablename__ = 'invitations'
-    __table_args__ = (CheckConstraint("role IN ('owner','admin','author','reviewer','manager','member')", name='ck_invitations_role'),)
+    __table_args__ = (CheckConstraint("role IN ('owner','admin','author','reviewer','manager','member','candidate')", name='ck_invitations_role'),)
     id = Column(Integer, primary_key=True)
     token_hash = Column(String(64), nullable=False, unique=True)
     email = Column(String(255), nullable=False, index=True)
     organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False, index=True)
     role = Column(String(16), nullable=False, default='member')
     position_id = Column(Integer, ForeignKey("business_positions.id"), nullable=True, index=True)
+    manager_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     invited_by = Column(Integer, ForeignKey('users.id'), nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     expires_at = Column(DateTime, nullable=False)
