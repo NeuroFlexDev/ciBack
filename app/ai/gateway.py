@@ -11,6 +11,7 @@ from openai import LengthFinishReasonError
 from app.ai.models import model_policy
 from app.ai.routing import enabled_candidates, choose_route
 from app.ai import providers
+from app.ai.context_budget import count_messages, require_fits, limits, ContextBudgetExceeded, provider_context_error
 from app.core.config import settings
 
 
@@ -31,11 +32,15 @@ def available_provider_ids() -> set[str]:
 
 
 def safe_error(exc: Exception) -> str:
+    if isinstance(exc, ContextBudgetExceeded):
+        return "provider_context_exceeded" if exc.request_sent else "local_context_budget_exceeded"
     status = getattr(exc, "status_code", None)
     return f"provider_http_{status}" if status else type(exc).__name__
 
 
 def retryable(exc: Exception) -> bool:
+    if provider_context_error(exc) or getattr(exc, "ai_failure_kind", None) == "context_length":
+        return False
     status = getattr(exc, "status_code", None)
     return status in {408, 409, 429, 500, 502, 503, 504} or type(exc).__name__ in {
         "APITimeoutError", "OpenAITimeoutError", "APIConnectionError", "OpenAIConnectionError", "TimeoutError", "ConnectionError"
@@ -57,10 +62,8 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         allowed_models.update(item.model for item in enabled_candidates(role))
     if used_model not in allowed_models:
         raise HTTPException(422, "This model is not enabled by the server model policy")
-    input_estimate = token_count(messages)
+    input_estimate = count_messages(messages, used_model)
     output_limit = max_tokens or policy.max_output_tokens
-    if input_estimate > settings.AI_MAX_INPUT_TOKENS:
-        raise HTTPException(413, "AI context budget exceeded; split the document or course")
     decision = None
     if provider is None:
         # Normal calls are routed before sending, not only after an error/limit.
@@ -73,12 +76,14 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         predictions[providers.route_id("vsellm", used_model)] = token_forecast.predict(
             token_forecast.current_model(), role=role, model_id=used_model,
             request_features=request_features, max_output_tokens=output_limit)
+        input_estimates = {providers.route_id(item.provider, item.model): count_messages(messages, item.model) for item in enabled_candidates(role)}
+        input_estimates[providers.route_id("vsellm", used_model)] = input_estimate
         decision = choose_route(role=role, baseline_model=used_model,
                                 input_tokens=input_estimate, output_tokens=output_limit,
                                 available_providers=available_provider_ids(),
                                 excluded_models=excluded_routes,
                                 requested_model=model if not fallback else None,
-                                forecast=predictions)
+                                forecast=predictions, input_estimates=input_estimates)
         provider, used_model = decision.selected_provider, decision.selected_model
     selected_provider = providers.registry().get(provider)
     if selected_provider is None or not providers.available(selected_provider):
@@ -91,10 +96,7 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         raise providers.AIUnavailable()
     if used_model in static_models and provider == "vsellm":
         candidate = None
-    if candidate and (input_estimate > candidate.max_input_tokens
-                      or output_limit > candidate.max_output_tokens
-                      or input_estimate + output_limit > candidate.context_window):
-        raise HTTPException(413, "AI request exceeds the approved model context or price band")
+    input_estimate = require_fits(messages, used_model, output_limit, provider)
     llm = ChatOpenAI(
         model=used_model,
         api_key=providers.credential(selected_provider),
@@ -124,6 +126,14 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         error.ai_provider = provider
         raise error from None
     except Exception as exc:
+        if provider_context_error(exc):
+            max_input, _, context = limits(used_model, provider)
+            error = ContextBudgetExceeded(model=used_model, input_tokens=input_estimate,
+                output_tokens=output_limit, input_limit=max_input, context_window=context, request_sent=True)
+            error.ai_provider = provider
+            # No usage was reported. Retain the conservative paid reservation;
+            # never invent zero billing or repeat this unchanged prompt.
+            raise error from None
         if retryable(exc) or getattr(exc, "status_code", None) in {401, 402, 403}:
             providers.mark_unavailable(selected_provider)
             error = providers.AIUnavailable()

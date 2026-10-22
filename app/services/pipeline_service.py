@@ -127,7 +127,8 @@ class PipelineService:
 
     @staticmethod
     def prepare_graph_generation(
-        db: Session, *, course_id: int, owner_id: int, document_ids: list[int], request_id: str | None = None
+        db: Session, *, course_id: int, owner_id: int, document_ids: list[int], request_id: str | None = None,
+        web_search_enabled: bool = True
     ) -> GenerationRun:
         course = PipelineRepository.get_owned_course(db, course_id, owner_id, for_update=True)
         if course is None:
@@ -149,6 +150,7 @@ class PipelineService:
                 detail={"code": "documents_not_ready", "message": "Документы не найдены, не принадлежат курсу или ещё не проиндексированы"},
             )
         settings_snapshot = generation_settings_snapshot(course, generation_settings)
+        settings_snapshot["web_search_enabled"] = web_search_enabled
         from app.services.organization_ai_context import organization_ai_context
         settings_snapshot["organization_context"] = organization_ai_context(db, course.organization_id)
         from app.services.generation_preflight import require_preflight
@@ -265,6 +267,8 @@ class PipelineService:
         reconcile_expired_run(db, run)
         data = {column.name: getattr(run, column.name) for column in run.__table__.columns}
         data["run_id"] = run.id
+        from app.services.web_search_service import status as web_search_status
+        data["web_search"] = web_search_status(db, run.id)
         from app.ai.offline import GENERATION_PAUSED, GENERATION_QUEUED
         data["status_notice"] = (GENERATION_PAUSED if run.status == "paused" else
             GENERATION_QUEUED if run.status == "queued" and run.error_code == "ai_unavailable" else None)
@@ -381,6 +385,8 @@ class PipelineService:
         document = PipelineRepository.get_owned_document(db, document_id, owner_id)
         if document is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
+        if document.source_type == "web_search":
+            raise HTTPException(409, {"code": "web_snapshot_immutable", "message": "Снимок интернет-источника неизменяем. Новый поиск создаёт новый снимок."})
         if document.status == DocumentStatus.ARCHIVED.value:
             raise HTTPException(status_code=409, detail="Документ архивирован")
 
@@ -769,9 +775,15 @@ class PipelineService:
                 if isinstance(exc, HTTPException) and exc.status_code in {402, 413, 422}:
                     failed_run.error_code = {402: "ai_budget_exhausted", 413: "ai_context_exceeded", 422: "ai_request_rejected"}[exc.status_code]
                     failed_run.error_message = {402: "Исчерпан лимит AI-запуска. Уменьшите курс или измените бюджет в настройках сервера.",
-                        413: "Превышен размер контекста AI. Разделите материалы на несколько курсов.",
+                        413: "Не удалось безопасно разместить один учебный блок в доступном контексте AI. Источники и завершённые этапы сохранены; скорректируйте блок или согласованные ограничения модели.",
                         422: "AI-сервис отклонил запрос. Измените материалы или параметры генерации."}[exc.status_code]
                     failed_run.retryable = False
+                    if exc.status_code == 413 and getattr(exc, "ai_failure_kind", None) == "context_length":
+                        failed_run.error_message = (
+                            "AI-провайдер отклонил размер запроса. Источники и завершённые этапы сохранены; автоматический повтор остановлен."
+                            if getattr(exc, "request_sent", False) else
+                            "Один учебный блок и резерв ответа превышают установленный лимит контекста. Источники и завершённые этапы сохранены; проверьте размер блока или согласованные ограничения модели."
+                        )
                 failed_run.finished_at = datetime.utcnow()
                 failed_run.latency_ms = _elapsed_ms(started)
             if failed_course is not None:

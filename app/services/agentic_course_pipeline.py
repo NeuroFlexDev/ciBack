@@ -97,7 +97,6 @@ class AgenticCoursePipeline:
         from app.ai.course_state import CourseAgentState
         import hashlib
 
-        self.runtime.register_sources(source_catalog)
         common = {
             "course_title": course_title, "goal": settings_snapshot["goal"],
             "target_audience": settings_snapshot.get("target_audience") or "not specified",
@@ -105,7 +104,13 @@ class AgenticCoursePipeline:
             "lesson_count": settings_snapshot["lesson_count"],
             "approved_plan": settings_snapshot.get("approved_plan") or [],
             "organization_context": settings_snapshot.get("organization_context") or {},
+            # Legacy jobs froze their inputs before web search existed. Resume
+            # must not admit a new paid capability or change their evidence.
+            "web_search_enabled": settings_snapshot.get("web_search_enabled", False),
         }
+        from app.services.web_search_service import supplement
+        supplement(self.runtime, common, source_catalog)
+        self.runtime.register_sources(source_catalog)
         def ingest(state):
             self.checkpoint("ingestion", 5)
             try:
@@ -115,26 +120,12 @@ class AgenticCoursePipeline:
                 return {"legacy": exc.payload}
 
         def competencies(state):
-            from app.ai.curriculum import complete_competency_inventories
             self.checkpoint("competency_mapping", 20)
-            def validate_competencies(value):
-                _canonical_sources("competency_mapper", value.source_refs, source_catalog)
-                known = {item["id"] for item in state["ingestion"]["knowledge_items"]}
-                unknown = set(value.source_knowledge_item_ids) - known
-                if unknown:
-                    raise ValueError(f"Competency map cites unknown ingestion knowledge IDs: {sorted(unknown)}")
-            result = self.runtime.execute(agent="competency_mapper", artifact="competency_map",
-                sequence=state["revision"], template_name="competency_mapper_prompt.j2",
-                response_model=CompetencyMapArtifact, max_tokens=10000,
-                prompt_context={**common, "ingestion_artifact_json": _json(state["ingestion"]),
-                                "qa_feedback_json": _json(state.get("qa"))},
-                validator=validate_competencies,
-                normalize_response=lambda raw: complete_competency_inventories(raw,
-                    sources=set(self.runtime.source_catalog),
-                    knowledge={item["id"] for item in state["ingestion"]["knowledge_items"]}))
+            result = self._map_competencies(common, state["ingestion"], state.get("qa"), state["revision"])
             return {"competency_map": result.model_dump(mode="json")}
 
         def architect(state):
+            from app.ai.knowledge_batches import architecture_projection
             self.checkpoint("course_architecture", 35)
             def validate(value):
                 _canonical_sources("architect", value.source_refs, source_catalog)
@@ -148,7 +139,7 @@ class AgenticCoursePipeline:
             result = self.runtime.execute(agent="course_architect", artifact="course_plan",
                 sequence=state["revision"], template_name="course_architect_prompt.j2",
                 response_model=CoursePlan, max_tokens=12000,
-                prompt_context={**common, "competency_map_json": _json(state["competency_map"]),
+                prompt_context={**common, "competency_map_json": _json(architecture_projection(state["competency_map"])),
                     "source_catalog_json": _json([{"id": x["id"], "section": x.get("section")} for x in source_catalog]),
                     "qa_feedback_json": _json(state.get("qa"))}, validator=validate)
             return {"course_plan": result.model_dump(mode="json")}
@@ -238,11 +229,59 @@ class AgenticCoursePipeline:
         self.checkpoint("materialization", 96)
         return AgenticGraphBuild(nodes, edges, result)
 
+    def _map_competencies(self, common: dict, ingestion: dict, feedback, revision: int) -> CompetencyMapArtifact:
+        from app.ai.curriculum import complete_competency_inventories
+        from app.ai.knowledge_batches import partition_records, ingestion_excerpt, merge_competencies
+        def context(records):
+            selected = ingestion if len(records) == len(ingestion["knowledge_items"]) else ingestion_excerpt(ingestion, records)
+            return {**common, "ingestion_artifact_json": _json(selected), "qa_feedback_json": _json(feedback)}
+        batches = partition_records(ingestion["knowledge_items"], context,
+            role="competency_mapper", template="competency_mapper_prompt.j2")
+        results = []
+        for index, batch in enumerate(batches):
+            known = {item["id"] for item in batch}
+            refs = {ref for item in batch for ref in item["source_ref_ids"]}
+            catalog = [item for item in ingestion["source_refs"] if item["id"] in refs]
+            def validate(value, known=known, catalog=catalog):
+                _canonical_sources("competency_mapper", value.source_refs, catalog)
+                if set(value.source_knowledge_item_ids) != known:
+                    raise ValueError("Competency map must preserve every knowledge item in its assigned batch")
+            result = self.runtime.execute(agent="competency_mapper", artifact="competency_map",
+                sequence=revision * 10000 + index, template_name="competency_mapper_prompt.j2",
+                response_model=CompetencyMapArtifact, max_tokens=10000,
+                prompt_context=context(batch), validator=validate,
+                normalize_response=lambda raw, known=known, refs=refs: complete_competency_inventories(raw, sources=refs, knowledge=known))
+            results.append(result)
+        return merge_competencies(results)
+
     def _ingest(self, common: dict, catalog: list[dict], feedback=None) -> IngestionArtifact:
         from app.ai.evidence import source_batches, merge_ingestion
         artifacts = []
-        batches = source_batches(catalog, settings.AI_INGESTION_BATCH_CHARS)
+        from app.ai.knowledge_batches import partition_records
+        batches = [part for batch in source_batches(catalog, settings.AI_INGESTION_BATCH_CHARS)
+                   for part in partition_records(batch, lambda records: {**common, "source_catalog_json": _json(records),
+                       "qa_feedback_json": _json(feedback)}, role="ingestion", template="ingestion_agent_prompt.j2")]
         for index, batch in enumerate(batches):
+            # Extracted facts are a durable input checkpoint, not a model-answer
+            # cache. A prompt/schema upgrade must not bill ingestion again when
+            # the same run still has exactly the same immutable evidence. Apply
+            # the current schema and canonical citation checks before reuse.
+            if feedback is None:
+                from app.repositories.pipeline import PipelineRepository
+                from app.services.generation_control import check_cancelled
+                from pydantic import ValidationError
+                check_cancelled(self.runtime.db, self.runtime.run_id)
+                saved = PipelineRepository.get_agent_artifact(self.runtime.db,
+                    run_id=self.runtime.run_id, agent="ingestion", sequence=index)
+                if saved is not None and saved.status == "completed" and saved.artifact == "document_knowledge" and saved.course_id == self.runtime.course_id:
+                    try:
+                        restored = IngestionArtifact.model_validate(saved.payload)
+                        _canonical_sources("ingestion", restored.source_refs, batch, require_all=True)
+                    except (ValueError, ValidationError):
+                        pass
+                    else:
+                        artifacts.append(restored)
+                        continue
             artifact = self.runtime.execute(agent="ingestion", artifact="document_knowledge",
                 sequence=index, template_name="ingestion_agent_prompt.j2", response_model=IngestionArtifact,
                 prompt_context={**common, "source_catalog_json": _json(batch),
@@ -581,6 +620,11 @@ class AgenticCoursePipeline:
             content = "\n\n".join(
                 f"## {section.heading}\n\n{learner_markdown(section.content_markdown, set(section.source_ref_ids))}"
                 for section in draft.sections
+            )
+            from app.services.web_search_service import citation_markdown
+            content += citation_markdown(
+                [ref for ref in result.writer.source_refs if ref.id in draft.source_ref_ids],
+                settings_snapshot["language"],
             )
             assessment_refs = {
                 ref_id

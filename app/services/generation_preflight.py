@@ -9,6 +9,8 @@ from app.services.source_catalog_service import build_source_catalog
 def generation_preflight(documents, configuration):
     source_chars = sum(len(chunk.text) for document in documents for chunk in document.chunks if not chunk.is_deleted)
     catalog = build_source_catalog(documents, max_chars=settings.AI_MAX_SOURCE_CHARS)
+    from app.services.web_search_service import preflight_search
+    web = preflight_search(configuration, catalog)
     batches = len(source_batches(catalog, settings.AI_INGESTION_BATCH_CHARS)) if catalog else 0
     count = configuration["lesson_count"]
     # Writer per lesson; assessment and independent QA start with pairs.
@@ -23,7 +25,7 @@ def generation_preflight(documents, configuration):
         reasons.append("Количество уроков требует больше вызовов AI, чем допускает бюджет запуска")
     if reserved_output > settings.AI_MAX_TOKENS_PER_RUN:
         reasons.append("Бюджета токенов недостаточно для заданного числа уроков")
-    return {"allowed": not reasons, "reasons": reasons, "source_characters": source_chars,
+    return {"allowed": not reasons, "reasons": reasons, "source_characters": source_chars, "web_search": web,
             "source_bytes": sum(item.size_bytes for item in documents), "source_batches": batches,
             "lesson_count": count, "minimum_calls": minimum_calls,
             "calls_limit": settings.AI_MAX_CALLS_PER_RUN, "output_token_reservation": reserved_output,

@@ -24,6 +24,10 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --upgrade --force-reinstall \
         "setuptools==84.0.0" "wheel>=0.46.2" "jaraco.context>=6.1.0"
 
+# Bundle tokenizer ranks once; runtime prompt accounting never downloads data.
+ENV TIKTOKEN_CACHE_DIR=/app/tokenizer_cache
+RUN python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+
 COPY --from=pdf_math /usr/local/bin/node /usr/local/bin/node
 COPY --from=pdf_math /pdf_runtime/node_modules /app/pdf_runtime/node_modules
 

@@ -222,7 +222,7 @@ def test_oversized_context_is_rejected_before_creating_a_billable_call(db_sessio
     from app.core.config import settings
     from app.services import generation_service
     monkeypatch.setattr(gateway, 'configured', lambda: True)
-    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'x' * 2000)
+    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'различимые данные источника ' * 2000)
     monkeypatch.setattr(settings, 'AI_MAX_INPUT_TOKENS', 1000)
     runtime = make_runtime(db_session, auth_user, lambda *a, **kw: pytest.fail('must not call provider'))
     with pytest.raises(HTTPException) as exc:

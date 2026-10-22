@@ -147,6 +147,15 @@ class Settings(BaseSettings):
     AI_OCR_ENABLED: bool = True
     AI_OCR_MAX_PAGES: int = Field(default=30, ge=1, le=200)
     AI_CHAT_CONTEXT_TOKENS: int = Field(default=12000, ge=2000)
+    WEB_SEARCH_ENABLED: bool = False
+    WEB_SEARCH_PROVIDER: str = "vsellm"
+    WEB_SEARCH_MODEL: str = "openai/gpt-5.1"
+    WEB_SEARCH_MAX_QUERIES: int = Field(default=1, ge=1, le=2)
+    WEB_SEARCH_TIMEOUT_SECONDS: int = Field(default=45, ge=5, le=90)
+    WEB_SEARCH_MAX_OUTPUT_TOKENS: int = Field(default=1200, ge=300, le=2000)
+    # Internal conservative reservation, NOT the provider invoice. Search/tool
+    # pricing is not exposed by the gateway; actual token usage is recorded.
+    WEB_SEARCH_RESERVATION_RUB: Decimal = Field(default=Decimal("20"), gt=0, allow_inf_nan=False)
 
     SMTP_HOST: str = ""
     SMTP_PORT: int = 25

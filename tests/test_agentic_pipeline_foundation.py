@@ -132,8 +132,9 @@ def test_source_catalog_is_round_robin_and_graph_refs_are_durable(
 
 
 @pytest.mark.parametrize("invented_knowledge", [False, True])
+@pytest.mark.parametrize("web_enabled", [False, True])
 def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
-    db_session, auth_user, invented_knowledge
+    db_session, auth_user, invented_knowledge, web_enabled, monkeypatch, tmp_path
 ):
     course = make_course(db_session, owner_id=auth_user.id)
     run = GenerationRun(
@@ -156,6 +157,23 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
         "section": "Policy",
         "quote": "Operators must perform the safety check.",
     }
+    if web_enabled:
+        from app.core.config import settings
+        from app.ai import web_search
+        from tests.test_async_generation_launch import _document
+        original = _document(db_session, course, auth_user)
+        source = build_source_catalog([original], max_chars=2000)[0]
+        monkeypatch.setattr(settings, "WEB_SEARCH_ENABLED", True)
+        monkeypatch.setattr(settings, "UPLOAD_DIR", tmp_path)
+        monkeypatch.setattr(web_search, "configured", lambda: True)
+        def native_response(_):
+            text = "Operators must perform the safety check. [Manual]"
+            return web_search.parse_response({"status": "completed", "usage": {"input_tokens": 100, "output_tokens": 50},
+                "output": [{"type": "web_search_call", "status": "completed"},
+                    {"type": "message", "content": [{"type": "output_text", "text": text,
+                        "annotations": [{"type": "url_citation", "url": "https://example.com/safety",
+                            "title": "Public safety manual", "start_index": text.index("[Manual]"), "end_index": len(text)}]}]}]})
+        monkeypatch.setattr(web_search, "search", native_response)
     ingestion = {
         "artifact_version": "1.0",
         "source_refs": [source],
@@ -404,15 +422,36 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
 
     def generate(template_name, **kwargs):
         calls.append(template_name)
+        import copy
+        payload = copy.deepcopy(scripts[template_name])
+        if web_enabled:
+            external = next(item for item in runtime.source_catalog.values() if item.get("source_type") == "web_search")
+            def add_evidence(value):
+                if isinstance(value, list):
+                    for item in value:
+                        add_evidence(item)
+                elif isinstance(value, dict):
+                    for key, child in value.items():
+                        if key == "source_refs":
+                            child.append(external)
+                        elif key == "source_ref_ids" and "document_id" not in value:
+                            child.append(external["id"])
+                        else:
+                            add_evidence(child)
+            add_evidence(payload)
+            if template_name == "ingestion_agent_prompt.j2":
+                payload["documents"].append({"document_id": external["document_id"], "document_version": 1,
+                    "title": "External manual", "summary": "Public safety reference", "source_ref_ids": [external["id"]],
+                    "knowledge_item_ids": ["kn:safety_policy"]})
         if invented_knowledge and template_name == "competency_mapper_prompt.j2":
             if calls.count(template_name) == 1:
                 import copy
-                invalid = copy.deepcopy(scripts[template_name])
+                invalid = copy.deepcopy(payload)
                 invalid["source_knowledge_item_ids"] = ["kn:invented_fact"]
                 invalid["knowledge"][0]["source_knowledge_item_ids"] = ["kn:invented_fact"]
                 return invalid
             assert "Unknown source_knowledge_item_ids" in kwargs["repair_feedback"]
-        return scripts[template_name]
+        return payload
 
     runtime = AgentRuntime(
         db=db_session,
@@ -434,6 +473,7 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
             "lesson_count": 1,
             "module_tests_enabled": True,
             "final_test_enabled": True,
+            "web_search_enabled": web_enabled,
         },
         source_catalog=[source],
     )
@@ -454,7 +494,22 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
     assert result.qa_summary["verdict"] == "pass"
     assert sum(item["type"] == "lesson" for item in result.nodes) == 1
     assert sum(item["type"] == "test" for item in result.nodes) == 2
-    assert db_session.query(AgentArtifact).count() == 6
+    assert db_session.query(AgentArtifact).filter(AgentArtifact.agent != "web_search").count() == 6
+    assert db_session.query(AgentArtifact).filter_by(agent="web_search").one().payload["status"] == ("completed" if web_enabled else "disabled")
+    if web_enabled:
+        from app.services.course_transfer import course_markdown
+        from app.services.pdf_document import build_pdf
+        from io import BytesIO
+        from pypdf import PdfReader
+        lesson = next(node for node in result.nodes if node["type"] == "lesson")
+        assert "https://example.com/safety" in lesson["content"]
+        exported = {"course": {"title": "Safety", "description": "Public reference"},
+            "modules": [{"title": "Safety", "lessons": [{"title": "Safety check", "content": lesson["content"]}]}], "assessments": []}
+        assert b"https://example.com/safety" in course_markdown(exported, False)
+        pdf = PdfReader(BytesIO(build_pdf(exported, {}, {"revision": 1, "published_at": "2026-10-22",
+            "snapshot_sha256": "a" * 64, "includes_answer_keys": False}, {})))
+        assert any(str(annotation.get_object().get("/A", {}).get("/URI", "")) == "https://example.com/safety"
+            for page in pdf.pages for annotation in page.get("/Annots", []))
 
 
 def test_agent_artifact_and_update_proposal_endpoints_are_owner_scoped(

@@ -53,6 +53,10 @@ def build_source_catalog(documents: Iterable[Any], *, max_chars: int) -> list[di
                     "quote": included,
                 }
             )
+            if getattr(document, "source_type", None) == "web_search":
+                provenance = chunk.metadata_json or {}
+                result[-1].update({key: provenance.get(key) for key in (
+                    "source_type", "source_url", "source_title", "retrieved_at", "evidence_kind")})
             remaining -= len(included)
             if queue:
                 next_round.append(queue)

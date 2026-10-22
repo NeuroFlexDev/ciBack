@@ -10,6 +10,7 @@ from app.schemas.course_generation_settings import CourseGenerationSettingsUpdat
 class GenerationRunCreate(BaseModel):
     settings: CourseGenerationSettingsUpdate
     document_ids: list[int] = Field(min_length=1)
+    web_search_enabled: bool = True
     request_id: str | None = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
     model_config = ConfigDict(extra="forbid")
@@ -69,6 +70,7 @@ class GenerationRunStatusOut(GenerationRunOut):
     stages: list[GenerationStageOut]
     status_error: GenerationStatusError | None
     status_notice: str | None = None
+    web_search: dict[str, Any] | None = None
     retryable: bool
     attempt: int
     retry_of_run_id: int | None
