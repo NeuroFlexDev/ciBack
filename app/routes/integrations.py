@@ -11,8 +11,9 @@ from app.models.course import Course
 from app.models.user import User
 from app.services.integration_access import SCOPES, integration_owner, require_scope
 from app.services.integration_http import validate_endpoint
-from app.services.integration_secrets import seal
-from app.services.organization_access import audit, member_ids, lock_org
+from app.services.integration_secrets import seal, unseal
+from app.services.organization_access import audit, member_ids, lock_org, lock_member
+from app.services.tenant_lifecycle import WEBHOOK_FIELDS, state_token, require_state
 from app.services.outbox_service import EVENT_TYPES
 
 router = APIRouter()
@@ -103,9 +104,29 @@ class WebhookInput(BaseModel):
         return sorted(set(value))
 
 
+class WebhookUpdate(WebhookInput):
+    expected_state: str | None = Field(default=None, min_length=64, max_length=64)
+    enabled: bool
+
+
+def webhook_out(row):
+    return {**{key: getattr(row, key) for key in ('id', 'url', 'events', 'enabled', 'created_at')},
+            'state_token': state_token(row, WEBHOOK_FIELDS)}
+
+
+def lock_webhook(db, user, endpoint_id):
+    from app.services.learning_service import require_manager
+    actor = lock_member(db, user.id, expected_auth_version=user.auth_version)
+    org_id = require_manager(db, actor)
+    row = db.query(WebhookEndpoint).filter_by(id=endpoint_id, organization_id=org_id).with_for_update().populate_existing().first()
+    if not row:
+        raise HTTPException(404, 'Подключение не найдено')
+    return row
+
+
 @router.get("/integrations/webhooks")
 def webhooks(db:Session=Depends(get_db),user=Depends(integration_owner)):
-    return {"events":sorted(EVENT_TYPES),"items":[{key:getattr(row,key) for key in ("id","url","events","enabled","created_at")} for row in db.query(WebhookEndpoint).filter_by(organization_id=user.organization_id).order_by(WebhookEndpoint.id.desc())]}
+    return {"events":sorted(EVENT_TYPES),"items":[webhook_out(row) for row in db.query(WebhookEndpoint).filter_by(organization_id=user.organization_id).order_by(WebhookEndpoint.id.desc())]}
 
 
 @router.post("/integrations/webhooks",status_code=201)
@@ -117,13 +138,43 @@ def create_webhook(payload:WebhookInput,db:Session=Depends(get_db),user=Depends(
     except RuntimeError:raise HTTPException(503,"Оператор ещё не настроил шифрование интеграций")
     row=WebhookEndpoint(organization_id=user.organization_id,url=payload.url,events=payload.events,secret_encrypted=encrypted)
     db.add(row);db.flush();audit(db,user,"webhook.created","webhook",row.id,organization_id=user.organization_id)
-    db.commit();return {"id":row.id,"url":row.url,"events":row.events,"secret":secret,"enabled":row.enabled}
+    db.commit();return {**webhook_out(row), "secret": secret}
+
+
+@router.put('/integrations/webhooks/{endpoint_id}')
+def update_webhook(endpoint_id: int, payload: WebhookUpdate, db: Session = Depends(get_db), user=Depends(integration_owner)):
+    row = lock_webhook(db, user, endpoint_id)
+    require_state(row, WEBHOOK_FIELDS, payload.expected_state)
+    try:
+        validate_endpoint(payload.url)
+    except (ValueError, OSError):
+        raise HTTPException(422, 'Укажите доступный HTTPS-адрес внешнего сервиса')
+    # Legacy messages referenced a mutable endpoint. Pin their original address
+    # and signature key before editing so queued/retried events cannot move to
+    # a different recipient. New messages already carry this encrypted snapshot.
+    pending = db.query(OutboundMessage).filter(
+        OutboundMessage.organization_id == row.organization_id,
+        OutboundMessage.kind == 'webhook',
+        OutboundMessage.deduplication_key.startswith(f'webhook:{row.id}:'),
+        OutboundMessage.status.in_(['pending', 'sending', 'failed'])).with_for_update().all()
+    for message in pending:
+        saved = unseal(message.payload_encrypted)
+        if saved.get('endpoint_id') != row.id:
+            raise HTTPException(409, 'Не удалось проверить исходного получателя ожидающей доставки')
+        if 'endpoint_url' not in saved:
+            message.payload_encrypted = seal({**saved, 'endpoint_url': row.url,
+                                               'endpoint_secret': unseal(row.secret_encrypted)})
+    row.url, row.events, row.enabled = payload.url, payload.events, payload.enabled
+    audit(db, user, 'webhook.updated', 'webhook', row.id, organization_id=row.organization_id,
+          events=payload.events, enabled=payload.enabled, existing_delivery_destinations_preserved=True)
+    db.commit()
+    return webhook_out(row)
 
 
 @router.delete("/integrations/webhooks/{endpoint_id}")
-def disable_webhook(endpoint_id:int,db:Session=Depends(get_db),user=Depends(integration_owner)):
-    row=db.query(WebhookEndpoint).filter_by(id=endpoint_id,organization_id=user.organization_id).first()
-    if not row:raise HTTPException(404,"Подключение не найдено")
+def disable_webhook(endpoint_id:int,expected_state: str | None = Query(default=None, min_length=64, max_length=64),db:Session=Depends(get_db),user=Depends(integration_owner)):
+    row=lock_webhook(db,user,endpoint_id)
+    require_state(row, WEBHOOK_FIELDS, expected_state)
     row.enabled=False;audit(db,user,"webhook.disabled","webhook",row.id,organization_id=user.organization_id)
     db.commit();return {"ok":True}
 

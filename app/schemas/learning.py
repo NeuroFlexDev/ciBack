@@ -72,6 +72,22 @@ class DepartmentInput(StrictInput):
     parent_id: int | None = Field(default=None, gt=0)
 
 
+class LifecycleInput(StrictInput):
+    expected_state: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class GroupUpdate(GroupInput):
+    expected_state: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class DepartmentUpdate(DepartmentInput):
+    expected_state: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class RevisionInput(StrictInput):
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 class PersonInput(StrictInput):
     department_id: int | None = Field(default=None, gt=0)
     position: str = Field(default='', max_length=200)

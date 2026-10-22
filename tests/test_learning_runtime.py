@@ -289,7 +289,8 @@ def test_department_cycles_manager_scope_and_no_self_escalation(client, db_sessi
     h = headers(world['owner'])
     d = client.post('/api/team/departments', headers=h, json={'name': 'Engineering'}).json()['id']
     child = client.post('/api/team/departments', headers=h, json={'name': 'Team', 'parent_id': d}).json()['id']
-    assert client.put(f'/api/team/departments/{d}', headers=h, json={'name': 'Engineering', 'parent_id': child}).status_code == 422
+    current = next(item for item in client.get('/api/team/departments', headers=h).json()['items'] if item['id'] == d)
+    assert client.put(f'/api/team/departments/{d}', headers=h, json={'name': 'Engineering', 'parent_id': child, 'expected_state': current['state_token']}).status_code == 422
     assert client.post(f'/api/team/members/{world["admin"].id}/roles', headers=headers(world['admin']), json={'role': 'admin'}).status_code == 403
     assert client.post(f'/api/team/members/{world["learner"].id}/roles', headers=headers(world['admin']), json={'role': 'admin'}).status_code == 403
     assert client.post('/api/courses/drafts', headers=headers(world['learner'])).status_code == 403

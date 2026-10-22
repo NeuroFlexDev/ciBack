@@ -101,13 +101,13 @@ def test_team_manager_isolation_and_last_owner(client,db_session,admin):
     payload['organization_id']=a.id
     assert client.post('/api/team/invitations',headers=headers(ordinary),json=payload).status_code==403
     assert client.put('/api/team/members/'+str(other.id),headers=headers(owner),json={'is_active':False,'organization_id':a.id}).status_code==404
-    assert client.put('/api/admin/users/'+str(owner.id),headers=headers(admin),json={'is_active':False,'organization_id':a.id}).status_code==409
-    assert client.put('/api/admin/users/'+str(admin.id),headers=headers(admin),json={'is_active':False}).status_code==409
+    assert client.put('/api/admin/users/'+str(owner.id),headers=headers(admin),json={'is_active':False,'organization_id':a.id,'expected_auth_version':owner.auth_version}).status_code==409
+    assert client.put('/api/admin/users/'+str(admin.id),headers=headers(admin),json={'is_active':False,'expected_auth_version':admin.auth_version}).status_code==409
 
 
 def test_disable_user_invalidates_existing_session(client,db_session,admin):
     o=org(db_session);u=member(db_session,o);h=headers(u)
-    r=client.put('/api/admin/users/'+str(u.id),headers=headers(admin),json={'is_active':False,'organization_id':o.id})
+    r=client.put('/api/admin/users/'+str(u.id),headers=headers(admin),json={'is_active':False,'organization_id':o.id,'expected_auth_version':u.auth_version})
     assert r.status_code==200,r.text
     assert client.get('/api/auth/me',headers=h).status_code==401
     assert client.post('/api/auth/login',json={'email':u.email,'password':'member-password-123'}).status_code==401
@@ -116,7 +116,8 @@ def test_disable_user_invalidates_existing_session(client,db_session,admin):
 def test_suspend_org_revokes_member_access_without_deleting_data(client,db_session,admin):
     o=org(db_session);u=member(db_session,o)
     c=Course(name='Kept',owner_id=u.id);db_session.add(c);db_session.commit()
-    assert client.put('/api/admin/organizations/'+str(o.id),headers=headers(admin),json={'name':'Paused','is_active':False}).status_code==200
+    state=client.get('/api/admin/organizations/'+str(o.id),headers=headers(admin)).json()['state_token']
+    assert client.put('/api/admin/organizations/'+str(o.id),headers=headers(admin),json={'name':'Paused','is_active':False,'expected_state':state}).status_code==200
     assert client.get('/api/courses/',headers=headers(u)).status_code==403
     assert db_session.get(Course,c.id).name=='Kept'
     assert client.get('/api/admin/overview',headers=headers(admin)).status_code==200

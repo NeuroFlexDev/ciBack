@@ -29,7 +29,8 @@ def enqueue_event(db, organization_id, event_type, event_id, data):
         if any(isinstance(item, OutboundMessage) and item.deduplication_key == key for item in db.new) or db.query(OutboundMessage.id).filter_by(deduplication_key=key).first():
             continue
         db.add(OutboundMessage(id=str(uuid.uuid4()), organization_id=organization_id, kind="webhook",
-            deduplication_key=key, payload_encrypted=seal({"endpoint_id":endpoint.id, "event":event}),
+            deduplication_key=key, payload_encrypted=seal({"endpoint_id":endpoint.id,
+                "endpoint_url": endpoint.url, "endpoint_secret": unseal(endpoint.secret_encrypted), "event":event}),
             available_at=datetime.utcnow()))
 
 
@@ -63,13 +64,18 @@ def deliver(db, row):
     if row.kind == "mail":
         mail_service.send_account_mail(payload["recipient"], payload["subject"], payload["text"], row.id)
     elif row.kind == "webhook":
-        endpoint = db.get(WebhookEndpoint, payload["endpoint_id"])
+        endpoint = db.execute(select(WebhookEndpoint).where(WebhookEndpoint.id == payload['endpoint_id'])
+            .with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
         if not endpoint or not endpoint.enabled or endpoint.organization_id != row.organization_id:
             return "cancelled"
+        # An edit may have pinned a legacy message while this worker waited for
+        # the endpoint lock. Reload its encrypted snapshot before choosing a URL.
+        db.refresh(row, attribute_names=['payload_encrypted'])
+        payload = unseal(row.payload_encrypted)
         body = json.dumps(payload["event"], separators=(",", ":"), ensure_ascii=False).encode()
         timestamp = str(int(datetime.now(timezone.utc).timestamp()))
-        signature = hmac.new(unseal(endpoint.secret_encrypted).encode(), timestamp.encode()+b"."+body, hashlib.sha256).hexdigest()
-        integration_http.request("POST", endpoint.url, body, {"Content-Type":"application/json", "X-Lernium-Event-ID": payload["event"]["id"],
+        signature = hmac.new(payload.get('endpoint_secret', unseal(endpoint.secret_encrypted)).encode(), timestamp.encode()+b"."+body, hashlib.sha256).hexdigest()
+        integration_http.request("POST", payload.get('endpoint_url', endpoint.url), body, {"Content-Type":"application/json", "X-Lernium-Event-ID": payload["event"]["id"],
             "X-Lernium-Signature":f"t={timestamp},v1={signature}", "Idempotency-Key":row.deduplication_key})
     elif row.kind == "lti_score":
         from app.services.lti_service import deliver_score
