@@ -72,6 +72,10 @@ def test_owner_manager_employee_position_course_flow(client, db_session, company
     assert client.post(endpoint, headers=headers(manager), json={'expected_revision': 2}).json()['created'] == 0
     assignment = db_session.query(LearningAssignment).one()
     assert assignment.user_id == employee.id and assignment.course_version_id == version.id
+    assert client.get('/api/team/permissions', headers=headers(manager)).json()['can_report'] is True
+    assert client.get('/api/team/results', headers=headers(manager)).json()['metrics']['assigned'] == 1
+    assert client.get('/api/team/results', headers=headers(users['outsider'])).json()['items'] == []
+    assert client.get('/api/team/results', headers=headers(employee)).json()['items'] == []
 
 
 def test_tenant_roles_revisions_and_archive(client, db_session, company):

@@ -50,7 +50,7 @@ def permissions(db: Session = Depends(get_db), user: User = Depends(get_current_
             'can_manage_business': business,
             'can_author': business or not user.organization_id or user.organization_role == 'author' or any(g.role == 'author' for g in grants),
             'can_review': any(g.role == 'reviewer' for g in grants),
-            'can_report': bool(user.organization_id and (svc.is_manager(db, user) or any(g.role in {'manager', 'reviewer'} for g in grants))),
+            'can_report': business or bool(user.organization_id and (svc.is_manager(db, user) or any(g.role in {'manager', 'reviewer'} for g in grants))),
             'grants': [{k: getattr(g, k) for k in ['id', 'role', 'scope_type', 'scope_id']} for g in grants]}
 
 
