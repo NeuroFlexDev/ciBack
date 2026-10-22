@@ -197,6 +197,8 @@ services:
       - worker
       - generation
       - --with-scheduler
+      - --worker-ttl
+      - "120"
       - --url
       - redis://127.0.0.1:6379/0
     environment: *backend-environment
