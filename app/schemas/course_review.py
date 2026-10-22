@@ -29,6 +29,7 @@ class ModuleTimelineItem(BaseModel):
 
 class CourseReviewStructure(BaseModel):
     course_id: int
+    position_id: int | None = None
     content_revision: int = 1
     title: str
     description: str

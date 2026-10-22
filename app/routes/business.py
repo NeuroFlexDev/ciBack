@@ -84,6 +84,14 @@ class PositionCourse(BaseModel):
     expected_position_revision: int = Field(ge=1)
 
 
+class PositionRegulation(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=200)
+    goal: str = Field(min_length=1, max_length=2000)
+    language: Literal['ru', 'en'] = 'ru'
+    expected_position_revision: int = Field(ge=1)
+
+
 def position_out(db, row):
     employees = db.query(func.count(User.id)).join(LearningPerson, LearningPerson.user_id == User.id).filter(
         User.organization_id == row.organization_id, User.is_active.is_(True), LearningPerson.position_id == row.id).scalar()
@@ -123,6 +131,12 @@ def create_position(payload: PositionInput, db: Session = Depends(get_db), user=
     audit(db, user, 'business.position_created', 'position', row.id, organization_id=org.id)
     db.commit()
     return position_out(db, row)
+
+
+@router.get('/positions/{position_id}')
+def get_position(position_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    org = require_business(db, user)
+    return position_out(db, position_for(db, org.id, position_id, active=False))
 
 
 @router.put('/positions/{position_id}')
@@ -260,17 +274,31 @@ def revoke_invitation(invitation_id: int, db: Session = Depends(get_db), user=De
     return {'ok': True}
 
 
+@router.get('/positions/{position_id}/regulations')
 @router.get('/positions/{position_id}/courses')
 def position_courses(position_id: int, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
                      db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user)
     position_for(db, org.id, position_id, active=False)
     query = db.query(Course).filter_by(organization_id=org.id, position_id=position_id, is_deleted=False)
-    return {'total': query.count(), 'items': [{k: getattr(c, k) for k in ['id', 'name', 'status', 'publication_status']} for c in query.order_by(Course.id.desc()).offset(offset).limit(limit)]}
+    return {'total': query.count(), 'items': [{k: getattr(c, k) for k in ['id', 'name', 'description', 'status', 'publication_status', 'content_revision']} for c in query.order_by(Course.id.desc()).offset(offset).limit(limit)]}
 
 
 @router.post('/positions/{position_id}/courses', status_code=201)
 def create_position_course(position_id: int, payload: PositionCourse, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return _create_position_material(position_id, payload, db, user)
+
+
+@router.post('/positions/{position_id}/regulations', status_code=201)
+def create_position_regulation(position_id: int, payload: PositionRegulation,
+                               db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # A regulation is one document. Existing course storage and published
+    # snapshots remain compatible; the manager never configures a curriculum.
+    material = PositionCourse(**payload.model_dump(), lesson_count=1)
+    return _create_position_material(position_id, material, db, user, regulation=True)
+
+
+def _create_position_material(position_id, payload, db, user, *, regulation=False):
     org = require_business(db, user, lock=True)
     position = position_for(db, org.id, position_id)
     revision(position, payload.expected_position_revision)
@@ -279,13 +307,29 @@ def create_position_course(position_id: int, payload: PositionCourse, db: Sessio
     db.add(course); db.flush()
     from app.services.course_generation_settings_service import CourseGenerationSettingsService
     settings = CourseGenerationSettingsUpdate(title=payload.title, goal=payload.goal, target_audience=position.name,
-        difficulty='basic', language=payload.language, lesson_count=payload.lesson_count, module_tests_enabled=True, final_test_enabled=True)
+        difficulty='basic', language=payload.language, lesson_count=payload.lesson_count, module_tests_enabled=not regulation, final_test_enabled=True)
     CourseGenerationSettingsService.upsert(db, course.id, user.id, settings, commit=False)
+    if regulation:
+        # One editable document, created atomically with its initial history.
+        # Keep the established storage so publication and assignments retain IDs.
+        from app.models.module import Module
+        from app.models.lesson import Lesson
+        from app.models.theory import Theory
+        from app.services.course_editor_service import CourseEditorService
+        module = Module(course_id=course.id, title=payload.title, position=0, revision=1)
+        db.add(module); db.flush()
+        lesson = Lesson(module_id=module.id, title=payload.title, position=0, revision=1)
+        db.add(lesson); db.flush()
+        db.add(Theory(lesson_id=lesson.id, content='')); db.flush()
+        CourseEditorService._module_snapshot(db, module, user.id)
+        CourseEditorService._lesson_snapshot(db, lesson, user.id)
     audit(db, user, 'business.course_created', 'course', course.id, organization_id=org.id, position_id=position.id, position_revision=position.revision)
     db.commit()
-    return {'course_id': course.id, 'position_id': position.id, 'url': f'/express?course={course.id}&step=1'}
+    return {'course_id': course.id, 'position_id': position.id,
+            'url': f'/express?course={course.id}&step=1&position={position.id}' if regulation else f'/express?course={course.id}&step=1'}
 
 
+@router.post('/positions/{position_id}/regulations/{course_id}/assign', status_code=201)
 @router.post('/positions/{position_id}/courses/{course_id}/assign', status_code=201)
 def assign_course(position_id: int, course_id: int, payload: RevisionInput, db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user, lock=True)
@@ -293,10 +337,10 @@ def assign_course(position_id: int, course_id: int, payload: RevisionInput, db: 
     revision(position, payload.expected_revision)
     course = db.query(Course).filter_by(id=course_id, organization_id=org.id, position_id=position.id, is_deleted=False).first()
     if not course or course.publication_status != 'published':
-        raise HTTPException(409, 'Сначала опубликуйте курс этой должности')
+        raise HTTPException(409, 'Сначала опубликуйте регламент этой должности')
     version = db.query(CourseVersion).filter_by(course_id=course.id, publication_status='published').order_by(CourseVersion.revision.desc()).first()
     if not version:
-        raise HTTPException(409, 'Опубликованная версия курса не найдена')
+        raise HTTPException(409, 'Опубликованная версия регламента не найдена')
     learning.snapshot_for(db, version.id)
     config = learning.settings_for(db, org.id)
     if config.features.get('learning') is False:
