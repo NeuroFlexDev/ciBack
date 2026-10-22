@@ -270,11 +270,16 @@ class PipelineService:
         from app.services.web_search_service import status as web_search_status
         data["web_search"] = web_search_status(db, run.id)
         from app.ai.offline import GENERATION_PAUSED, GENERATION_QUEUED
-        data["status_notice"] = (GENERATION_PAUSED if run.status == "paused" else
+        system_pause_notices = {
+            "worker_result_unknown": "Рабочий процесс не подтвердил завершение. Автоматический платный повтор остановлен; готовые этапы сохранены. Вы можете продолжить генерацию.",
+            "time_limit": "Достигнут лимит времени генерации. Готовые этапы сохранены; вы можете продолжить генерацию.",
+        }
+        system_pause = run.status == "paused" and run.error_code in system_pause_notices
+        data["status_notice"] = (system_pause_notices.get(run.error_code, GENERATION_PAUSED) if run.status == "paused" else
             GENERATION_QUEUED if run.status == "queued" and run.error_code == "ai_unavailable" else None)
         if data["status_notice"]:
             data["error"] = None
-        if run.cancel_requested:
+        if run.cancel_requested and not system_pause:
             data["status_notice"] = ("Генерация остановлена. Завершённые этапы сохранены; можно продолжить." if run.status == "paused"
                                      else "Останавливаем генерацию после текущего запроса AI. Завершённые этапы сохраняются.")
         data["stages"] = []
@@ -364,9 +369,12 @@ class PipelineService:
             )
         # Resume the same durable checkpoint and cost ledger for every retryable
         # failure. A worker restart is not a new course or a new monthly launch.
+        from app.services.ai_resources import prepare_generation_retry
+        prepare_generation_retry(db, original)
         original.status = GenerationRunStatus.QUEUED.value
         original.cancel_requested = False
         original.queued_at = datetime.utcnow()
+        original.started_at = None
         original.finished_at = None
         original.error = original.error_code = original.error_message = None
         original.attempt += 1

@@ -24,6 +24,7 @@ from app.schemas.auth import AuthCredentials, UserResponse, AuthResponse
 from app.services.auth_service import get_current_user, require_admin
 from app.services.legal_service import record_receipt, require_current_version
 from app.services.organization_access import audit, check_course_limit, check_seat, lock_org, lock_member, lock_members, member_ids, seats
+from app.services.admin_management import ORG_FIELDS, REQUEST_FIELDS, check_state, state_token, course_out
 
 router = APIRouter()
 
@@ -37,6 +38,7 @@ class OrgInput(BaseModel):
     course_limit: int = Field(default=50, ge=1, le=1000000)
     source_limit: int = Field(default=20, ge=1, le=1000)
     generation_limit: int = Field(default=100, ge=0, le=1000000)
+    expected_state: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class InviteInput(BaseModel):
@@ -56,6 +58,15 @@ class UserChange(BaseModel):
     is_active: StrictBool
     organization_id: int | None = Field(default=None, gt=0)
     organization_role: Literal['owner','admin','author','reviewer','manager','member'] = 'member'
+    full_name: str | None = Field(default=None, min_length=1, max_length=160)
+    expected_auth_version: int | None = Field(default=None, ge=0)
+
+    @field_validator('full_name')
+    @classmethod
+    def nonblank_name(cls, value):
+        if value is not None and not value.strip():
+            raise ValueError('Укажите имя')
+        return value.strip() if value is not None else None
 
 
 class TokenInput(BaseModel):
@@ -74,13 +85,13 @@ class InviteAccept(TokenInput):
 def org_dict(db, org):
     users = db.query(User).filter(User.organization_id == org.id)
     return {**{key:getattr(org,key) for key in ['id','name','kind','is_active','seat_limit','course_limit','source_limit','generation_limit','created_at']},
-            'active_users':users.filter(User.is_active.is_(True)).count(), 'reserved_seats':seats(db,org.id),
+            'state_token':state_token(org,ORG_FIELDS), 'active_users':users.filter(User.is_active.is_(True)).count(), 'reserved_seats':seats(db,org.id),
             'courses':db.query(Course).filter(Course.organization_id == org.id, Course.is_deleted.is_(False)).count()}
 
 
 def user_dict(user):
     return {**UserResponse.model_validate(user).model_dump(), 'is_active':user.is_active,
-            'created_at':user.created_at, 'organization_name':user.organization.name if user.organization else None}
+            'auth_version':user.auth_version, 'created_at':user.created_at, 'organization_name':user.organization.name if user.organization else None}
 
 
 def invitation_dict(row):
@@ -149,15 +160,18 @@ def organizations(q: str = Query('', max_length=100), offset:int=Query(0,ge=0), 
 
 @router.post('/admin/organizations', status_code=201)
 def create_org(payload:OrgInput, db:Session=Depends(get_db), admin:User=Depends(require_admin)):
-    row=Organization(**payload.model_dump());db.add(row);db.flush()
+    row=Organization(**payload.model_dump(exclude={'expected_state'}));db.add(row);db.flush()
     audit(db,admin,'organization.created','organization',row.id)
     db.commit();return org_dict(db,row)
 
 
 @router.put('/admin/organizations/{org_id}')
 def update_org(org_id:int, payload:OrgInput, db:Session=Depends(get_db), admin:User=Depends(require_admin)):
+    if payload.expected_state is None:
+        raise HTTPException(409, {'code':'client_refresh_required','message':'Обновите страницу админки и сравните черновик с текущей записью перед сохранением.'})
     row=lock_org(db,org_id)
-    for key,value in payload.model_dump().items():setattr(row,key,value)
+    check_state(row,ORG_FIELDS,payload.expected_state)
+    for key,value in payload.model_dump(exclude={'expected_state'}).items():setattr(row,key,value)
     audit(db,admin,'organization.updated','organization',row.id,fields=list(payload.model_fields_set))
     # Existing data survives a reduced limit. New operations remain blocked until usage fits.
     db.commit();return org_dict(db,row)
@@ -176,6 +190,8 @@ def change_user(db, actor, target, payload):
     identities=lock_members(db, [actor.id, target.id], extra_org_ids=(payload.organization_id,),
         allow_inactive=True, expected_auth_versions={actor.id: actor.auth_version})
     actor,target=identities[actor.id],identities[target.id]
+    if payload.expected_auth_version is not None and target.auth_version != payload.expected_auth_version:
+        raise HTTPException(409, 'Пользователь изменён другим оператором. Обновите данные.')
     if not actor.is_admin:
         require_team_owner(actor,db)
     if not actor.is_admin and target.organization_id!=actor.organization_id:
@@ -209,6 +225,8 @@ def change_user(db, actor, target, payload):
         if person:db.delete(person)
     target.is_active=payload.is_active;target.organization_id=payload.organization_id
     target.organization_role=payload.organization_role if payload.organization_id else 'member'
+    if payload.full_name is not None:
+        target.full_name=payload.full_name
     target.auth_version+=1
     audit(db,actor,'user.access_changed','user',target.id,organization_id=target.organization_id,role=target.organization_role,is_active=target.is_active)
     db.commit();return user_dict(target)
@@ -216,6 +234,8 @@ def change_user(db, actor, target, payload):
 
 @router.put('/admin/users/{user_id}')
 def update_user(user_id:int,payload:UserChange,db:Session=Depends(get_db),admin:User=Depends(require_admin)):
+    if payload.expected_auth_version is None:
+        raise HTTPException(409, {'code':'client_refresh_required','message':'Обновите страницу админки и сравните черновик с текущей записью перед сохранением.'})
     target=db.get(User,user_id)
     if not target:raise HTTPException(404,'Пользователь не найден')
     return change_user(db,admin,target,payload)
@@ -411,10 +431,12 @@ def admin_overview(db:Session=Depends(get_db),admin:User=Depends(require_admin))
 
 
 @router.get('/admin/courses')
-def admin_courses(unassigned:bool=False,offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),db:Session=Depends(get_db),admin:User=Depends(require_admin)):
-    query=db.query(Course).filter(Course.is_deleted.is_(False))
+def admin_courses(unassigned:bool=False, archived:bool=False, q:str=Query('',max_length=100), organization_id:int|None=None,offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),db:Session=Depends(get_db),admin:User=Depends(require_admin)):
+    query=db.query(Course).filter(Course.is_deleted.is_(archived))
     if unassigned:query=query.filter(Course.owner_id.is_(None))
-    return {'total':query.count(),'items':[{'id':c.id,'title':c.name,'owner_id':c.owner_id,'status':c.status,'publication_status':c.publication_status} for c in query.order_by(Course.id.desc()).offset(offset).limit(limit)]}
+    if q:query=query.filter(Course.name.icontains(q,autoescape=True))
+    if organization_id is not None:query=query.filter(Course.organization_id==organization_id)
+    return {'total':query.count(),'items':[course_out(c) for c in query.order_by(Course.id.desc()).offset(offset).limit(limit)]}
 
 
 class AssignOwner(BaseModel):
@@ -423,28 +445,42 @@ class AssignOwner(BaseModel):
 
 @router.post('/admin/courses/{course_id}/assign-owner')
 def assign_owner(course_id:int,payload:AssignOwner,db:Session=Depends(get_db),admin:User=Depends(require_admin)):
-    course=db.execute(select(Course).where(Course.id==course_id,Course.is_deleted.is_(False)).with_for_update()).scalar_one_or_none()
-    if not course:raise HTTPException(404,'Курс не найден')
+    from app.services.admin_management import owner_for_new_course, locked_course, require_course_idle
+    from app.database.db import Base
+    initial=db.get(Course,course_id)
+    if not initial:raise HTTPException(404,'Курс не найден')
+    if initial.owner_id is not None:raise HTTPException(409,'У курса уже есть владелец. Перенос чужих материалов через эту операцию запрещён.')
+    org_id=initial.organization_id
+    user=owner_for_new_course(db,admin,payload.user_id,extra_org_ids=(org_id,))
+    db.refresh(initial)
+    if initial.organization_id!=org_id or initial.owner_id is not None:raise HTTPException(409,'Владелец курса изменился. Обновите данные.')
+    course=locked_course(db,admin,course_id)
+    if course.is_deleted:raise HTTPException(409,'Сначала восстановите курс из архива')
     if course.owner_id is not None:raise HTTPException(409,'У курса уже есть владелец. Перенос чужих материалов через эту операцию запрещён.')
-    user=db.get(User,payload.user_id)
-    if not user or not user.is_active:raise HTTPException(422,'Выберите действующий аккаунт')
-    if any(db.query(model).filter(model.course_id==course.id).first() for model in [Document, GenerationRun, CourseGraph, Chat]):
+    if course.organization_id is not None and course.organization_id!=user.organization_id:
+        raise HTTPException(409,'Курс принадлежит другой организации')
+    require_course_idle(db,course)
+    # Any direct course child makes this a content transfer, including manually
+    # authored modules/final tests and images without a graph or uploaded source.
+    related = [mapper.class_ for mapper in Base.registry.mappers if 'course_id' in mapper.columns]
+    if any(db.query(model).filter(model.course_id==course.id).first() for model in related):
         raise HTTPException(409,'Курс содержит связанные данные. Нужен отдельный перенос с проверкой владельцев.')
-    check_course_limit(db,user.id)
-    course.owner_id=user.id;audit(db,admin,'course.owner_assigned','course',course.id,user_id=user.id);db.commit()
+    course.owner_id=user.id;course.organization_id=user.organization_id
+    audit(db,admin,'course.owner_assigned','course',course.id,user_id=user.id,organization_id=course.organization_id);db.commit()
     return {'ok':True}
 
 
 @router.get('/admin/requests')
-def requests(status:Literal['open','closed']='open',offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),db:Session=Depends(get_db),admin:User=Depends(require_admin)):
+def requests(status:Literal['open','closed','archived']='open',offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),db:Session=Depends(get_db),admin:User=Depends(require_admin)):
     query=db.query(LegalRequest).filter(LegalRequest.status==status)
-    return {'total':query.count(),'items':[{key:getattr(r,key) for key in ['reference','purpose','email','name','message','status','created_at','closed_at']} for r in query.order_by(LegalRequest.created_at.desc()).offset(offset).limit(limit)]}
+    return {'total':query.count(),'items':[{**{key:getattr(r,key) for key in ['reference','purpose','email','name','message','status','created_at','closed_at']},'state_token':state_token(r,REQUEST_FIELDS)} for r in query.order_by(LegalRequest.created_at.desc()).offset(offset).limit(limit)]}
 
 
 @router.post('/admin/requests/{reference}/close')
 def close_request(reference:str,db:Session=Depends(get_db),admin:User=Depends(require_admin)):
-    row=db.get(LegalRequest,reference)
+    row=db.query(LegalRequest).filter_by(reference=reference).with_for_update().first()
     if not row:raise HTTPException(404,'Обращение не найдено')
+    if row.status=='archived':raise HTTPException(409,'Сначала восстановите обращение из архива')
     if row.status!='closed':
         row.status='closed';row.closed_at=datetime.utcnow();audit(db,admin,'request.closed','request',reference)
     db.commit();return {'ok':True}
@@ -454,3 +490,9 @@ def close_request(reference:str,db:Session=Depends(get_db),admin:User=Depends(re
 def audit_log(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),db:Session=Depends(get_db),admin:User=Depends(require_admin)):
     query=db.query(AdminEvent)
     return {'total':query.count(),'items':[{key:getattr(r,key) for key in ['id','actor_id','action','target_type','target_id','details','created_at']} for r in query.order_by(AdminEvent.id.desc()).offset(offset).limit(limit)]}
+
+
+# Kept separate from authentication/invitation acceptance to make the operator
+# lifecycle surface reviewable. Import after shared invitation helpers exist.
+from app.routes.admin_management import router as management_router
+router.include_router(management_router)

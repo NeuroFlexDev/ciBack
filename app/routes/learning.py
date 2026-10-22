@@ -18,8 +18,15 @@ from app.schemas.learning import *
 from app.services.auth_service import get_current_user, require_admin
 from app.services.organization_access import audit, lock_org, lock_member, lock_members
 from app.services import learning_service as svc
+from app.services.tenant_lifecycle import GROUP_FIELDS, DEPARTMENT_FIELDS, state_token, require_state, require_client_version
 
 router = APIRouter()
+
+
+@router.get('/team/management-capabilities')
+def management_capabilities(user: User = Depends(get_current_user)):
+    svc.organization(user)
+    return {'version': 1, 'tenant_archive_restore': True, 'webhook_update': True}
 
 
 @router.get('/learning/dashboard')
@@ -98,14 +105,17 @@ def update_delivery(org_id: int, payload: DeliveryInput, db: Session = Depends(g
 
 def group_out(db, row):
     return {'id': row.id, 'name': row.name, 'description': row.description, 'is_archived': row.is_archived,
+            'state_token': state_token(row, GROUP_FIELDS),
             'user_ids': [x.user_id for x in db.query(LearningGroupMember).filter_by(group_id=row.id)],
             'staff': [{k: getattr(x, k) for k in ['id', 'user_id', 'role']} for x in db.query(LearningRoleGrant).filter_by(organization_id=row.organization_id, scope_type='group', scope_id=row.id)]}
 
 
 @router.get('/team/groups')
-def groups(q: str = Query('', max_length=100), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def groups(q: str = Query('', max_length=100), archived: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
-    query = db.query(LearningGroup).filter_by(organization_id=org_id, is_archived=False)
+    if archived:
+        svc.require_manager(db, user)
+    query = db.query(LearningGroup).filter_by(organization_id=org_id, is_archived=archived)
     if q:
         query = query.filter(LearningGroup.name.icontains(q, autoescape=True))
     rows = query.order_by(LearningGroup.name, LearningGroup.id).all()
@@ -127,8 +137,10 @@ def create_group(payload: GroupInput, db: Session = Depends(get_db), user: User 
 
 
 @router.put('/team/groups/{group_id}')
-def update_group(group_id: int, payload: GroupInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    row = svc.group(db, svc.require_manager(db, user), group_id)
+def update_group(group_id: int, payload: GroupUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = locked_manager(db, user)
+    row = svc.group(db, org_id, group_id)
+    require_state(row, GROUP_FIELDS, payload.expected_state)
     row.name, row.description = payload.name, payload.description
     audit(db, user, 'group.updated', 'group', row.id, organization_id=row.organization_id)
     db.commit()
@@ -136,13 +148,31 @@ def update_group(group_id: int, payload: GroupInput, db: Session = Depends(get_d
 
 
 @router.delete('/team/groups/{group_id}')
-def archive_group(group_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    row = svc.group(db, svc.require_manager(db, user), group_id)
+@router.post('/team/groups/{group_id}/archive')
+def archive_group(group_id: int, payload: LifecycleInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    row = svc.group(db, locked_manager(db, user), group_id, active=False)
+    require_state(row, GROUP_FIELDS, getattr(payload, "expected_state", None))
     row.is_archived = True
     db.query(LearningGroupEnrollment).filter_by(group_id=row.id).update({'is_active': False})
     audit(db, user, 'group.archived', 'group', row.id, organization_id=row.organization_id)
     db.commit()
     return {'ok': True, 'assignments_preserved': True}
+
+
+def locked_manager(db, user):
+    actor = lock_member(db, user.id, expected_auth_version=user.auth_version)
+    return svc.require_manager(db, actor)
+
+
+@router.post('/team/groups/{group_id}/restore')
+def restore_group(group_id: int, payload: LifecycleInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    row = svc.group(db, locked_manager(db, user), group_id, active=False)
+    require_state(row, GROUP_FIELDS, getattr(payload, "expected_state", None))
+    row.is_archived = False
+    # Old auto-enrollments stay disabled: restoration never silently assigns courses.
+    audit(db, user, 'group.restored', 'group', row.id, organization_id=row.organization_id)
+    db.commit()
+    return {**group_out(db, row), 'assignments_preserved': True, 'automatic_enrollments_restored': False}
 
 
 @router.post('/team/groups/{group_id}/members')
@@ -165,7 +195,7 @@ def add_group_members(group_id: int, payload: MemberIds, db: Session = Depends(g
 
 @router.delete('/team/groups/{group_id}/members/{user_id}')
 def remove_group_member(group_id: int, user_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    org_id = svc.require_manager(db, user)
+    org_id = locked_manager(db, user)
     row = svc.group(db, org_id, group_id)
     membership = db.get(LearningGroupMember, (row.id, user_id))
     if membership:
@@ -176,15 +206,22 @@ def remove_group_member(group_id: int, user_id: int, db: Session = Depends(get_d
 
 
 @router.get('/team/departments')
-def departments(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def departments(archived: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
-    rows = db.query(LearningDepartment).filter_by(organization_id=org_id, is_archived=False).order_by(LearningDepartment.name)
-    return {'items': [{k: getattr(r, k) for k in ['id', 'name', 'parent_id']} for r in rows]}
+    if archived:
+        svc.require_manager(db, user)
+    rows = db.query(LearningDepartment).filter_by(organization_id=org_id, is_archived=archived).order_by(LearningDepartment.name)
+    return {'items': [department_out(r) for r in rows]}
+
+
+def department_out(row):
+    return {**{k: getattr(row, k) for k in ['id', 'name', 'parent_id', 'is_archived']},
+            'state_token': state_token(row, DEPARTMENT_FIELDS)}
 
 
 @router.post('/team/departments', status_code=201)
 def create_department(payload: DepartmentInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    org_id = svc.require_manager(db, user)
+    org_id = locked_manager(db, user)
     if payload.parent_id and not db.query(LearningDepartment).filter_by(id=payload.parent_id, organization_id=org_id, is_archived=False).first():
         raise HTTPException(404, 'Родительское подразделение не найдено')
     row = LearningDepartment(organization_id=org_id, **payload.model_dump())
@@ -192,15 +229,16 @@ def create_department(payload: DepartmentInput, db: Session = Depends(get_db), u
     db.flush()
     audit(db, user, 'department.created', 'department', row.id, organization_id=org_id)
     db.commit()
-    return {'id': row.id, 'name': row.name, 'parent_id': row.parent_id}
+    return department_out(row)
 
 
 @router.put('/team/departments/{department_id}')
-def update_department(department_id: int, payload: DepartmentInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    org_id = svc.require_manager(db, user)
+def update_department(department_id: int, payload: DepartmentUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = locked_manager(db, user)
     row = db.query(LearningDepartment).filter_by(id=department_id, organization_id=org_id, is_archived=False).first()
     if not row:
         raise HTTPException(404, 'Подразделение не найдено')
+    require_state(row, DEPARTMENT_FIELDS, payload.expected_state)
     parent_id = payload.parent_id
     seen = {row.id}
     while parent_id:
@@ -214,21 +252,43 @@ def update_department(department_id: int, payload: DepartmentInput, db: Session 
     row.name, row.parent_id = payload.name, payload.parent_id
     audit(db, user, 'department.updated', 'department', row.id, organization_id=org_id)
     db.commit()
-    return {'id': row.id, 'name': row.name, 'parent_id': row.parent_id}
+    return department_out(row)
 
 
 @router.delete('/team/departments/{department_id}')
-def archive_department(department_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    org_id = svc.require_manager(db, user)
+@router.post('/team/departments/{department_id}/archive')
+def archive_department(department_id: int, payload: LifecycleInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = locked_manager(db, user)
     row = db.query(LearningDepartment).filter_by(id=department_id, organization_id=org_id).first()
     if not row:
         raise HTTPException(404, 'Подразделение не найдено')
+    require_state(row, DEPARTMENT_FIELDS, getattr(payload, "expected_state", None))
     if db.query(LearningPerson).filter_by(department_id=row.id).count() or db.query(LearningDepartment).filter_by(parent_id=row.id, is_archived=False).count():
         raise HTTPException(409, 'Сначала переместите сотрудников и дочерние подразделения')
     row.is_archived = True
     audit(db, user, 'department.archived', 'department', row.id, organization_id=org_id)
     db.commit()
     return {'ok': True}
+
+
+@router.post('/team/departments/{department_id}/restore')
+def restore_department(department_id: int, payload: LifecycleInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = locked_manager(db, user)
+    row = db.query(LearningDepartment).filter_by(id=department_id, organization_id=org_id).first()
+    if not row:
+        raise HTTPException(404, 'Подразделение не найдено')
+    require_state(row, DEPARTMENT_FIELDS, getattr(payload, "expected_state", None))
+    parent_id, seen = row.parent_id, {row.id}
+    while parent_id:
+        parent = db.query(LearningDepartment).filter_by(id=parent_id, organization_id=org_id, is_archived=False).first()
+        if not parent or parent_id in seen:
+            raise HTTPException(409, 'Сначала восстановите родительское подразделение и проверьте иерархию')
+        seen.add(parent_id)
+        parent_id = parent.parent_id
+    row.is_archived = False
+    audit(db, user, 'department.restored', 'department', row.id, organization_id=org_id)
+    db.commit()
+    return department_out(row)
 
 
 @router.get('/team/people')
@@ -242,7 +302,7 @@ def people(db: Session = Depends(get_db), user: User = Depends(get_current_user)
 
 @router.put('/team/people/{user_id}')
 def update_person(user_id: int, payload: PersonInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    org_id = svc.require_manager(db, user)
+    org_id = locked_manager(db, user)
     svc.member(db, org_id, user_id)
     if payload.department_id and not db.query(LearningDepartment).filter_by(id=payload.department_id, organization_id=org_id, is_archived=False).first():
         raise HTTPException(404, 'Подразделение не найдено')
@@ -817,9 +877,9 @@ def validate_steps(db, user, steps):
 
 
 @router.get('/team/programs')
-def programs(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def programs(archived: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.require_manager(db, user)
-    return {'items': [program_out(r) for r in db.query(LearningProgram).filter_by(organization_id=org_id, is_archived=False).order_by(LearningProgram.title)]}
+    return {'items': [program_out(r) for r in db.query(LearningProgram).filter_by(organization_id=org_id, is_archived=archived).order_by(LearningProgram.title)]}
 
 
 @router.post('/team/programs', status_code=201)
@@ -855,15 +915,39 @@ def update_program(program_id: int, payload: ProgramInput, db: Session = Depends
 
 
 @router.delete('/team/programs/{program_id}')
-def archive_program(program_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    org_id = svc.require_manager(db, user)
+@router.post('/team/programs/{program_id}/archive')
+def archive_program(program_id: int, payload: RevisionInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = locked_manager(db, user)
     row = db.query(LearningProgram).filter_by(id=program_id, organization_id=org_id).first()
     if not row:
         raise HTTPException(404, 'Программа не найдена')
+    require_client_version(getattr(payload, "expected_revision", None))
+    if row.revision != getattr(payload, "expected_revision", None):
+        raise HTTPException(409, 'Программа изменена другим администратором')
     row.is_archived = True
+    row.revision += 1
     audit(db, user, 'program.archived', 'program', row.id, organization_id=org_id)
     db.commit()
     return {'ok': True, 'history_preserved': True}
+
+
+@router.post('/team/programs/{program_id}/restore')
+def restore_program(program_id: int, payload: RevisionInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = locked_manager(db, user)
+    if svc.settings_for(db, org_id).features.get('programs') is False:
+        raise HTTPException(403, 'Программы не включены в поставку')
+    row = db.query(LearningProgram).filter_by(id=program_id, organization_id=org_id).first()
+    if not row:
+        raise HTTPException(404, 'Программа не найдена')
+    require_client_version(getattr(payload, "expected_revision", None))
+    if row.revision != getattr(payload, "expected_revision", None):
+        raise HTTPException(409, 'Программа изменена другим администратором')
+    validate_steps(db, user, [ProgramStep.model_validate(step) for step in row.steps])
+    row.is_archived = False
+    row.revision += 1
+    audit(db, user, 'program.restored', 'program', row.id, organization_id=org_id)
+    db.commit()
+    return {**program_out(row), 'history_preserved': True}
 
 
 def enroll_program(db, program, user, target, cycle_key, now):
