@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import textwrap
 from tempfile import TemporaryDirectory
+from threading import Lock
 from urllib.parse import urlsplit
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -25,18 +26,27 @@ LIME = colors.HexColor('#caf432')
 WIDTH, HEIGHT = A4
 MARGIN = 52
 CONTENT_WIDTH = WIDTH - 2 * MARGIN
+_FONT_LOCK = Lock()
+_FONTS_READY = False
 
 
 def fonts():
-    folder = ROOT / 'app/assets/pdf_fonts'
-    for name, filename in [('Lernium', 'golos-text-400.ttf'), ('LerniumBold', 'golos-text-700.ttf'), ('LerniumDays', 'days-one.ttf')]:
-        if name not in pdfmetrics.getRegisteredFontNames():
-            pdfmetrics.registerFont(TTFont(name, folder / filename))
-    pdfmetrics.registerFontFamily('Lernium', normal='Lernium', bold='LerniumBold', italic='Lernium', boldItalic='LerniumBold')
-    for weight in ['normal', 'bold']:
-        for style in ['normal', 'italic']:
-            register_font('Lernium', str(folder / ('golos-text-700.ttf' if weight == 'bold' else 'golos-text-400.ttf')),
-                weight=weight, style=style, rlgFontName='LerniumBold' if weight == 'bold' else 'Lernium')
+    global _FONTS_READY
+    with _FONT_LOCK:
+        if _FONTS_READY:
+            return
+        folder = ROOT / 'app/assets/pdf_fonts'
+        for name, filename in [('Lernium', 'golos-text-400.ttf'), ('LerniumBold', 'golos-text-700.ttf'), ('LerniumDays', 'days-one.ttf')]:
+            if name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(name, folder / filename))
+        for weight in ['normal', 'bold']:
+            for style in ['normal', 'italic']:
+                register_font('Lernium', str(folder / ('golos-text-700.ttf' if weight == 'bold' else 'golos-text-400.ttf')),
+                    weight=weight, style=style, rlgFontName='LerniumBold' if weight == 'bold' else 'Lernium')
+        # SVG registration also registers TTFs and resets ReportLab family maps.
+        # Establish Markdown emphasis last, once, before concurrent rendering.
+        pdfmetrics.registerFontFamily('Lernium', normal='Lernium', bold='LerniumBold', italic='Lernium', boldItalic='LerniumBold')
+        _FONTS_READY = True
 
 
 def styles():

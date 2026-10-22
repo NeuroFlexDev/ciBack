@@ -77,6 +77,8 @@ def sample_pdf():
 def test_real_branded_pdf_embeds_cyrillic_fonts_math_images_table_headers_and_outlines():
     # Node/MathJax is required in CI; missing dependencies must fail this test.
     data = sample_pdf()
+    from reportlab.lib.fonts import tt2ps
+    assert tt2ps('Lernium', 1, 0) == 'LerniumBold'
     assert data.startswith(b'%PDF-')
     document = PdfReader(BytesIO(data))
     text = '\n'.join(page.extract_text() for page in document.pages)
