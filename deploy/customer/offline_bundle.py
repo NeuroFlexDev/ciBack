@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 
 REQUIRED = {"backend", "frontend", "postgres", "redis", "caddy", "text_model", "embedding_model",
             "image_model", "text_runtime", "embedding_runtime", "image_runtime", "tokenizers", "ocr_rus", "ocr_eng", "fonts", "dependencies"}
@@ -66,6 +67,36 @@ def validate_manifest(manifest):
         raise ValueError("Missing offline roles: " + ", ".join(sorted(REQUIRED - roles)))
 
 
+def verify_image_archive(path, expected_id):
+    """Read metadata without extraction; a pre-existing image cannot mask a bad archive."""
+    try:
+        # docker save emits an uncompressed tar. Requiring that format avoids
+        # uncontrolled decompression of a supposed container artifact.
+        with tarfile.open(path, mode="r:") as archive:
+            entries = {}
+            for index, member in enumerate(archive):
+                if index >= 100000 or member.name in entries:
+                    raise ValueError("Invalid or excessive archive entries")
+                entries[member.name] = member
+            def read(name, maximum):
+                member = entries.get(name)
+                if member is None or not member.isfile() or not 0 < member.size <= maximum:
+                    raise ValueError("Missing or excessive container metadata")
+                with archive.extractfile(member) as stream:
+                    return stream.read(maximum + 1)
+            manifests = json.loads(read("manifest.json", 1024 * 1024))
+            if not isinstance(manifests, list) or len(manifests) != 1 or not isinstance(manifests[0], dict):
+                raise ValueError("Each component must export exactly one Docker image")
+            config_name = manifests[0].get("Config")
+            if not isinstance(config_name, str):
+                raise ValueError("Missing image configuration")
+            actual = "sha256:" + hashlib.sha256(read(config_name, 16 * 1024 * 1024)).hexdigest()
+            if actual != expected_id:
+                raise ValueError("Container archive image identity mismatch")
+    except (tarfile.TarError, json.JSONDecodeError, UnicodeError, TypeError, KeyError) as exc:
+        raise ValueError("Invalid docker-save archive") from exc
+
+
 def assemble(spec_path, destination):
     spec_path = Path(spec_path).resolve()
     manifest = json.loads(spec_path.read_text(encoding="utf-8"))
@@ -76,9 +107,11 @@ def assemble(spec_path, destination):
     for item in manifest["components"]:
         for artifact in [item["license"]] + item["files"]:
             source = inside(spec_path.parent, artifact["path"])
-            if digest(source) != artifact["sha256"]:
+            if source.stat().st_size == 0 or digest(source) != artifact["sha256"]:
                 raise ValueError("Source checksum mismatch: " + artifact["path"])
             sources.append((artifact, source))
+        if set(item["roles"]) & IMAGE_ROLES:
+            verify_image_archive(inside(spec_path.parent, item["files"][0]["path"]), item["image_id"])
     destination = Path(destination).resolve()
     destination.mkdir(exist_ok=False)
     (destination / "objects").mkdir()
@@ -107,9 +140,11 @@ def verify(directory, expected_manifest=None):
     for item in manifest["components"]:
         for artifact in [item["license"]] + item["files"]:
             file = inside(root, artifact["path"])
-            if file.stat().st_size != artifact["size_bytes"] or digest(file) != artifact["sha256"]:
+            if file.stat().st_size == 0 or file.stat().st_size != artifact["size_bytes"] or digest(file) != artifact["sha256"]:
                 raise ValueError("Bundle checksum mismatch: " + artifact["path"])
             expected.add(artifact["path"])
+        if set(item["roles"]) & IMAGE_ROLES:
+            verify_image_archive(inside(root, item["files"][0]["path"]), item["image_id"])
     actual_files = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     if actual_files != expected:
         raise ValueError("Bundle contains unlisted files")

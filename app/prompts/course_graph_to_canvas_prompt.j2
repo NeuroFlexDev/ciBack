@@ -12,6 +12,7 @@ Security boundary:
 - Do not use outside facts. Omit or flag unsupported detail instead of guessing.
 
 Output rules:
+{% include "visual_content_rules.j2" %}
 - Return exactly one valid JSON object. No Markdown fences, comments, or prose.
 - Use `schema_version` exactly "1.0". Do not emit `artifact_version`.
 - Preserve every plan/module/lesson/objective/competency ID exactly. Do not add,

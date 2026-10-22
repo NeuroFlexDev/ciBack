@@ -1,10 +1,16 @@
+# Pure Node MathJax (liteDOM), with pinned dependencies and no browser runtime.
+FROM node:24-bookworm-slim AS pdf_math
+WORKDIR /pdf_runtime
+COPY pdf_runtime/package.json pdf_runtime/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
 # Используем легкий Python образ
 FROM python:3.11-slim
 
 # Указываем рабочую директорию в контейнере
 WORKDIR /app
 RUN apt-get update && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng libcairo2-dev pkg-config build-essential libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -17,6 +23,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --upgrade --force-reinstall \
         "setuptools==84.0.0" "wheel>=0.46.2" "jaraco.context>=6.1.0"
+
+COPY --from=pdf_math /usr/local/bin/node /usr/local/bin/node
+COPY --from=pdf_math /pdf_runtime/node_modules /app/pdf_runtime/node_modules
 
 # Скопируем весь код внутрь контейнера
 COPY . .

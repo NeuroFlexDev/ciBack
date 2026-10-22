@@ -25,3 +25,9 @@ psycopg[binary,pool]>=3.2,<4
 huggingface-hub>=1,<2
 networkx>=3.4,<4
 cryptography>=46,<51
+reportlab==4.5.1
+svglib==1.6.0
+rl-renderPM==4.0.3
+defusedxml==0.7.1
+markdown-it-py==4.2.0
+mdit-py-plugins==0.6.1

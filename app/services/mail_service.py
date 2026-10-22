@@ -23,8 +23,14 @@ def send_account_mail(recipient: str, subject: str, text: str, message_id: str |
     message["Subject"] = subject
     message["Message-ID"] = f"<{message_id or uuid.uuid4()}@lernium>"
     message.set_content(text)
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as smtp:
-        if settings.SMTP_STARTTLS:
+    # Port 465 starts TLS before the SMTP greeting (Yandex and other implicit-TLS providers).
+    implicit_tls = settings.SMTP_SSL or settings.SMTP_PORT == 465
+    if settings.SMTP_USER and not (implicit_tls or settings.SMTP_STARTTLS):
+        raise RuntimeError("SMTP authentication requires TLS")
+    transport = smtplib.SMTP_SSL if implicit_tls else smtplib.SMTP
+    options = {"context": ssl.create_default_context()} if implicit_tls else {}
+    with transport(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15, **options) as smtp:
+        if not implicit_tls and settings.SMTP_STARTTLS:
             smtp.starttls(context=ssl.create_default_context())
         if settings.SMTP_USER:
             smtp.login(settings.SMTP_USER, settings.SMTP_PASS)

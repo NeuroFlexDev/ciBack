@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_ENABLED: bool = True
     SMTP_FROM: str = ""
     SMTP_STARTTLS: bool = True
+    SMTP_SSL: bool = False
 
     CORS_ORIGINS: str = "http://localhost"
     APP_HOST: str = "0.0.0.0"
@@ -77,6 +78,10 @@ class Settings(BaseSettings):
     IMAGE_MAX_PIXELS: int = Field(default=20_000_000, gt=0)
     IMAGE_PROVIDER: str = ""
     IMAGE_MODEL: str = ""
+    IMAGE_API_MODE: Literal["auto", "openai", "gpt_image"] = "auto"
+    IMAGE_QUALITY: Literal["low", "medium", "high"] = "low"
+    # Exact HTTPS CDN hosts approved by the operator. Empty means base64 only.
+    IMAGE_DOWNLOAD_HOSTS: list[str] = Field(default_factory=list)
     IMAGE_MONTHLY_LIMIT: int = Field(default=50, ge=0)
     AI_LOCAL_ONLY: bool = False
     EMBEDDING_PROVIDER: str = "vsellm"

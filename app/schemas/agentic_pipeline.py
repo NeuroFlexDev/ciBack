@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
 class AgenticContract(BaseModel):
@@ -584,6 +584,12 @@ class LessonSection(AgenticContract):
     heading: str = Field(min_length=1, max_length=255)
     content_markdown: str = Field(min_length=1, max_length=50000)
     source_ref_ids: list[SourceRefId] = Field(min_length=1)
+
+    @field_validator("content_markdown")
+    @classmethod
+    def diagrams(cls, value):
+        from app.services.diagram_policy import validate_generated_diagrams
+        return validate_generated_diagrams(value)
 
 
 class LessonDraft(AgenticContract):

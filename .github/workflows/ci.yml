@@ -40,6 +40,7 @@ jobs:
       ENV: test
       DEBUG: "false"
       DATABASE_URL: postgresql+psycopg2://ciuser:cipassword@localhost:5432/cidb
+      TEST_POSTGRES_DSN: postgresql+psycopg2://ciuser:cipassword@localhost:5432/cidb
       JWT_SECRET: test-only-jwt-secret-at-least-32-bytes
     steps:
       - name: Check out repository
@@ -51,6 +52,19 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements-dev.txt
+
+      - name: Set up PDF math runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: pdf_runtime/package-lock.json
+
+      - name: Install PDF rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config
+          npm ci --omit=dev --ignore-scripts --prefix pdf_runtime
 
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-dev.txt

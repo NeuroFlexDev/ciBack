@@ -107,7 +107,7 @@ def get_current_user(
             require_feature(db, user.organization_id, 'authoring')
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not user.is_admin:
         recovery_paths = ("/api/auth/", "/api/admin/", "/api/billing", "/api/integrations/", "/api/legal/", "/api/support/", "/api/me", "/api/change-password")
-        if not request.url.path.startswith(recovery_paths) and not request.url.path.endswith(("/export", "/export.xlsx", "/export.csv")):
+        if not request.url.path.startswith(recovery_paths) and not request.url.path.endswith(("/export", "/export.xlsx", "/export.csv", "/export.pdf", "/pdf-plan")):
             from app.services.billing_service import ensure_write_access
             ensure_write_access(db, user.organization_id)
     return user

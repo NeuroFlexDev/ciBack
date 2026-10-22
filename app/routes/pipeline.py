@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
 
 from app.database.db import get_db
 from app.models.user import User
@@ -17,6 +18,20 @@ from app.services.course_update_service import CourseUpdateService
 
 
 router = APIRouter()
+
+
+class SourceSuggestionRequest(BaseModel):
+    document_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+@router.post("/courses/{course_id}/source-suggestion")
+def suggest_course_from_sources(course_id: int, payload: SourceSuggestionRequest,
+                                db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    PipelineService.validate_generation_documents(db, course_id=course_id, owner_id=current_user.id,
+                                                 document_ids=payload.document_ids)
+    documents = PipelineRepository.selected_indexed_documents(db, course_id, current_user.id, payload.document_ids)
+    from app.services.source_suggestion import source_suggestion
+    return source_suggestion(documents)
 
 
 @router.post("/generation-runs/{run_id}/cancel", response_model=GenerationRunStatusOut)
@@ -73,11 +88,11 @@ def launch_generation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from sqlalchemy import select
+    from app.services.organization_access import lock_member
     from app.models.generation_run import GenerationRun
+    current_user = lock_member(db, current_user.id, expected_auth_version=current_user.auth_version)
     if PipelineRepository.get_owned_course(db, course_id, current_user.id) is None:
         raise HTTPException(404, "Курс не найден")
-    db.execute(select(User).where(User.id == current_user.id).with_for_update()).scalar_one()
     if payload.request_id:
         previous = db.query(GenerationRun).filter_by(owner_id=current_user.id, request_id=payload.request_id).first()
         if previous:

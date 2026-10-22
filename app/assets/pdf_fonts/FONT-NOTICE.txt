@@ -1,0 +1,3 @@
+Lernium PDF uses the existing platform brand fonts Golos Text (400/700) and Days One.
+These TTF files are lossless decompressions of the repository WOFF2 assets.
+See golostext-OFL.txt and daysone-OFL.txt for the complete SIL Open Font License and copyright notices.

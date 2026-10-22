@@ -23,6 +23,41 @@ def lock_org(db: Session, organization_id: int) -> Organization:
     return org
 
 
+def lock_member(db: Session, user_id: int, *, extra_org_ids=(), allow_inactive=False, expected_auth_version=None) -> User:
+    return lock_members(db, [user_id], extra_org_ids=extra_org_ids, allow_inactive=allow_inactive,
+                        expected_auth_versions={user_id: expected_auth_version})[user_id]
+
+
+def lock_members(db: Session, user_ids, *, extra_org_ids=(), allow_inactive=False, expected_auth_versions=None) -> dict[int, User]:
+    """Shared order for mixed locks: organizations by ID, then users by ID.
+
+    Probe current membership without a row lock, acquire every organization in
+    order, and then refresh the user under its lock. A concurrent membership
+    change aborts instead of acquiring a new organization after the user lock.
+    User-only password/MFA operations may lock only User, never a later org.
+    """
+    ids = sorted(set(user_ids))
+    memberships = dict(db.execute(select(User.id, User.organization_id).where(User.id.in_(ids))).all())
+    if len(memberships) != len(ids):
+        raise HTTPException(404, 'Участник не найден')
+    for org_id in sorted({value for value in (*extra_org_ids, *memberships.values()) if value is not None}):
+        lock_org(db, org_id)
+    result = {}
+    for user_id in ids:
+        user = db.execute(select(User).where(User.id == user_id).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
+        if not user:
+            raise HTTPException(404, 'Участник не найден')
+        if user.organization_id != memberships[user_id]:
+            raise HTTPException(409, 'Организация участника изменилась. Обновите данные и повторите действие.')
+        expected_version = (expected_auth_versions or {}).get(user_id)
+        if expected_version is not None and (not user.is_active or user.auth_version != expected_version):
+            raise HTTPException(401, 'Сеанс завершён. Войдите снова.', headers={'WWW-Authenticate': 'Bearer'})
+        if not allow_inactive and not user.is_active:
+            raise HTTPException(403, 'Доступ участника приостановлен')
+        result[user_id] = user
+    return result
+
+
 def member_ids(db, org_id):
     return select(User.id).where(User.organization_id == org_id)
 

@@ -1,0 +1,16 @@
+Visual content in Markdown string fields:
+- When a process, relationship or interaction is supported by the sources and a
+  diagram improves learning, include a small fenced ```mermaid block followed by
+  a plain-language explanation. Use flowchart LR/TD, sequenceDiagram,
+  classDiagram, stateDiagram-v2 or erDiagram as appropriate. UML is expressed
+  using Mermaid class/state/sequence syntax. Never use a remote diagram service.
+- Keep each diagram below 40 lines and 30 connections. Use ASCII identifiers
+  with quoted labels in the output language. All relationships must be supported
+  by the cited sources; don't invent process steps to fill a diagram.
+- No HTML, URLs, images, click callbacks, CSS, frontmatter, %%{init} directives,
+  includes, PlantUML directives or external executable content inside diagrams.
+- JSON remains the outer response format; escape newlines in Markdown strings.
+- Never invent an image URL, protected image ID or claim an image was generated.
+  Keep existing authorized illustration references unchanged when editing.
+  New raster illustrations are generated/uploaded and approved in the separate
+  course image library. Do not replace a source-grounded diagram with fake links.

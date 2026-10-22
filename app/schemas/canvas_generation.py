@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_validator, field_validator
 
 from app.schemas.agentic_pipeline import (
     AgenticContract,
@@ -105,6 +105,12 @@ class CanvasLesson(AgenticContract):
     competency_ids: list[CompetencyId] = Field(min_length=1)
     source_ref_ids: list[SourceRefId] = Field(min_length=1)
     prerequisite_lesson_ids: list[LessonId]
+
+    @field_validator("content_markdown")
+    @classmethod
+    def diagrams(cls, value):
+        from app.services.diagram_policy import validate_generated_diagrams
+        return validate_generated_diagrams(value)
 
 
 class CanvasTestQuestion(AgenticContract):

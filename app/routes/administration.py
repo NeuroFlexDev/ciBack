@@ -23,7 +23,7 @@ from app.models.user import User
 from app.schemas.auth import AuthCredentials, UserResponse, AuthResponse
 from app.services.auth_service import get_current_user, require_admin
 from app.services.legal_service import record_receipt, require_current_version
-from app.services.organization_access import audit, check_course_limit, check_seat, lock_org, member_ids, seats
+from app.services.organization_access import audit, check_course_limit, check_seat, lock_org, lock_member, lock_members, member_ids, seats
 
 router = APIRouter()
 
@@ -103,7 +103,10 @@ def require_team_owner(user, db):
 
 
 def make_invitation(db, actor, payload):
-    org = lock_org(db, payload.organization_id)
+    actor = lock_member(db,actor.id,extra_org_ids=(payload.organization_id,),expected_auth_version=actor.auth_version)
+    if not actor.is_admin and require_team_owner(actor,db) != payload.organization_id:
+        raise HTTPException(403,'Недоступная организация')
+    org = db.get(Organization, payload.organization_id)
     check_seat(db, org)
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing and (existing.is_admin or existing.organization_id):
@@ -170,7 +173,11 @@ def users(q:str=Query('',max_length=100), organization_id:int|None=None, offset:
 
 
 def change_user(db, actor, target, payload):
-    target=db.execute(select(User).where(User.id==target.id).with_for_update().execution_options(populate_existing=True)).scalar_one()
+    identities=lock_members(db, [actor.id, target.id], extra_org_ids=(payload.organization_id,),
+        allow_inactive=True, expected_auth_versions={actor.id: actor.auth_version})
+    actor,target=identities[actor.id],identities[target.id]
+    if not actor.is_admin:
+        require_team_owner(actor,db)
     if not actor.is_admin and target.organization_id!=actor.organization_id:
         raise HTTPException(403,"Недоступная организация")
     if target.id==actor.id or target.is_admin:
@@ -183,7 +190,7 @@ def change_user(db, actor, target, payload):
             raise HTTPException(403, 'Используйте подтверждаемую передачу владения')
         if actor.organization_role != 'owner' and (payload.organization_role in {'owner','admin'} or target.organization_role in {'owner','admin'}):
             raise HTTPException(403, 'Только владелец управляет администраторами')
-    orgs={oid:lock_org(db,oid) for oid in sorted({oid for oid in [old_org,payload.organization_id] if oid})}
+    orgs={oid:db.get(Organization,oid) for oid in {old_org,payload.organization_id} if oid}
     leaving_owner = target.organization_role=='owner' and target.is_active and old_org and (
         not payload.is_active or payload.organization_id!=old_org or payload.organization_role!='owner')
     if leaving_owner and db.query(User).filter(User.organization_id==old_org, User.organization_role=='owner', User.is_active.is_(True), User.id!=target.id).count()==0:
@@ -239,7 +246,9 @@ def invitations(organization_id:int|None=None,offset:int=Query(0,ge=0),limit:int
 
 
 def revoke_invite(db,actor,row):
-    lock_org(db,row.organization_id)
+    actor=lock_member(db,actor.id,extra_org_ids=(row.organization_id,),expected_auth_version=actor.auth_version)
+    if not actor.is_admin and require_team_owner(actor,db)!=row.organization_id:
+        raise HTTPException(403,'Недоступная организация')
     changed=db.execute(update(Invitation).where(Invitation.id==row.id,Invitation.accepted_at.is_(None),Invitation.revoked_at.is_(None)).values(revoked_at=datetime.utcnow()))
     if changed.rowcount!=1:raise HTTPException(409,'Приглашение уже использовано или отозвано')
     audit(db,actor,'invitation.revoked','invitation',row.id);db.commit();return {'ok':True}
@@ -253,7 +262,7 @@ def revoke(invite_id:int,db:Session=Depends(get_db),admin:User=Depends(require_a
 
 
 def valid_invitation(db,token):
-    row=db.query(Invitation).filter(Invitation.token_hash==hashlib.sha256(token.encode()).hexdigest()).first()
+    row=db.query(Invitation).filter(Invitation.token_hash==hashlib.sha256(token.encode()).hexdigest()).populate_existing().first()
     if not row or row.accepted_at or row.revoked_at or row.expires_at<=datetime.utcnow():
         raise HTTPException(410,'Приглашение истекло, отозвано или уже использовано. Запросите новую ссылку у администратора.')
     org=db.get(Organization,row.organization_id)
@@ -308,7 +317,7 @@ def team(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
 @router.post('/auth/invitations/accept-existing', response_model=AuthResponse)
 def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depends(get_db), user:User=Depends(get_current_user)):
     row,org=valid_invitation(db,payload.token)
-    lock_org(db,org.id)
+    user=lock_member(db,user.id,extra_org_ids=(org.id,),expected_auth_version=user.auth_version)
     from app.services.mfa_service import authenticated_factor
     authenticated_factor(db,user,request.state.auth_claims)
     row,org=valid_invitation(db,payload.token)
@@ -333,10 +342,12 @@ def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depen
 @router.post('/team/invitations/{invite_id}/resend')
 def resend_invite(invite_id:int,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
     org_id=require_team_owner(user,db)
+    user=lock_member(db,user.id,extra_org_ids=(org_id,),expected_auth_version=user.auth_version)
+    if require_team_owner(user,db)!=org_id:
+        raise HTTPException(403,'Недоступная организация')
     row=db.query(Invitation).filter_by(id=invite_id,organization_id=org_id).first()
     if not row:raise HTTPException(404,'Приглашение не найдено')
     if row.accepted_at:raise HTTPException(409,'Приглашение уже принято')
-    lock_org(db,org_id)
     row.revoked_at=datetime.utcnow()
     db.flush()
     return make_invitation(db,user,InviteInput(email=row.email,organization_id=org_id,role=row.role))
