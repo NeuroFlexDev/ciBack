@@ -192,11 +192,13 @@ def assign_position(user_id: int, payload: EmployeePosition, db: Session = Depen
 
 @router.put('/employees/{user_id}/manager')
 def appoint_manager(user_id: int, payload: ManagerInput, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    identities = lock_members(db, [user.id, user_id], expected_auth_versions={user.id: user.auth_version, user_id: payload.expected_auth_version})
+    identities = lock_members(db, [user.id, user_id], expected_auth_versions={user.id: user.auth_version})
     org = require_business(db, identities[user.id], owner=True)
     target = identities[user_id]
     if target.organization_id != org.id or target.is_admin or target.organization_role not in {'member', 'manager'}:
         raise HTTPException(404, 'Сотрудник или управляющий не найден')
+    if target.auth_version != payload.expected_auth_version:
+        raise HTTPException(409, 'Доступ сотрудника уже изменён. Обновите список.')
     target.organization_role = payload.role
     target.auth_version += 1
     person = db.get(LearningPerson, target.id)
@@ -210,13 +212,15 @@ def appoint_manager(user_id: int, payload: ManagerInput, db: Session = Depends(g
 @router.put('/employees/{user_id}/access')
 def employee_access(user_id: int, payload: EmployeeAccess, db: Session = Depends(get_db), user=Depends(get_current_user)):
     identities = lock_members(db, [user.id, user_id], allow_inactive=True,
-        expected_auth_versions={user.id: user.auth_version, user_id: payload.expected_auth_version})
+        expected_auth_versions={user.id: user.auth_version})
     actor, target = identities[user.id], identities[user_id]
     org = require_business(db, actor)
     if target.organization_id != org.id or target.is_admin or target.id == actor.id or target.organization_role not in {'member', 'manager'}:
         raise HTTPException(404, 'Сотрудник или управляющий не найден')
     if target.organization_role == 'manager' and actor.organization_role != 'owner':
         raise HTTPException(403, 'Доступом управляющего распоряжается владелец компании')
+    if target.auth_version != payload.expected_auth_version:
+        raise HTTPException(409, 'Доступ сотрудника уже изменён. Обновите список.')
     if payload.is_active and not target.is_active:
         check_seat(db, org)
     if target.is_active != payload.is_active:
