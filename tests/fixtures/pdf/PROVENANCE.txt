@@ -1,0 +1,11 @@
+mermaid-browser.svg and sequence-browser.svg were downloaded from the real
+Lernium editor through its visible Download SVG action during browser acceptance
+on 2026-10-22. They are the synthetic QA course's flowchart and local PlantUML
+sequence diagram. Browser text measurement/layout is intact, unlike the earlier
+JSDOM fixtures. The dark preview colors differ from PDF's print theme only.
+
+The regression reproduced in the actual course PDF: missing arrowheads and
+nested em-positioned tspan labels collapsed across node borders. Tests compare
+real rendered PDF pixels with and without marker references at each endpoint,
+check glyph bounds, and retain vector rendering. No customer data or credentials
+are present in these fixtures.

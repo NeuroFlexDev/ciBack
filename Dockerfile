@@ -1,4 +1,4 @@
-# Pure Node MathJax (liteDOM), with pinned dependencies and no browser runtime.
+# Local MathJax + resvg SVG normalization, pinned dependencies, no browser.
 FROM node:24-bookworm-slim AS pdf_math
 WORKDIR /pdf_runtime
 COPY pdf_runtime/package.json pdf_runtime/package-lock.json ./
@@ -29,6 +29,9 @@ COPY --from=pdf_math /pdf_runtime/node_modules /app/pdf_runtime/node_modules
 
 # Скопируем весь код внутрь контейнера
 COPY . .
+
+# Check the native SVG module in the final Linux image, not only the Node stage.
+RUN node -e "const {Resvg}=require('./pdf_runtime/node_modules/@resvg/resvg-js');new Resvg('<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>',{font:{loadSystemFonts:false}}).toString()"
 
 # Запускаем uvicorn (FastAPI), который слушает порт 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \

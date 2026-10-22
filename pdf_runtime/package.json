@@ -1,1 +1,1 @@
-{"name":"lernium-pdf-math","private":true,"type":"module","dependencies":{"@mathjax/src":"4.1.3"}}
+{"name":"lernium-pdf-math","private":true,"type":"module","dependencies":{"@mathjax/src":"4.1.3","@resvg/resvg-js":"2.6.2"}}
