@@ -19,6 +19,10 @@ class User(Base):
     organization = relationship("Organization", foreign_keys=[organization_id])
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    @property
+    def organization_kind(self):
+        return self.organization.kind if self.organization else None
+
     courses = relationship("Course", back_populates="owner")
     course_structures = relationship("CourseStructure", back_populates="owner")
     feedback = relationship("Feedback", back_populates="author")

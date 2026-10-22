@@ -28,6 +28,7 @@ class Invitation(Base):
     email = Column(String(255), nullable=False, index=True)
     organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False, index=True)
     role = Column(String(16), nullable=False, default='member')
+    position_id = Column(Integer, ForeignKey("business_positions.id"), nullable=True, index=True)
     invited_by = Column(Integer, ForeignKey('users.id'), nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     expires_at = Column(DateTime, nullable=False)

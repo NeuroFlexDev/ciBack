@@ -390,7 +390,8 @@ def can_review(db, user, assignment):
 def can_report(db, user, assignment):
     if assignment.organization_id != organization(user):
         return False
-    if is_manager(db, user):
+    from app.services.business_service import manages_business
+    if is_manager(db, user) or manages_business(user):
         return True
     version = db.get(CourseVersion, assignment.course_version_id)
     return can_scope(db, user, 'manager', group_id=assignment.group_id, user_id=assignment.user_id) or can_scope(db, user, 'reviewer', course_id=version.course_id, group_id=assignment.group_id, user_id=assignment.user_id)

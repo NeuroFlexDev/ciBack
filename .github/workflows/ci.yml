@@ -73,7 +73,7 @@ jobs:
         run: python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
 
       - name: Compile application
-        run: python -m compileall -q app main.py
+        run: python -m compileall -q app main.py admin_main.py
 
       - name: Validate deployment scripts
         run: |

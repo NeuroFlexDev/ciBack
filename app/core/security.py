@@ -10,6 +10,11 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from app.core.config import settings
+from app.core.surface import surface
+
+
+def signing_key():
+    return (settings.ADMIN_JWT_SECRET if surface.get() == "admin" else settings.JWT_SECRET).get_secret_value()
 
 
 class TokenValidationError(ValueError):
@@ -66,6 +71,7 @@ def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None
     payload = {
         "sub": str(user_id),
         "type": "access",
+        "aud": "lernium:" + surface.get(),
         "ver": version,
         "iat": issued_at,
         "exp": expires_at,
@@ -75,7 +81,7 @@ def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None
         payload['mfa_at'] = mfa_at
     return jwt.encode(
         payload,
-        settings.JWT_SECRET.get_secret_value(),
+        signing_key(),
         algorithm=settings.JWT_ALG,
     )
 
@@ -84,15 +90,19 @@ def decode_access_token(token: str) -> dict[str, Any]:
     try:
         payload = jwt.decode(
             token,
-            settings.JWT_SECRET.get_secret_value(),
+            signing_key(),
             algorithms=[settings.JWT_ALG],
-            options={"require": ["sub", "type", "iat", "exp"]},
+            options={"require": ["sub", "type", "iat", "exp"], "verify_aud": False},
         )
     except ExpiredSignatureError as exc:
         raise TokenExpiredError("Access token has expired") from exc
     except InvalidTokenError as exc:
         raise TokenValidationError("Invalid access token") from exc
 
+    audience = payload.get("aud")
+    # Legacy platform sessions remain valid until their normal expiry.
+    if audience != "lernium:" + surface.get() and not (audience is None and surface.get() == "platform"):
+        raise TokenValidationError("Token belongs to another service")
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject.isdigit():
         raise TokenValidationError("Invalid token subject")

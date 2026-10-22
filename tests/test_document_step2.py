@@ -4,7 +4,7 @@ from zipfile import ZipFile
 from app.core.config import Settings
 from app.models.document import Document
 from app.services.file_storage import LocalFileStorage, get_file_storage
-from main import app
+from app.api_catalog import app
 from tests.factories import make_course
 
 

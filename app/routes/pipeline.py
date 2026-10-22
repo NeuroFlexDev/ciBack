@@ -96,7 +96,7 @@ def launch_generation(
     if payload.request_id:
         previous = db.query(GenerationRun).filter_by(owner_id=current_user.id, request_id=payload.request_id).first()
         if previous:
-            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context", "web_search_enabled"}}
+            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context", "position_context", "web_search_enabled"}}
             requested_search = (payload.web_search_enabled if "web_search_enabled" in payload.model_fields_set
                                 or "web_search_enabled" in previous.settings_snapshot else False)
             if (previous.course_id != course_id or previous_settings != payload.settings.model_dump(mode="json", exclude={"expected_revision"})

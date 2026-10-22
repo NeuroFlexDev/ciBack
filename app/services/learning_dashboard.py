@@ -9,6 +9,7 @@ from app.models.course_version import CourseVersion
 from app.models.user import User
 from app.models.learning import LearningAssignment, LearningResponse
 from app.services import learning_service as svc
+from app.services.business_service import manages_business
 
 
 def dashboard(db, user, *, days=30, activity_days=7, now=None):
@@ -16,7 +17,7 @@ def dashboard(db, user, *, days=30, activity_days=7, now=None):
     since = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
     activity_since = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=activity_days - 1)
     organization_id = svc.organization(user) if user.organization_id else None
-    admin = bool(organization_id and svc.is_manager(db, user))
+    admin = bool(organization_id and (svc.is_manager(db, user) or manages_business(user)))
     report = bool(organization_id and (admin or any(g.role in {'manager', 'reviewer'} for g in svc.role_grants(db, user))))
     query = db.query(LearningAssignment).filter(LearningAssignment.organization_id == organization_id)
     if not report:

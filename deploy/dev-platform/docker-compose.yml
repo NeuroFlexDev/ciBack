@@ -16,6 +16,7 @@ x-backend-environment: &backend-environment
   REFRESH_TOKEN_TTL_MINUTES: "1440"
   REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
   CONTACT_REQUESTS_ENABLED: ${CONTACT_REQUESTS_ENABLED:-false}
+  ADMIN_APP_URL: ${ADMIN_APP_URL:-https://admin.dev.lernium.ru}
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-https://dev.platform.lernium.ru}
   AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
   AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-20}
@@ -122,6 +123,7 @@ services:
     network_mode: host
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST:-dev.platform.lernium.ru}
+      ADMIN_HOST: ${ADMIN_HOST:-admin.dev.lernium.ru}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -192,6 +194,47 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+
+  admin-api:
+    logging: *logging
+    image: ${BACKEND_IMAGE:-ghcr.io/neuroflexdev/ciback:main}
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    command: [uvicorn, "admin_main:app", --host, 127.0.0.1, --port, "8002", --workers, "1"]
+    environment:
+      <<: *backend-environment
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?Set a separate admin signing secret}
+      ADMIN_CORS_ORIGINS: ${ADMIN_APP_URL:-https://admin.dev.lernium.ru}
+      REGISTRATION_ENABLED: "false"
+    volumes:
+      - uploads_data:/data/uploads:ro
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/api/readiness', timeout=5)"]
+      interval: 15s
+      timeout: 7s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  admin-web:
+    logging: *logging
+    image: ${FRONTEND_IMAGE:-ghcr.io/neuroflexdev/cifront:main}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:80"
+    volumes:
+      - ./admin-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: [CMD, wget, -qO-, "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   worker:
     logging: *logging

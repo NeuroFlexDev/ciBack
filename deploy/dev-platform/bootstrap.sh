@@ -9,6 +9,7 @@ install -d -m 0755 "${deployment_dir}"
 install -m 0644 "${source_dir}/docker-compose.yml" "${deployment_dir}/docker-compose.yml"
 install -m 0644 "${source_dir}/Caddyfile" "${deployment_dir}/Caddyfile"
 install -m 0644 "${source_dir}/frontend-nginx.conf" "${deployment_dir}/frontend-nginx.conf"
+install -m 0644 "${source_dir}/admin-nginx.conf" "${deployment_dir}/admin-nginx.conf"
 cd "${deployment_dir}"
 umask 077
 
@@ -45,6 +46,10 @@ if [[ ! -f .images.env ]]; then
         'LANDING_IMAGE=ghcr.io/neuroflexdev/cilanding:main' > .images.env
 fi
 
+# Upgrade existing installations without reusing the platform signing secret.
+if ! grep -q '^ADMIN_JWT_SECRET=' .env; then
+    printf '\nADMIN_JWT_SECRET=%s\n' "$(openssl rand -hex 48)" >> .env
+fi
 chmod 600 .env .images.env
 
 if [[ ! -e /swapfile ]]; then

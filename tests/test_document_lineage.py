@@ -1,7 +1,7 @@
 from app.models.document import Document
 from app.services.file_storage import LocalFileStorage, get_file_storage
 from app.services.pipeline_service import PipelineService
-from main import app
+from app.api_catalog import app
 from tests.factories import make_course
 
 

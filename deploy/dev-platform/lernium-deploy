@@ -133,8 +133,8 @@ deploy_current_image() {
             if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/api/readiness" || return 1; fi
             ;;
         frontend)
-            compose pull frontend || return 1
-            compose up -d --no-deps --force-recreate frontend || return 1
+            compose pull "${frontend_services[@]}" || return 1
+            compose up -d --no-deps --force-recreate --wait --wait-timeout 90 "${frontend_services[@]}" || return 1
             wait_for_url http://127.0.0.1:8080/healthz || return 1
             if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/auth" || return 1; fi
             ;;
@@ -163,7 +163,7 @@ rollback() {
             # Stop introduced services before restoring the previous configuration/image.
             if ((${#introduced_services[@]})); then compose stop --timeout 30 "${introduced_services[@]}" || return 1; fi
             if [[ "$profile_pending" == true ]]; then
-                for name in docker-compose.yml frontend-nginx.conf Caddyfile; do
+                for name in docker-compose.yml frontend-nginx.conf admin-nginx.conf Caddyfile; do
                     if [[ -f "${rollback_profile}/${name}" ]]; then
                         cp -- "${rollback_profile}/${name}" "${deployment_dir}/${name}"
                     fi
@@ -176,7 +176,8 @@ rollback() {
             fi
             ;;
         frontend)
-            compose up -d --no-deps --force-recreate frontend
+            if ((${#introduced_frontend_services[@]})); then compose stop --timeout 15 "${introduced_frontend_services[@]}" || return 1; fi
+            compose up -d --no-deps --force-recreate --wait --wait-timeout 90 "${previous_frontend_services[@]}"
             ;;
         landing)
             compose up -d --no-deps --force-recreate landing
@@ -214,6 +215,26 @@ profile_pending=false
 backend_services=()
 previous_backend_services=()
 introduced_services=()
+frontend_services=(frontend)
+previous_frontend_services=(frontend)
+introduced_frontend_services=()
+if [[ "$component" == frontend ]]; then
+    names="$(compose config --format json | python3 -c '
+import json,re,sys
+services=json.load(sys.stdin)["services"]
+names=sorted(n for n,s in services.items() if s.get("image")==services["frontend"]["image"] and s.get("restart") in {"always","unless-stopped","on-failure"})
+if "frontend" not in names or any(not re.fullmatch(r"[a-z][a-z0-9_-]*",n) for n in names): raise SystemExit("Invalid frontend services")
+if any(not services[n].get("healthcheck",{}).get("test") for n in names): raise SystemExit("Every frontend needs a healthcheck")
+print("\n".join(names))')" || fail "could not identify frontend services"
+    mapfile -t frontend_services <<< "$names"
+    running="$(compose ps --services --status running)" || fail "could not inspect frontend services"
+    previous_frontend_services=()
+    for service in "${frontend_services[@]}"; do
+        if grep -qxF "$service" <<< "$running"; then previous_frontend_services+=("$service")
+        else introduced_frontend_services+=("$service"); fi
+    done
+    if ((${#previous_frontend_services[@]} == 0)); then previous_frontend_services=(frontend); fi
+fi
 if [[ "$component" == backend ]]; then
     names="$(backend_service_names)" || fail "could not identify all backend workers"
     mapfile -t backend_services <<< "$names"

@@ -37,6 +37,7 @@ class UserResponse(BaseModel):
     is_admin: bool = False
     organization_id: int | None = None
     organization_role: str = "member"
+    organization_kind: str | None = None
 
 
 class AuthResponse(BaseModel):

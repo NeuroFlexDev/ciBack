@@ -1,10 +1,14 @@
 from datetime import datetime, timedelta
+import pytest
 from app.models.learning import LearningAssignment, LearningResponse
 from app.services.learning_dashboard import dashboard
 from test_learning_runtime import world, publish, assign, grant, headers
 
 
-def test_dashboard_counts_real_scoped_assignments_and_submissions(client, db_session, world):
+@pytest.mark.parametrize('organization_kind', ['business', 'government', 'education'])
+def test_dashboard_counts_real_scoped_assignments_and_submissions(client, db_session, world, organization_kind):
+    world['org'].kind = organization_kind
+    db_session.commit()
     course, _, lesson, _, _, _ = publish(client, db_session, world['author'], assessment=False, practice=False)
     first = assign(client, world, course)
     second = assign(client, world, course, world['second'])
@@ -37,12 +41,23 @@ def test_dashboard_counts_real_scoped_assignments_and_submissions(client, db_ses
     assert own['metrics']['people'] is None
     assert own['metrics']['pending_review'] == 0
     assert dashboard(db_session, world['owner'], days=1, now=now)['metrics']['completion_percent'] == 100
+    unscoped = dashboard(db_session, world['manager'], now=now)
+    assert unscoped['scope'] == ('organization' if organization_kind == 'business' else 'self')
+    assert unscoped['metrics']['submitted_attempts'] == (2 if organization_kind == 'business' else 0)
     grant(client, world, 'manager', 'manager', 'group', _group(client, world, world['second'].id))
     scoped = dashboard(db_session, world['manager'], now=now)
-    assert scoped['scope'] == 'authorized_team'
-    assert scoped['metrics']['submitted_attempts'] == 1
-    assert scoped['metrics']['completion_percent'] == 0
-    assert scoped['metrics']['people'] == 1
+    if organization_kind == 'business':
+        # A company manager has organization-wide reports without extra grants.
+        assert scoped['scope'] == 'organization'
+        assert scoped['metrics']['submitted_attempts'] == 2
+        assert scoped['metrics']['completion_percent'] == 50
+        assert scoped['metrics']['people'] == 7
+    else:
+        # Education and government managers retain their explicit group scope.
+        assert scoped['scope'] == 'authorized_team'
+        assert scoped['metrics']['submitted_attempts'] == 1
+        assert scoped['metrics']['completion_percent'] == 0
+        assert scoped['metrics']['people'] == 1
 
 
 def _group(client, world, user_id):

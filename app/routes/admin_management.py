@@ -164,7 +164,8 @@ def reissue_invitation(invite_id: int, payload: ReissueInput, db: Session = Depe
     audit(db, actor, 'invitation.reissued', 'invitation', row.id)
     # One transaction: failure to reserve a seat leaves the prior invitation valid.
     return make_invitation(db, actor, InviteInput(email=row.email, organization_id=row.organization_id,
-        role=payload.role or row.role, locale=payload.locale))
+        role=payload.role or row.role, locale=payload.locale),
+        position_id=row.position_id if (payload.role or row.role) == "member" else None)
 
 
 @router.post('/courses', status_code=201)

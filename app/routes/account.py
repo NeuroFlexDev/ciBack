@@ -9,6 +9,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.surface import surface
 from app.core.security import create_access_token, hash_password, normalize_email
 from app.database.db import get_db
 from app.models.account import PasswordReset
@@ -73,11 +74,11 @@ def reset_request(payload: ResetRequest, db: Session = Depends(get_db)):
     if not mail_service.configured():
         raise HTTPException(503, "Восстановление по почте недоступно. Обратитесь к администратору.")
     user = db.query(User).filter(User.email == normalize_email(payload.email), User.is_active.is_(True)).first()
-    if user:
+    if user and (surface.get() != "admin" or user.is_admin):
         raw = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw.encode()).hexdigest()
         db.add(PasswordReset(token_hash=token_hash, user_id=user.id, expires_at=datetime.utcnow() + timedelta(minutes=30)))
-        url = settings.PUBLIC_APP_URL.rstrip('/') + '/reset-password#token=' + raw
+        url = (settings.ADMIN_APP_URL if user.is_admin else settings.PUBLIC_APP_URL).rstrip('/') + '/reset-password#token=' + raw
         mail_service.queue_reset(db, user.email, url, token_hash, payload.locale)
         db.commit()
     return {"message": "If the account exists, password reset instructions have been queued for delivery." if payload.locale == "en" else "Если аккаунт существует, инструкция поставлена в очередь отправки на указанный адрес."}
@@ -88,7 +89,7 @@ def reset_confirm(payload: ResetConfirm, db: Session = Depends(get_db)):
     digest = hashlib.sha256(payload.token.encode()).hexdigest()
     now = datetime.utcnow()
     row = db.query(PasswordReset).filter_by(token_hash=digest).first()
-    if not row:
+    if not row or (surface.get() == "admin" and not db.get(User, row.user_id).is_admin):
         raise HTTPException(400, "Ссылка недействительна или истекла")
     claimed = db.execute(update(PasswordReset).where(PasswordReset.token_hash == digest, PasswordReset.consumed_at.is_(None), PasswordReset.expires_at > now).values(consumed_at=now))
     if claimed.rowcount != 1:

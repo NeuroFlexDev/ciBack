@@ -12,7 +12,7 @@ from app.models.module import Module
 from app.repositories.course_content import CourseContentRepository
 from app.services.course_content_service import CourseContentService
 from app.services.file_storage import LocalFileStorage, get_file_storage
-from main import app
+from app.api_catalog import app
 from tests.factories import make_course
 
 

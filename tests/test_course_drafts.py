@@ -4,7 +4,7 @@ from app.models.user import User
 from app.core.security import create_access_token, hash_password
 from app.models.document import Document
 from app.services.file_storage import LocalFileStorage, get_file_storage
-from main import app
+from app.api_catalog import app
 import pytest
 from sqlalchemy.exc import IntegrityError
 

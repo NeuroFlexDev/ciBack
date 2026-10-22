@@ -44,6 +44,7 @@ class LearningPerson(Base):
     organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False, index=True)
     department_id = Column(Integer, ForeignKey('learning_departments.id'), nullable=True)
     position = Column(String(200), nullable=False, default='')
+    position_id = Column(Integer, ForeignKey("business_positions.id"), nullable=True, index=True)
     external_id = Column(String(200), nullable=True)
     attributes = Column(JSON, nullable=False, default=dict)
 

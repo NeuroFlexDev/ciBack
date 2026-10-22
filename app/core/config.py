@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     DATABASE_URL: str
     JWT_SECRET: SecretStr = Field(min_length=32)
+    ADMIN_JWT_SECRET: SecretStr = SecretStr("")
+    ADMIN_APP_URL: str = "http://localhost:5174"
+    ADMIN_CORS_ORIGINS: str = "http://localhost:5174"
     JWT_ALG: Literal["HS256"] = "HS256"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_MINUTES: int = 1440

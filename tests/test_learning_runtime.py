@@ -286,6 +286,9 @@ def test_group_multiple_membership_future_enrollment_and_revoke_preserves_histor
 
 
 def test_department_cycles_manager_scope_and_no_self_escalation(client, db_session, world):
+    # B2G retains explicit author grants; business management now has its own workflow.
+    world['org'].kind = 'government'
+    db_session.commit()
     h = headers(world['owner'])
     d = client.post('/api/team/departments', headers=h, json={'name': 'Engineering'}).json()['id']
     child = client.post('/api/team/departments', headers=h, json={'name': 'Team', 'parent_id': d}).json()['id']

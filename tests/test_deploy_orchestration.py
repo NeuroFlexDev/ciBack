@@ -45,9 +45,13 @@ if action=='config':
  names=['backend','worker']+(['outbox'] if (deploy/'docker-compose.yml').read_text()=='new-profile' else [])
  services={name:{'image':'same-backend','restart':'unless-stopped','healthcheck':{'test':['CMD','health']}} for name in names}
  services['backend']['environment']={'MFA_REQUIRED_FOR_OPERATORS':os.environ.get('MFA_REQUIRED','false')}
+ if os.environ.get('ADMIN_API')=='1':services['admin-api']={'image':'same-backend','restart':'unless-stopped','healthcheck':{'test':['CMD','health']}}
+ services['frontend']={'image':'same-frontend','restart':'unless-stopped','healthcheck':{'test':['CMD','health']}}
+ if os.environ.get('ADMIN_WEB')=='1':services['admin-web']={'image':'same-frontend','restart':'unless-stopped','healthcheck':{'test':['CMD','health']}}
  services['migrate']={'image':'same-backend','restart':'no'}
  print(json.dumps({'services':services}))
 elif action=='ps':print('backend\\nworker')
+elif action=='up' and 'admin-web' in args and os.environ.get('FAIL_ADMIN_WEB')=='1':raise SystemExit(1)
 elif action=='up' and 'outbox' in args and os.environ.get('FAIL_ROLLOUT')=='1':raise SystemExit(1)
 elif action=='exec':
  if 'to_regclass' in args[-1]:print('user_mfa' if os.environ.get('MFA_ENROLLED')=='1' else '')
@@ -77,6 +81,37 @@ elif action=='exec':
         up=next(args for args in commands if 'up' in args and 'outbox' in args)
         self.assertIn('--wait',up)
         self.assertIn(self.new,(self.deploy/'.images.env').read_text())
+
+    def test_admin_api_is_deployed_with_backend_workers(self):
+        self.env['ADMIN_API']='1'
+        result=self.execute()
+        self.assertEqual(result.returncode,0,result.stderr)
+        up=next(args for args in self.commands() if 'up' in args and 'admin-api' in args)
+        self.assertIn('--wait',up)
+        self.assertIn('worker',up)
+
+    def frontend_execute(self):
+        self.env['ADMIN_WEB']='1'
+        old='ghcr.io/neuroflexdev/cifront:sha-'+'c'*40
+        new='ghcr.io/neuroflexdev/cifront:sha-'+'d'*40
+        with (self.deploy/'.images.env').open('a') as stream:stream.write(f'FRONTEND_IMAGE={old}\n')
+        return subprocess.run(['bash',str(self.script),'frontend',new,'test-operator','https://example.test'],
+                              input='test-token-not-a-secret\n',text=True,capture_output=True,env=self.env,timeout=15)
+
+    def test_both_frontends_are_pulled_and_health_checked(self):
+        result=self.frontend_execute()
+        self.assertEqual(result.returncode,0,result.stderr)
+        up=next(args for args in self.commands() if 'up' in args and 'admin-web' in args)
+        self.assertIn('frontend',up)
+        self.assertIn('--wait',up)
+
+    def test_failed_new_admin_frontend_is_stopped_during_rollback(self):
+        self.env['FAIL_ADMIN_WEB']='1'
+        result=self.frontend_execute()
+        self.assertNotEqual(result.returncode,0)
+        commands=self.commands()
+        self.assertTrue(any('stop' in args and 'admin-web' in args for args in commands))
+        self.assertIn('sha-'+'c'*40,(self.deploy/'.images.env').read_text())
 
     def test_first_outbox_failure_restores_previous_profile_and_never_runs_it_on_old_image(self):
         rollback=self.deploy/'.rollback-profile';rollback.mkdir(mode=0o700)
