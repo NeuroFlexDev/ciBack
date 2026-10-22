@@ -156,6 +156,26 @@ def claim(db, key):
     return True
 
 
+def prepare_generation_retry(db, run):
+    """Re-arm admission in the same course-locked transaction as an explicit retry.
+
+    This is only a concurrency slot. Paid call receipts and their conservative
+    reservations remain unchanged. A previous worker must release its live slot
+    before a retry can reuse it.
+    """
+    locked(db)
+    row = db.query(AIResourceUsage).filter_by(key=f"generation:{run.id}").first()
+    if row and row.status == "running":
+        raise HTTPException(409, {"code": "generation_worker_finishing",
+            "message": "Предыдущий рабочий процесс ещё завершает запуск. Повторите через несколько секунд."})
+    if row:
+        _capacity(db, row.owner_id, row.organization_id, row.lane, "queued", exclude=row.id)
+        row.status, row.finished_at, row.expires_at = "queued", None, None
+        return row
+    return reserve(db, owner_id=run.owner_id, course_id=run.course_id, operation="generation",
+        lane="background", key=f"generation:{run.id}", run_id=run.id, queued=True)
+
+
 def finish(db, row, *, usage=None, unsent=False, failed=False, pages=None):
     if isinstance(row, str):
         row = db.query(AIResourceUsage).filter_by(key=row).first()
@@ -274,7 +294,15 @@ def reconcile_expired_run(db, run):
     if row and row.expires_at and row.expires_at < datetime.utcnow() and run.status in {"running", "queued"}:
         course = db.execute(select(Course).where(Course.id == run.course_id).with_for_update()).scalar_one_or_none()
         db.refresh(run)
-        if run.status not in {"running", "queued"}:
+        # A retry or worker claim may have committed while polling waited for
+        # the course lock. Re-read the lease under its row lock: never cancel a
+        # new attempt using the expired lease cached by this status request.
+        row = db.execute(select(AIResourceUsage).where(AIResourceUsage.key == f"generation:{run.id}")
+            .with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
+        if (run.status not in {"running", "queued"} or row is None
+                or row.status not in {"running", "unknown"} or not row.expires_at
+                or row.expires_at >= datetime.utcnow()
+                or (run.queued_at and row.expires_at <= run.queued_at)):
             return
         run.status, run.cancel_requested, run.retryable = "paused", True, True
         run.error_code = "worker_result_unknown"
