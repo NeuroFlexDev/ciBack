@@ -147,7 +147,7 @@ def _create_client(
 
 
 def _json_object(raw: str) -> dict[str, Any]:
-    cleaned = raw.strip().lstrip("\ufeff")
+    cleaned = raw.strip().lstrip("\ufeff").strip()
     try:
         parsed = json.loads(cleaned)
     except (TypeError, ValueError) as original:

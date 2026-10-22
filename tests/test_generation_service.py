@@ -196,6 +196,13 @@ def test_embedded_json_fragment_cannot_replace_invalid_outer_response(response):
     assert safe_error(error.value) == "ai_invalid_json"
 
 
+def test_outer_json_fence_accepts_bom_and_whitespace_without_changing_nested_code():
+    from app.services.generation_service import _json_object
+    expected = {"content_markdown": "```mermaid\nflowchart LR\n A --> B\n```"}
+    envelope = " \ufeff \n```json\n" + json.dumps(expected) + "\n```\n "
+    assert _json_object(envelope) == expected
+
+
 def test_completed_stages_are_reused_after_parser_upgrade(db_session, auth_user, monkeypatch):
     from pydantic import BaseModel
     from app.models.agent_artifact import AgentArtifact
