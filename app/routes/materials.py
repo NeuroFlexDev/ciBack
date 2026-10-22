@@ -61,6 +61,7 @@ def material_capabilities(db: Session = Depends(get_db), user=Depends(get_curren
     price_ready = bool(provider and (provider.local or settings.IMAGE_PRICE_RUB is not None))
     configured = bool(provider and providers.available(provider) and settings.IMAGE_MODEL)
     return {"document_formats": ["pdf", "docx", "txt", "md"], "document_max_bytes": settings.max_document_bytes,
+            "web_search_supported": True,
             "source_characters_limit": settings.AI_MAX_SOURCE_CHARS,
             "image_formats": ["png", "jpg", "jpeg", "webp"], "image_max_bytes": settings.IMAGE_MAX_BYTES,
             "image_max_pixels": settings.IMAGE_MAX_PIXELS,
