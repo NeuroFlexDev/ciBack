@@ -192,3 +192,35 @@ def test_pdf_rejects_oversized_json_before_parsing_or_authentication(client, chu
     response = client.post(BASE+'/export.pdf', content=iter([body]) if chunked else body,
         headers={'Content-Type':'application/json'})
     assert response.status_code == 413
+
+
+def media_layout_pdf():
+    content = {'course': {'title': 'Media layout audit'}, 'modules': [{'title': 'Module heading',
+        'lessons': [{'title': 'Lesson heading', 'content':
+            'BeforeMedia ![Picture](images/a.png) AfterMedia\n\n'
+            '| Illustration | Explanation |\n| --- | --- |\n'
+            '| ![Picture](images/a.png) | This explanation must stay beside the picture. |\n\n'
+            'AfterTable'}]}]}
+    return build_pdf(content, {'images/a.png': image_bytes()},
+        {'revision': 1, 'snapshot_sha256': 'a'*64}, {})
+
+
+def test_inline_and_table_images_do_not_cover_text_or_cross_cell_boundaries():
+    import pymupdf
+    document = pymupdf.open(stream=media_layout_pdf(), filetype='pdf')
+    images = []
+    for page in document:
+        words = page.get_text('words')
+        for info in page.get_image_info():
+            rectangle = pymupdf.Rect(info['bbox'])
+            images.append(rectangle)
+            assert rectangle.x0 >= 51 and rectangle.x1 <= 544
+            assert rectangle.y0 >= 58 and rectangle.y1 <= 787
+            # Unlike a download/status check, geometry detects silent occlusion.
+            for word in words:
+                intersection = rectangle & pymupdf.Rect(word[:4])
+                assert intersection.is_empty or intersection.get_area() < 1, word
+    assert len(images) == 2
+    assert images[0].width > 450  # mixed paragraph uses the page content width
+    assert images[1].width < 150  # table media fits its narrower first column
+    assert 'AfterTable' in ''.join(page.get_text() for page in document)

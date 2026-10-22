@@ -41,7 +41,7 @@ def fonts():
 
 def styles():
     base = ParagraphStyle('Body', fontName='Lernium', fontSize=10.5, leading=16.5, textColor=INK,
-        spaceAfter=9, splitLongWords=True, allowWidows=0, allowOrphans=0)
+        spaceAfter=9, splitLongWords=True, allowWidows=0, allowOrphans=0, autoLeading='max')
     return {'body': base,
         'h1': ParagraphStyle('Module', parent=base, fontName='LerniumDays', fontSize=23, leading=31, spaceBefore=8, spaceAfter=20, keepWithNext=True),
         'h2': ParagraphStyle('Lesson', parent=base, fontName='LerniumBold', fontSize=17, leading=24, spaceBefore=18, spaceAfter=12, keepWithNext=True),
@@ -161,7 +161,7 @@ class ContentBuilder:
         p._toc = (level, title, f'entry-{self.heading_id}')
         return p
 
-    def inline(self, children):
+    def inline(self, children, max_width=CONTENT_WIDTH):
         output = []
         for token in children or []:
             if token.type in {'text', 'code_inline'}:
@@ -181,14 +181,14 @@ class ContentBuilder:
                 output.append('</a>' if last_open >= 0 and output[last_open].startswith('<a ') else '</span>')
             elif token.type == 'math_inline':
                 path, width, height = self.maths[token.content]
-                scale = min(1, 26 / height, CONTENT_WIDTH / width)
+                scale = min(1, 26 / height, max_width / width)
                 output.append(f'<img src="{escape(str(path), quote=True)}" width="{width*scale}" height="{height*scale}" valign="middle"/>')
             elif token.type == 'image':
                 source = token.attrGet('src') or ''
                 if source not in self.images:
                     raise PDFRenderError('Внешняя или недоступная иллюстрация: загрузите её в курс перед публикацией.')
                 path, width, height = self.images[source]
-                scale = min(CONTENT_WIDTH / width, 350 / height, 1)
+                scale = min(max_width / width, 350 / height, 1)
                 output.append(f'<br/><img src="{escape(str(path), quote=True)}" width="{width*scale}" height="{height*scale}"/><br/>')
             else:
                 output.append(escape(token.content))
@@ -246,14 +246,14 @@ class ContentBuilder:
             elif token.type == 'hr':
                 output.append(HRFlowable(width='100%', color=colors.HexColor('#d9e1cb'), spaceBefore=12, spaceAfter=12))
             elif token.type == 'table_open':
-                rows, row, widths = [], [], []
+                rows, row = [], []
                 index += 1
                 while tokens[index].type != 'table_close':
                     current = tokens[index]
                     if current.type == 'tr_open':
                         row = []
                     elif current.type == 'inline':
-                        row.append(Paragraph(self.inline(current.children), self.styles['cell']))
+                        row.append(current.children or [])
                     elif current.type == 'tr_close':
                         rows.append(row)
                     index += 1
@@ -261,8 +261,13 @@ class ContentBuilder:
                     columns = max(map(len, rows))
                     if columns > 12:
                         raise PDFRenderError('Таблица шире 12 столбцов. Разделите её перед PDF-экспортом.')
-                    weights = [min(4, max(1, max(len(row[c].getPlainText()) if c < len(row) else 0 for row in rows)/18)) for c in range(columns)]
-                    table = Table(rows, colWidths=[CONTENT_WIDTH * weight / sum(weights) for weight in weights], repeatRows=1,
+                    weights = [min(4, max(1, max(sum(len(token.content) for token in row[c]) if c < len(row) else 0 for row in rows)/18)) for c in range(columns)]
+                    widths = [CONTENT_WIDTH * weight / sum(weights) for weight in weights]
+                    # Render after measuring columns: media must fit the cell's
+                    # actual content box, including the horizontal padding.
+                    cells = [[Paragraph(self.inline(children, widths[c] - 16), self.styles['cell'])
+                              for c, children in enumerate(row)] for row in rows]
+                    table = Table(cells, colWidths=widths, repeatRows=1,
                         hAlign='LEFT', splitByRow=1, splitInRow=1)
                     table.setStyle(TableStyle([
                         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#e9f2d2')),
