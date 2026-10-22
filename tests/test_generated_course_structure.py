@@ -43,7 +43,8 @@ def test_materialization_and_step5_contract(client, db_session, auth_user, auth_
     response = client.get(f"/api/courses/{course.id}/structure", headers=auth_headers)
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"course_id", "title", "description", "status", "metrics", "modules_timeline", "content_revision"}
+    assert set(body) == {"course_id", "position_id", "title", "description", "status", "metrics", "modules_timeline", "content_revision"}
+    assert body['position_id'] is None
     assert body["content_revision"] == course.content_revision
     assert body["status"] == "ready"
     assert [item["title"] for item in body["modules_timeline"]] == ["First", "Second"]
