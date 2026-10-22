@@ -139,3 +139,17 @@ def test_candidate_reads_and_takes_test_but_cannot_author_even_with_old_grants(c
     assert answer.json()['points'] == 1
     assert client.put(f'/api/learning/assignments/{aid}/progress', headers=auth, json={'expected_revision': 0, 'lesson_id': 1}).status_code == 200
     assert client.get(f'/api/learning/assignments/{aid}', headers=auth).json()['status'] == 'completed'
+
+
+def test_owner_handoff_keeps_four_roles_and_resolves_former_manager_team(client, db_session, hierarchy):
+    _, u, _, assignments = hierarchy
+    transfer = client.post('/api/team/ownership-transfers', headers=headers(u['owner']), json={'user_id': u['manager'].id})
+    assert transfer.status_code == 201
+    result = client.post(f"/api/team/ownership-transfers/{transfer.json()['id']}/accept", headers=headers(u['manager']))
+    assert result.status_code == 200
+    assert u['manager'].organization_role == 'owner'
+    assert u['owner'].organization_role == 'manager'
+    assert u['employee'].manager_id is None and u['candidate'].manager_id is None
+    assert db_session.get(LearningAssignment, assignments['candidate'].id).user_id == u['candidate'].id
+    data = client.get('/api/business/dashboard', headers=headers(u['manager'])).json()
+    assert data['unassigned'] == 3 and data['metrics']['assigned'] == 4

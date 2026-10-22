@@ -464,7 +464,15 @@ def accept_transfer(transfer_id: int, db: Session = Depends(get_db), user: User 
         raise HTTPException(403, 'Оператор не может стать владельцем организации через передачу')
     if old.organization_role != 'owner':
         raise HTTPException(409, 'Инициатор больше не владелец организации')
-    user.organization_role, old.organization_role = 'owner', 'admin'
+    from app.services.business_hierarchy import is_business, clear_reporting_lines
+    business = is_business(user)
+    if business:
+        # The new owner sees the whole company. Their former reports remain
+        # visible as unassigned until the owner selects a current manager.
+        clear_reporting_lines(db, user)
+        user.manager_id = None
+        old.manager_id = None
+    user.organization_role, old.organization_role = 'owner', 'manager' if business else 'admin'
     # Both sessions are revoked; the new owner signs in with their own password.
     user.auth_version += 1
     old.auth_version += 1
