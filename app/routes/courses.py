@@ -216,6 +216,14 @@ def update_course(
         update_data = course_update.model_dump(exclude_unset=True, exclude_none=True, exclude={"expected_revision"})
         if not update_data:
             raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+        if course.position_id and 'title' in update_data and update_data['title'] != course.name:
+            # A wizard opened before this rename must not silently restore its
+            # stale title when saving its generation settings.
+            from app.models.course_generation_settings import CourseGenerationSettings
+            generation = db.query(CourseGenerationSettings).filter_by(course_id=course.id).first()
+            if generation:
+                generation.revision += 1
         
         for field, value in update_data.items():
             # Если поле 'title' передается, оно маппится на поле 'name' в модели Course
