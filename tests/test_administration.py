@@ -156,7 +156,7 @@ def test_recovery_link_does_not_change_password_before_confirmation(client,db_se
 def test_source_quota_allows_replacement_and_frees_deleted_source(client, db_session, tmp_path):
     from app.models.document import Document
     from app.services.file_storage import LocalFileStorage, get_file_storage
-    from main import app
+    from app.api_catalog import app
     app.dependency_overrides[get_file_storage] = lambda: LocalFileStorage(tmp_path, 1024 * 1024)
     o = org(db_session, source_limit=1)
     u = member(db_session, o, role='author')

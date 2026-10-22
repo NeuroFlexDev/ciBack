@@ -26,21 +26,15 @@ REQUIRED_ROUTES = {
 
 def _registered_method_paths():
     """Flatten FastAPI's included routers without relying on OpenAPI deduping."""
-    for mounted in app.routes:
-        included_router = getattr(mounted, "original_router", None)
-        if included_router is not None:
-            prefix = mounted.include_context.prefix
-            routes = included_router.routes
-        else:
-            prefix = ""
-            routes = [mounted]
-
-        for route in routes:
-            path = getattr(route, "path", None)
-            if path is None:
-                continue
-            for method in getattr(route, "methods", set()):
-                yield method, f"{prefix}{path}"
+    def walk(router, prefix=""):
+        for route in router.routes:
+            nested = getattr(route, "original_router", None)
+            if nested is not None:
+                yield from walk(nested, prefix + route.include_context.prefix)
+            elif getattr(route, "path", None) is not None:
+                for method in getattr(route, "methods", set()):
+                    yield method, prefix + route.path
+    yield from walk(app.router)
 
 
 def test_route_registry_has_no_unexpected_duplicates():

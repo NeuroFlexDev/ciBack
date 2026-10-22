@@ -27,6 +27,8 @@ class Course(Base, BaseModelMixin):
     language = Column(String, nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    position_id = Column(Integer, ForeignKey("business_positions.id"), nullable=True, index=True)
+    business_position = relationship("BusinessPosition", foreign_keys=[position_id])
     status = Column(
         String(32), nullable=False, default=CourseStatus.READY.value, index=True
     )

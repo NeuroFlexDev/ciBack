@@ -104,6 +104,7 @@ class AgenticCoursePipeline:
             "lesson_count": settings_snapshot["lesson_count"],
             "approved_plan": settings_snapshot.get("approved_plan") or [],
             "organization_context": settings_snapshot.get("organization_context") or {},
+            "position_context": settings_snapshot.get("position_context") or {},
             # Legacy jobs froze their inputs before web search existed. Resume
             # must not admit a new paid capability or change their evidence.
             "web_search_enabled": settings_snapshot.get("web_search_enabled", False),

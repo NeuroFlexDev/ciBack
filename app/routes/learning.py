@@ -41,11 +41,14 @@ def settings_out(row):
 
 @router.get('/team/permissions')
 def permissions(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from app.services.business_service import manages_business
+    business = manages_business(user)
     grants = svc.role_grants(db, user) if user.organization_id else []
     return {'organization_id': user.organization_id, 'role': user.organization_role, 'is_operator': user.is_admin,
             'can_manage_team': bool(user.organization_id and svc.is_manager(db, user)),
             'can_manage_admins': user.organization_role == 'owner',
-            'can_author': not user.organization_id or user.organization_role == 'author' or any(g.role == 'author' for g in grants),
+            'can_manage_business': business,
+            'can_author': business or not user.organization_id or user.organization_role == 'author' or any(g.role == 'author' for g in grants),
             'can_review': any(g.role == 'reviewer' for g in grants),
             'can_report': bool(user.organization_id and (svc.is_manager(db, user) or any(g.role in {'manager', 'reviewer'} for g in grants))),
             'grants': [{k: getattr(g, k) for k in ['id', 'role', 'scope_type', 'scope_id']} for g in grants]}

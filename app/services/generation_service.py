@@ -68,7 +68,8 @@ def render_prompt(template_name: str, **kwargs: Any) -> str:
     """Render a configured Jinja prompt template."""
     template = env.get_template(template_name)
     from app.services.organization_ai_context import context_text
-    return template.render(**kwargs) + context_text(kwargs.get("organization_context"))
+    from app.services.business_service import position_prompt
+    return template.render(**kwargs) + context_text(kwargs.get("organization_context")) + position_prompt(kwargs.get("position_context"))
 
 
 def agent_messages(prompt: str, *, expect_json: bool, repair_feedback: str = "") -> list[dict]:

@@ -42,7 +42,9 @@ def settings_response(course, settings) -> CourseGenerationSettingsResponse:
 
 
 def generation_settings_snapshot(course, settings) -> dict:
+    from app.services.business_service import position_snapshot
     return {
+        "position_context": position_snapshot(course),
         "title": course.name,
         "goal": settings.goal,
         "target_audience": settings.target_audience,

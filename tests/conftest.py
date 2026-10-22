@@ -27,7 +27,8 @@ from sqlalchemy.orm import sessionmaker
 from app.database.db import Base, get_db
 from app.core.security import create_access_token, hash_password
 from app.models.user import User
-from main import app
+# Domain contract app intentionally combines handlers; test_service_boundaries covers deployed isolation.
+from app.api_catalog import app
 
 
 @pytest.fixture(scope="session")

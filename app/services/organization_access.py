@@ -81,7 +81,8 @@ def check_course_limit(db: Session, owner_id: int):
     require_feature(db, user.organization_id if user else None, 'authoring')
     if user and user.organization_id:
         from app.models.learning import LearningRoleGrant
-        if user.organization_role != 'author' and not db.query(LearningRoleGrant).filter_by(
+        from app.services.business_service import manages_business
+        if not manages_business(user) and user.organization_role != 'author' and not db.query(LearningRoleGrant).filter_by(
                 organization_id=user.organization_id, user_id=user.id, role='author', scope_type='organization').first():
             raise HTTPException(403, 'Создание курсов требует отдельной роли автора организации')
         org = lock_org(db, user.organization_id)

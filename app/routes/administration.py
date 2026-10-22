@@ -113,12 +113,24 @@ def require_team_owner(user, db):
     return org_id
 
 
-def make_invitation(db, actor, payload):
+def make_invitation(db, actor, payload, *, position_id=None):
     actor = lock_member(db,actor.id,extra_org_ids=(payload.organization_id,),expected_auth_version=actor.auth_version)
-    if not actor.is_admin and require_team_owner(actor,db) != payload.organization_id:
-        raise HTTPException(403,'Недоступная организация')
+    from app.services.business_service import manages_business, position_for
+    business = manages_business(actor)
+    if not actor.is_admin:
+        if business and actor.organization_role == 'manager':
+            if payload.organization_id != actor.organization_id or payload.role != 'member':
+                raise HTTPException(403, 'Управляющий приглашает только сотрудников своей компании')
+        elif require_team_owner(actor,db) != payload.organization_id:
+            raise HTTPException(403,'Недоступная организация')
     org = db.get(Organization, payload.organization_id)
     check_seat(db, org)
+    if position_id is not None:
+        if org.kind != 'business' or payload.role != 'member':
+            raise HTTPException(422, 'Должность указывается только для сотрудника компании')
+        position_for(db, org.id, position_id)
+    if org.kind == 'business' and payload.role == 'manager' and not actor.is_admin and actor.organization_role != 'owner':
+        raise HTTPException(403, 'Управляющего назначает владелец компании')
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing and (existing.is_admin or existing.organization_id):
         raise HTTPException(409, 'Аккаунт уже связан с организацией или является оператором. Сначала завершите текущие отношения доступа.')
@@ -133,7 +145,7 @@ def make_invitation(db, actor, payload):
             Invitation.revoked_at.is_(None), Invitation.expires_at > datetime.utcnow()).first():
         raise HTTPException(409, 'Действующее приглашение уже существует. Сначала отзовите его.')
     raw = secrets.token_urlsafe(32)
-    row = Invitation(email=payload.email, organization_id=org.id, role=payload.role,
+    row = Invitation(email=payload.email, organization_id=org.id, role=payload.role, position_id=position_id,
         invited_by=actor.id, token_hash=hashlib.sha256(raw.encode()).hexdigest(), expires_at=datetime.utcnow()+timedelta(days=7))
     db.add(row); db.flush()
     audit(db, actor, 'invitation.created', 'invitation', row.id, organization_id=org.id, role=payload.role)
@@ -198,6 +210,8 @@ def change_user(db, actor, target, payload):
         raise HTTPException(403,"Недоступная организация")
     if target.id==actor.id or target.is_admin:
         raise HTTPException(409,'Изменение доступа владельца через эту форму запрещено')
+    if not actor.is_admin and actor.organization_kind == 'business' and actor.organization_role != 'owner' and (payload.organization_role == 'manager' or target.organization_role == 'manager'):
+        raise HTTPException(403, 'Доступом управляющего распоряжается владелец компании')
     old_org=target.organization_id
     if payload.organization_role == 'owner' and target.organization_role != 'owner':
         raise HTTPException(403, 'Новый владелец должен принять персональное приглашение или предложение передачи')
@@ -312,6 +326,8 @@ def accept_invite(payload:InviteAccept,db:Session=Depends(get_db)):
     db.add(user)
     try:
         db.flush()
+        from app.services.business_service import accept_position
+        accept_position(db, row, user)
         record_receipt(db,email=user.email,user_id=user.id,slug='terms',context='invitation')
         if payload.marketing_accepted:record_receipt(db,email=user.email,user_id=user.id,slug='marketing-consent',context='invitation')
         audit(db,user,'invitation.accepted','invitation',row.id,organization_id=org.id)
@@ -350,8 +366,11 @@ def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depen
     claimed=db.execute(update(Invitation).where(Invitation.id==row.id,Invitation.accepted_at.is_(None),Invitation.revoked_at.is_(None),Invitation.expires_at>datetime.utcnow()).values(accepted_at=datetime.utcnow()))
     if claimed.rowcount!=1:raise HTTPException(410,'Приглашение уже использовано')
     user.organization_id=org.id
+    user.organization=org
     user.organization_role=row.role
     user.auth_version+=1
+    from app.services.business_service import accept_position
+    accept_position(db, row, user)
     audit(db,user,'invitation.accepted_existing','invitation',row.id,organization_id=org.id)
     from app.services.mfa_service import preserve_token
     result=AuthResponse(access_token=preserve_token(user,request.state.auth_claims),user=UserResponse.model_validate(user))
@@ -370,7 +389,7 @@ def resend_invite(invite_id:int,db:Session=Depends(get_db),user:User=Depends(get
     if row.accepted_at:raise HTTPException(409,'Приглашение уже принято')
     row.revoked_at=datetime.utcnow()
     db.flush()
-    return make_invitation(db,user,InviteInput(email=row.email,organization_id=org_id,role=row.role))
+    return make_invitation(db,user,InviteInput(email=row.email,organization_id=org_id,role=row.role),position_id=row.position_id)
 
 
 @router.post('/team/invitations',status_code=201)

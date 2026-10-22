@@ -14,6 +14,7 @@ from app.database.db import get_db
 from app.models.user import User
 from app.repositories.user import UserRepository
 from app.core.config import settings
+from app.core.surface import surface
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -52,6 +53,8 @@ class AuthService:
         user = db.query(User).filter(User.email==normalize_email(email)).with_for_update().populate_existing().first()
         if not user or not user.is_active or not verify_password(password, user.password_hash):
             raise _credentials_exception("Неверный email или пароль")
+        if surface.get() == "admin" and not user.is_admin:
+            raise _credentials_exception("Вход доступен только оператору Лерниума")
         ensure_organization_active(user)
         if not user.password_hash.startswith("pbkdf2_sha256$600000$"):
             user.password_hash = hash_password(password)
@@ -74,6 +77,8 @@ class AuthService:
         from app.services.mfa_service import enabled
         if enabled(db,user) and (not set(payload.get('amr',[])) & {'otp','recovery'} or not isinstance(payload.get('mfa_at'),int)):
             raise _credentials_exception('Подтвердите двухэтапный вход')
+        if surface.get() == "admin" and not user.is_admin:
+            raise _credentials_exception("Вход доступен только оператору Лерниума")
         ensure_organization_active(user)
         return user
 
@@ -98,6 +103,8 @@ def get_current_user(
     if credentials is None:
         raise _credentials_exception("Требуется аутентификация")
     user = AuthService.get_user_from_token(db, credentials.credentials)
+    if getattr(request.app.state, "surface", None) == "platform" and user.is_admin and request.url.path.startswith("/api/support/"):
+        raise HTTPException(403, "Откройте сервис управления Лерниумом")
     request.state.auth_claims = decode_access_token(credentials.credentials)
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         path = request.url.path

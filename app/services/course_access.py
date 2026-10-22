@@ -15,12 +15,17 @@ def course_access_filter(user_id):
     course_grant = exists(select(LearningRoleGrant.id).where(
         LearningRoleGrant.user_id == user_id, LearningRoleGrant.organization_id == Course.organization_id,
         LearningRoleGrant.role == 'author', LearningRoleGrant.scope_type == 'course', LearningRoleGrant.scope_id == Course.id))
+    business_manager = exists(select(User.id).join(Organization, Organization.id == User.organization_id).where(
+        User.id == user_id, User.is_active.is_(True), User.is_admin.is_(False),
+        User.organization_id == Course.organization_id, Organization.kind == 'business',
+        User.organization_role.in_(['owner', 'admin', 'manager'])))
     active = exists(select(User.id).where(User.id == user_id, User.is_active.is_(True)))
     return and_(active, or_(
         and_(Course.organization_id.is_(None), org_id.is_(None), Course.owner_id == user_id),
         and_(Course.organization_id == org_id,
              exists(select(Organization.id).where(Organization.id == Course.organization_id, Organization.is_active.is_(True))),
-             or_(course_grant, and_(Course.owner_id == user_id, or_(author_role, organization_grant))))))
+             or_(course_grant, and_(Course.position_id.is_not(None), business_manager),
+                 and_(Course.owner_id == user_id, or_(author_role, organization_grant, business_manager))))))
 
 
 def related_course_access(course_id_column, user_id):

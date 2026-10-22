@@ -1,6 +1,6 @@
 import numpy as np
 
-from main import app
+from app.api_catalog import app
 from app.models.course import Course
 from app.models.document import Document, DocumentChunk
 from app.models.user import User

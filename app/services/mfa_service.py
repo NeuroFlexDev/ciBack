@@ -4,6 +4,7 @@ Secrets are encrypted at rest with the separately configured data key. Successfu
 factor consumption and JWT issuance are one transaction. Invalid guesses commit
 their counters explicitly; request rollback cannot reset the attempt budget.
 """
+from app.core.surface import surface
 import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -143,7 +144,7 @@ def authentication_result(db, user, *, primary='pwd', context=None):
     raw=secrets.token_urlsafe(32)
     expires=now()+timedelta(minutes=5)
     db.add(MFAChallenge(token_hash=digest(raw),user_id=user.id,auth_version=user.auth_version,
-                        primary_method=primary,context=context or {},expires_at=expires))
+                        primary_method=primary,context={**(context or {}), "surface": surface.get()},expires_at=expires))
     audit(db,user,'mfa.challenge_created','user',user.id,primary_method=primary)
     db.flush()
     return {'mfa_required':True,'challenge_token':raw,'expires_at':expires.isoformat()+'Z'}
@@ -152,7 +153,7 @@ def authentication_result(db, user, *, primary='pwd', context=None):
 def validate_federation(db,user,context):
     from app.services.auth_service import ensure_organization_active
     ensure_organization_active(user)
-    if not context: return
+    if not context or not (context.get("oidc_provider_id") or context.get("lti_platform_id")): return
     from app.services.integration_access import ensure_integrations_enabled
     if context.get('organization_id') != user.organization_id:
         raise HTTPException(403,'Доступ организации изменён. Повторите вход.')
@@ -171,7 +172,11 @@ def complete_challenge(db,raw,code):
     challenge=db.get(MFAChallenge,digest(raw))
     if not challenge or challenge.consumed_at or challenge.expires_at<=now() or challenge.attempts>=5:
         raise HTTPException(400,'Проверка входа истекла или уже использована. Начните вход заново.')
+    if challenge.context.get("surface", "platform") != surface.get():
+        raise HTTPException(400, "Проверка входа относится к другому сервису")
     user=db.get(User,challenge.user_id)
+    if surface.get() == "admin" and user and not user.is_admin:
+        raise HTTPException(403, "Доступ оператора отозван")
     if not user or not user.is_active or user.auth_version!=challenge.auth_version:
         raise HTTPException(400,'Доступ изменён. Начните вход заново.')
     factor=locked_factor(db,user.id)

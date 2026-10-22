@@ -4,7 +4,7 @@
     # A demo must remain crawlable for crawlers to observe the noindex header.
     @nonProduction not host lernium.ru
     header @nonProduction X-Robots-Tag "noindex, nofollow, noarchive"
-    @privatePages path /auth /auth/* /admin /admin/* /invite /invite/* /dashboard /dashboard/* /account /account/* /forgot-password /reset-password /courses /courses/* /employees /analytics /express /templates /ai-helper /learning /learning/* /reviews /reviews/* /course-reviews /groups /groups/* /assignments /programs /programs/* /team-settings /support-access /learning-analytics /integrations /integrations/* /billing
+    @privatePages path /company /company/* /auth /auth/* /admin /admin/* /invite /invite/* /dashboard /dashboard/* /account /account/* /forgot-password /reset-password /courses /courses/* /employees /analytics /express /templates /ai-helper /learning /learning/* /reviews /reviews/* /course-reviews /groups /groups/* /assignments /programs /programs/* /team-settings /support-access /learning-analytics /integrations /integrations/* /billing
     header @privatePages X-Robots-Tag "noindex, nofollow"
     @demoRobots {
         path /robots.txt
@@ -54,5 +54,24 @@
     log {
         output stdout
         format console
+    }
+}
+
+
+{$ADMIN_HOST:admin.dev.platform.lernium.ru} {
+    encode zstd gzip
+    header {
+        -Server
+        X-Robots-Tag "noindex, nofollow, noarchive"
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+        Cache-Control no-store
+    }
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8002
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8082
     }
 }
