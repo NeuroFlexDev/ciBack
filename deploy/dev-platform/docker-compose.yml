@@ -16,7 +16,7 @@ x-backend-environment: &backend-environment
   REFRESH_TOKEN_TTL_MINUTES: "1440"
   REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
   CONTACT_REQUESTS_ENABLED: ${CONTACT_REQUESTS_ENABLED:-false}
-  ADMIN_APP_URL: ${ADMIN_APP_URL:-https://admin.dev.platform.lernium.ru}
+  ADMIN_APP_URL: ${ADMIN_APP_URL:-https://admin.dev.lernium.ru}
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-https://dev.platform.lernium.ru}
   AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
   AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-20}
@@ -123,7 +123,7 @@ services:
     network_mode: host
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST:-dev.platform.lernium.ru}
-      ADMIN_HOST: ${ADMIN_HOST:-admin.dev.platform.lernium.ru}
+      ADMIN_HOST: ${ADMIN_HOST:-admin.dev.lernium.ru}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -205,7 +205,7 @@ services:
     environment:
       <<: *backend-environment
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?Set a separate admin signing secret}
-      ADMIN_CORS_ORIGINS: ${ADMIN_APP_URL:-https://admin.dev.platform.lernium.ru}
+      ADMIN_CORS_ORIGINS: ${ADMIN_APP_URL:-https://admin.dev.lernium.ru}
       REGISTRATION_ENABLED: "false"
     volumes:
       - uploads_data:/data/uploads:ro

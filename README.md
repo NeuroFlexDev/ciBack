@@ -18,7 +18,7 @@
 - Docker Compose поднимает отдельные `admin-api` и `admin-web`; используются проверенные
   образы ciBack/ciFront, общие PostgreSQL и очередь. Дополнительные публичные порты не нужны:
   TLS завершается на Caddy или nginx, внутренние порты 8002/8082 доступны только с хоста.
-- На staging адрес админки — `admin.dev.platform.lernium.ru`, на production — `admin.lernium.ru`.
+- На staging адрес админки — `admin.dev.lernium.ru`, на production — `admin.lernium.ru`.
   До переключения должны быть готовы DNS/TLS, оба новых контейнера и отдельный ключ.
 
 B2B определяется существующим типом организации `business`. Оператор создаёт компанию

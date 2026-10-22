@@ -58,7 +58,7 @@
 }
 
 
-{$ADMIN_HOST:admin.dev.platform.lernium.ru} {
+{$ADMIN_HOST:admin.dev.lernium.ru} {
     encode zstd gzip
     header {
         -Server
