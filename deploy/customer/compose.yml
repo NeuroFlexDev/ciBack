@@ -50,7 +50,7 @@ services:
 
   worker:
     <<: *app
-    command: ["rq", "worker", "generation", "--with-scheduler", "--url", "redis://redis:6379/0"]
+    command: ["rq", "worker", "generation", "--with-scheduler", "--worker-ttl", "120", "--url", "redis://redis:6379/0"]
     healthcheck:
       test: ["CMD", "python", "-m", "scripts.worker_health"]
       interval: 30s
