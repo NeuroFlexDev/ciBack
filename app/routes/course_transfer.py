@@ -1,12 +1,26 @@
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.services.auth_service import get_current_user
 from app.services import course_transfer as transfer
+from app.core.http_security import bounded_json
 
-router = APIRouter(prefix='/team/course-transfers')
+
+class BoundedTransferRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        async def bounded(request):
+            if request.method == 'POST':
+                # Enforce before FastAPI parses/allocates arbitrary SVG JSON.
+                await bounded_json(request, 9 * 1024 * 1024 if request.url.path.endswith('/export.pdf') else 64 * 1024)
+            return await handler(request)
+        return bounded
+
+
+router = APIRouter(prefix='/team/course-transfers', route_class=BoundedTransferRoute)
 
 
 class ExportInput(BaseModel):

@@ -184,3 +184,11 @@ def test_safe_local_svg_references_and_overload_fail_closed(client, db_session, 
     monkeypatch.setattr(course_pdf, 'PDF_SLOTS', SimpleNamespace(acquire=lambda **_:False))
     response = client.post(BASE+'/export.pdf', headers=headers(world['owner']), json=selection(client, world, version.id))
     assert response.status_code == 503 and response.headers['retry-after'] == '10'
+
+
+@pytest.mark.parametrize('chunked', [False, True])
+def test_pdf_rejects_oversized_json_before_parsing_or_authentication(client, chunked):
+    body = b'"' + b'x' * (9 * 1024 * 1024) + b'"'
+    response = client.post(BASE+'/export.pdf', content=iter([body]) if chunked else body,
+        headers={'Content-Type':'application/json'})
+    assert response.status_code == 413
