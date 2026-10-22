@@ -245,6 +245,8 @@ def overview(db):
         if route.get("usage_priced_uncached_rub") is not None:
             entry["estimated_rub"] = str(Decimal(entry["estimated_rub"] or "0") + Decimal(route["usage_priced_uncached_rub"]))
     return {"revision": row.revision, "providers": items, "models": [item.model_dump(mode="json") for item in models.values()],
-            "policy": {**control.policy(), **row.policy}, "catalog": CATALOG, "roles": ROLES,
+            "policy": {**control.policy(), **row.policy,
+                       "local_only": settings.AI_LOCAL_ONLY or row.policy.get("local_only", control.policy()["local_only"])},
+            "catalog": CATALOG, "roles": ROLES,
             "stats": stats, "stats_truncated": len(calls) > 5000, "local_endpoints": settings.AI_LOCAL_ENDPOINTS,
             "cache_ttl_seconds": settings.AI_CACHE_TTL_SECONDS, "reload_seconds": 5}

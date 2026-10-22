@@ -230,3 +230,12 @@ def test_long_model_id_fits_audit_storage(client, auth_headers, managed, db_sess
     assert client.put('/api/admin/ai/models', headers=auth_headers, json=model_payload(model=model_id)).status_code == 200
     event = db_session.query(AdminEvent).filter_by(action='ai.model.updated').one()
     assert len(event.target_id) <= 64 and event.details['reference'] == 'cloud::' + model_id
+
+
+def test_installation_local_only_policy_cannot_be_overridden(client, auth_headers, managed, monkeypatch):
+    monkeypatch.setattr(settings, 'AI_LOCAL_ONLY', True)
+    response = client.put('/api/admin/ai/policy', headers=auth_headers,
+        json={'expected_revision': 0, 'mode': 'adaptive', 'local_only': False})
+    assert response.status_code == 422
+    assert client.get('/api/admin/ai', headers=auth_headers).json()['policy']['local_only']
+    assert control.policy()['local_only']

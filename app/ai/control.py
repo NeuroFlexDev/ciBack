@@ -49,6 +49,7 @@ def policy():
             "min_pass_rate": settings.AI_ROUTING_MIN_PASS_RATE}
     if data is not None:
         base.update(data["policy"])
+        base["local_only"] = settings.AI_LOCAL_ONLY or base["local_only"]
     else:
         base["local_only"] = True
     return base

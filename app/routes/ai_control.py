@@ -44,5 +44,7 @@ def model(payload: service.ModelChange, db: Session = Depends(get_db), admin=Dep
 
 @router.put("/policy")
 def policy(payload: service.PolicyChange, db: Session = Depends(get_db), admin=Depends(require_admin)):
+    if service.settings.AI_LOCAL_ONLY and not payload.local_only:
+        raise HTTPException(422, "Локальный режим закреплён в настройках сервера. Отключить его через админку нельзя.")
     row = service.row_for(db, payload.expected_revision)
     return service.save(db, admin, row, "ai.policy.updated", "policy", policy=payload.model_dump(exclude={"expected_revision"}))
