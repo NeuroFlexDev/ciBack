@@ -4,6 +4,7 @@ Interactive requests use a separate, bounded pool: long generation/OCR jobs can
 never consume its slots. There is no automatic paid retry in this boundary.
 Timeouts retain worst-case spend; only proven unsent requests release it.
 """
+from app.ai import control as ai_control
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_UP
 from uuid import uuid4
@@ -205,7 +206,7 @@ def text_price(role, input_tokens, output_tokens, *, model=None, provider=None):
     if provider is None:
         pairs.update((item.provider, item.model) for item in enabled_candidates(role))
         pairs.add(("vsellm", policy.fallback))
-    if settings.AI_LOCAL_ONLY:
+    if ai_control.policy()["local_only"]:
         pairs = {(name, selected) for name, selected in pairs if registry().get(name) and registry()[name].local}
         if not pairs:
             from app.ai.providers import AIUnavailable

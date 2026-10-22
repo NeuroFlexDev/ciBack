@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.ai import control as ai_control
 
 import logging
 from typing import Any
@@ -66,7 +67,7 @@ def chat_generate(
     stamp = principal_stamp(db.get(User, user_id))
     chat = ChatRepository._active_chat(db, chat_id, user_id)
     engine_name = engine_name or chat.engine or "vsellm"
-    if settings.AI_LOCAL_ONLY:
+    if ai_control.policy()["local_only"]:
         engine_name = "vsellm"  # Only the approved local-provider registry may dispatch.
     model = model or chat.model
     if engine_name == "vsellm":

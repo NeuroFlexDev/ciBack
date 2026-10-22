@@ -2,7 +2,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, model_validator, field_validator, AnyHttpUrl
+from pydantic import BaseModel, Field, SecretStr, PrivateAttr, model_validator, field_validator, AnyHttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class AIRoutingCandidate(BaseModel):
@@ -31,17 +31,22 @@ class AIProvider(BaseModel):
     local: bool = False
     enabled: bool = True
     timeout_seconds: int = Field(default=60, ge=1, le=300)
+    project: str = Field(default="", max_length=128, pattern=r"^[a-zA-Z0-9_-]*$")
+    _managed: bool = PrivateAttr(default=False)
+    _sealed_key: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def endpoint_policy(self):
         if not self.local and self.base_url.scheme != "https":
             raise ValueError("Remote AI providers require HTTPS")
-        if self.base_url.username or self.base_url.password or self.base_url.query:
+        if self.base_url.username or self.base_url.password or self.base_url.query or self.base_url.fragment:
             raise ValueError("Provider URLs must not contain credentials or query parameters")
         return self
 
 
 class Settings(BaseSettings):
+    # Exact origins approved by the installation operator, e.g. http://ollama:11434.
+    AI_LOCAL_ENDPOINTS: list[str] = []
     # Основные секции конфига
     ENV: str = "dev" # dev/stage/prod
     DEBUG: bool = True

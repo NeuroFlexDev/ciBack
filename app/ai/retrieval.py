@@ -44,7 +44,8 @@ def embedding_client():
         raise providers.AIUnavailable()
     return OpenAIEmbeddings(model=settings.AI_MODEL_EMBEDDING,
         api_key=providers.credential(provider), base_url=str(provider.base_url),
-        check_embedding_ctx_length=False, max_retries=0, request_timeout=10, chunk_size=16)
+        check_embedding_ctx_length=False, max_retries=0, request_timeout=10, chunk_size=16,
+        **providers.client_options(provider))
 
 
 def persist_embeddings(db: Session, chunks: list) -> list[str]:

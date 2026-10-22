@@ -37,6 +37,18 @@ def tmpdir():
         yield d
 
 
+@pytest.fixture(autouse=True)
+def isolated_ai_control(monkeypatch):
+    # Unit tests use environment model policy unless explicitly exercising the
+    # managed registry. Never query the process-global production DB factory.
+    from app.ai import control
+    from copy import deepcopy
+    monkeypatch.setattr(control, "read_snapshot", lambda: deepcopy(control.EMPTY))
+    control.invalidate()
+    yield
+    control.invalidate()
+
+
 @pytest.fixture(scope="session")
 def engine():
     # чистый sqlite в памяти

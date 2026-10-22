@@ -32,6 +32,8 @@ from app.routes import mfa
 app.include_router(mfa.router, prefix="/api", tags=["Two-factor authentication"])
 app.include_router(legal.router, prefix="/api", tags=["Legal"])
 from app.routes import integrations, billing, oidc, lti, operations
+from app.routes import ai_control
+app.include_router(ai_control.router, prefix="/api", tags=["AI providers"])
 app.include_router(integrations.router, prefix="/api", tags=["Integrations v1"])
 app.include_router(billing.router, prefix="/api", tags=["Billing"])
 app.include_router(oidc.router, prefix="/api", tags=["OIDC"])

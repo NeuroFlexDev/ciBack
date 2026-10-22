@@ -63,7 +63,7 @@ INTEGRATION_TABLES = {
 PRE_INTEGRATION_TABLES = EXPECTED_TABLES | LEARNING_TABLES | MATERIAL_TABLES
 AI_RESOURCE_TABLES = {"ai_resource_mutex", "ai_resource_usage", "ai_thread_references"}
 EXPECTED_TABLES = PRE_INTEGRATION_TABLES | INTEGRATION_TABLES | AI_RESOURCE_TABLES | {
-    "business_positions", "support_access_grants", "user_mfa", "mfa_recovery_codes", "mfa_challenges", "published_source_files",
+    "ai_control", "business_positions", "support_access_grants", "user_mfa", "mfa_recovery_codes", "mfa_challenges", "published_source_files",
 }
 
 def test_alembic_revision_graph_has_one_connected_head():

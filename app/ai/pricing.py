@@ -5,6 +5,7 @@ https://vsellm.ru/models/anthropic/claude-sonnet-4.6
 https://vsellm.ru/models/google/gemini-2.5-flash
 Operator candidate prices override this snapshot. No FX conversion or tools.
 """
+from app.ai import control as ai_control
 from app.core.config import AIRoutingCandidate, settings
 
 SNAPSHOT = "2026-10-19"
@@ -13,7 +14,7 @@ RATES = {"openai/gpt-5.4-mini": (83, 497), "anthropic/claude-sonnet-4.6": (332, 
 
 
 def candidate_price(provider: str, model: str, role: str = "chat"):
-    configured = next((row for row in settings.AI_ROUTING_CANDIDATES
+    configured = next((row for row in ai_control.candidates()
                        if row.provider == provider and row.model == model), None)
     if configured:
         return configured

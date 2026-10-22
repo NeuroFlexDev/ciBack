@@ -1,3 +1,4 @@
+from app.ai import control as ai_control
 import logging
 from threading import RLock
 
@@ -24,7 +25,7 @@ def get_model():
     try:
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer(settings.EMBEDDING_MODEL, local_files_only=settings.AI_LOCAL_ONLY)
+        model = SentenceTransformer(settings.EMBEDDING_MODEL, local_files_only=ai_control.policy()["local_only"])
     except Exception as exc:
         logger.warning("SentenceTransformer недоступен, семантический поиск отключён: %s", exc)
         model = False
