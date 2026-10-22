@@ -11,6 +11,7 @@ from typing import Iterable
 from app.core.config import AIRoutingCandidate, settings
 from app.ai.providers import route_id
 from app.ai.pricing import candidate_price, SNAPSHOT
+from app.ai.context_budget import effective_input_limit
 
 
 ROUTER_VERSION = 2
@@ -101,7 +102,7 @@ def choose_route(
         if available_providers is not None and candidate.provider not in available_providers:
             continue
         candidate_input = (input_estimates or {}).get(route_id(candidate.provider, candidate.model), input_tokens)
-        if (candidate_input > min(candidate.max_input_tokens, settings.AI_MAX_INPUT_TOKENS)
+        if (candidate_input > effective_input_limit(candidate.max_input_tokens)
                 or output_tokens > candidate.max_output_tokens
                 or candidate_input + output_tokens > candidate.context_window):
             continue

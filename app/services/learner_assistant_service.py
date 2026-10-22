@@ -86,7 +86,8 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
     messages.append({"role": "user", "content": json.dumps({"lesson_id": lesson_id, "title": lesson["title"],
         "lesson": content, "question": question}, ensure_ascii=False)})
     try:
-        if gateway.token_count(messages) > min(settings.AI_CHAT_CONTEXT_TOKENS, settings.AI_MAX_INPUT_TOKENS):
+        from app.ai.context_budget import effective_input_limit
+        if gateway.token_count(messages) > effective_input_limit(settings.AI_CHAT_CONTEXT_TOKENS):
             raise HTTPException(413, "Урок превышает контекст помощника")
         from app.services.ai_resources import completion
         from app.models.course_version import CourseVersion

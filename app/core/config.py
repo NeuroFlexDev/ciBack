@@ -127,7 +127,8 @@ class Settings(BaseSettings):
     AI_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=5)
     AI_MAX_CALLS_PER_RUN: int = Field(default=180, ge=1, le=1000)
     AI_MAX_TOKENS_PER_RUN: int = Field(default=600000, ge=1000)
-    AI_MAX_INPUT_TOKENS: int = Field(default=64000, ge=1000)
+    # Zero disables the optional installation cap; model/provider limits remain.
+    AI_MAX_INPUT_TOKENS: int = Field(default=0, ge=0)
     AI_CACHE_TTL_SECONDS: int = Field(default=86400, ge=0)
     AI_ROUTING_MODE: Literal["off", "shadow", "adaptive"] = "adaptive"
     AI_ROUTING_CANDIDATES: list[AIRoutingCandidate] = Field(default_factory=list)

@@ -70,15 +70,27 @@ class ContextBudgetExceeded(HTTPException):
         self.ai_model = model
 
 
+def effective_input_limit(model_limit: int) -> int:
+    """Apply an optional installation cap without treating zero as no capacity."""
+    cap = settings.AI_MAX_INPUT_TOKENS
+    return min(cap, model_limit) if cap else model_limit
+
+
 def limits(model: str, provider: str = "vsellm") -> tuple[int, int, int]:
     candidate = next((item for item in settings.AI_ROUTING_CANDIDATES
                       if item.model == model and item.provider == provider), None)
     if candidate:
-        return min(settings.AI_MAX_INPUT_TOKENS, candidate.max_input_tokens), candidate.max_output_tokens, candidate.context_window
-    context, output = MODEL_LIMITS.get(model, (settings.AI_MAX_INPUT_TOKENS, 0))
-    # Unknown static models need explicit candidate caps; do not invent a larger
-    # context window. Their declared server input cap remains the total cap.
-    return settings.AI_MAX_INPUT_TOKENS, output or context, context
+        return effective_input_limit(candidate.max_input_tokens), candidate.max_output_tokens, candidate.context_window
+    if model in MODEL_LIMITS:
+        context, output = MODEL_LIMITS[model]
+        return effective_input_limit(context), output, context
+    # Unknown static models still need declared limits. An explicit installation
+    # cap keeps the legacy conservative behavior; zero must not imply infinity.
+    if settings.AI_MAX_INPUT_TOKENS:
+        cap = settings.AI_MAX_INPUT_TOKENS
+        return cap, cap, cap
+    raise HTTPException(503, {"code": "ai_model_limits_missing",
+        "message": "Для выбранной AI-модели не настроен размер контекста."})
 
 
 def require_fits(messages: list[dict], model: str, output_tokens: int,
