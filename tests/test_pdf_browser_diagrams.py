@@ -122,3 +122,24 @@ def test_heading_stays_with_following_formula_when_page_has_only_heading_space()
 def test_svg_normalization_rejects_pathological_text_before_native_renderer():
     with pytest.raises(PDFRenderError, match='много текста'):
         safe_svg('<svg><text>' + 'x' * 24001 + '</text></svg>')
+
+
+@pytest.mark.parametrize('reference', [
+    '<use href="#shape"/>',
+    '<g id="nested"><use href="#shape"/><use href="#shape"/></g><use href="#nested"/>',
+    '<use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#shape"/>',
+])
+def test_diagram_use_references_rejected_before_native_process(reference, monkeypatch):
+    def forbidden_process(*args, **kwargs):
+        pytest.fail('An untrusted use reference reached the native normalizer')
+    monkeypatch.setattr('app.services.pdf_assets.subprocess.run', forbidden_process)
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><defs><path id="shape" d="M 0 0 L 1 0 L 1 1 Z"/></defs>' + reference + '</svg>'
+    with pytest.raises(PDFRenderError, match='ссылки use'):
+        drawing_from_svg(svg, normalize=True)
+
+
+def test_internal_use_remains_available_to_non_normalized_local_svg():
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="10" height="10"><defs><path id="shape" d="M 1 1 L 9 1 L 9 9 Z"/></defs><use xlink:href="#shape"/></svg>'
+    drawing = drawing_from_svg(svg, normalize=False)
+    document = pymupdf.open(stream=renderPDF.drawToString(drawing), filetype='pdf')
+    assert any(path['rect'].width > 7 and path['rect'].height > 7 for path in document[0].get_drawings())

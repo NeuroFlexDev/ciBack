@@ -74,7 +74,7 @@ def render_inventory(content):
     return list(diagrams.values()), sorted(maths)
 
 
-def safe_svg(source, *, max_bytes=MAX_SVG):
+def safe_svg(source, *, max_bytes=MAX_SVG, allow_use=True):
     if len(source.encode('utf8')) > max_bytes:
         raise PDFRenderError('Схема слишком велика для безопасного экспорта.')
     try:
@@ -91,6 +91,8 @@ def safe_svg(source, *, max_bytes=MAX_SVG):
         raise PDFRenderError('Слишком много текста в одной схеме.')
     for node in nodes:
         tag = node.tag.split('}')[-1]
+        if tag == 'use' and not allow_use:
+            raise PDFRenderError('SVG схемы не должен содержать ссылки use. Обновите схему в редакторе.')
         if tag not in allowed:
             raise PDFRenderError('SVG содержит неподдерживаемые внешние или исполняемые элементы.')
         for key, value in list(node.attrib.items()):
@@ -120,7 +122,10 @@ def safe_svg(source, *, max_bytes=MAX_SVG):
 
 
 def drawing_from_svg(source, max_width=470, max_height=570, *, normalize=False, timeout=10):
-    data = safe_svg(source)
+    # The browser's diagram sanitizer forbids use too. Reject references before
+    # native normalization can expand a small nested graph into many paths.
+    # Locally generated MathJax SVG uses the separate non-normalized path.
+    data = safe_svg(source, allow_use=not normalize)
     if normalize:
         data = svg1_marker_orientation(data)
         node = shutil.which('node')
