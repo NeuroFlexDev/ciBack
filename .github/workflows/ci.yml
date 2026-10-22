@@ -53,6 +53,19 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
+      - name: Set up PDF math runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: pdf_runtime/package-lock.json
+
+      - name: Install PDF rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config
+          npm ci --omit=dev --ignore-scripts --prefix pdf_runtime
+
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
 

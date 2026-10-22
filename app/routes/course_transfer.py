@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.responses import StreamingResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.services.auth_service import get_current_user
@@ -20,9 +20,40 @@ class ExportInput(BaseModel):
 
 
 @router.get('')
-def list_versions(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+def list_versions(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), course_id: int | None = Query(None, gt=0),
                   db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return transfer.catalogue(db, user, offset, limit)
+    return transfer.catalogue(db, user, offset, limit, course_id)
+
+
+class PDFDiagram(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(pattern=r'^[a-f0-9]{64}$')
+    svg: str = Field(min_length=20, max_length=1500000)
+
+
+class PDFInput(ExportInput):
+    diagrams: list[PDFDiagram] = Field(default_factory=list, max_length=80)
+
+    @model_validator(mode='after')
+    def bounded_svg_bytes(self):
+        if sum(len(item.svg.encode('utf8')) for item in self.diagrams) > 8 * 1024 * 1024:
+            raise ValueError('SVG diagrams exceed 8 MiB in total')
+        return self
+
+
+@router.post('/pdf-plan')
+def plan_pdf(payload: ExportInput, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.course_pdf import export_pdf
+    return export_pdf(db, user, payload, request.state.auth_claims, plan=True)
+
+
+@router.post('/export.pdf')
+def download_pdf(payload: PDFInput, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.course_pdf import export_pdf
+    content, filename = export_pdf(db, user, payload, request.state.auth_claims)
+    return Response(content, media_type='application/pdf', headers={
+        'Content-Disposition': f'attachment; filename="{filename}"', 'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff'})
 
 
 @router.post('/export')

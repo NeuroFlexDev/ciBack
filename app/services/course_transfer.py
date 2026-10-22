@@ -51,8 +51,10 @@ def version_query(db, org_id):
         CourseVersion.publication_status == 'published')
 
 
-def catalogue(db, user, offset, limit):
+def catalogue(db, user, offset, limit, course_id=None):
     query = version_query(db, owner_scope(user))
+    if course_id is not None:
+        query = query.filter(CourseVersion.course_id == course_id)
     return {'total': query.count(), 'items': [{'course_id': version.course_id, 'course_version_id': version.id,
         'title': version.name, 'revision': version.revision, 'published_at': version.published_at,
         'snapshot_sha256': learning.content_digest(content.snapshot), 'source_count': len(content.snapshot.get('sources', []))}
@@ -98,7 +100,7 @@ def course_markdown(content, private):
     return ('\n'.join(lines) + '\n').encode('utf-8')
 
 
-def prepare_bundle(db, user, payload, *, claims):
+def prepare_bundle(db, user, payload, *, claims, record_export=True):
     org_id = owner_scope(user)
     if not payload.confirm_transfer or (payload.include_answer_keys and not payload.confirm_private_materials):
         raise HTTPException(422, 'Подтвердите состав передачи; ключи ответов требуют отдельного подтверждения')
@@ -183,10 +185,11 @@ def prepare_bundle(db, user, payload, *, claims):
             sums += f"{sha256(manifest_bytes).hexdigest()}  manifest.json\n"
             bundle.writestr('SHA256SUMS', sums.encode('ascii'))
         user = check_owner_session(db, user.id, org_id, claims)
-        audit(db, user, 'learning.course_export_prepared', 'course_version', version.id, organization_id=org_id,
-            course_id=course.id, export_id=export_id, snapshot_sha256=source_digest, manifest_sha256=sha256(manifest_bytes).hexdigest(),
-            include_sources=payload.include_sources, include_answer_keys=payload.include_answer_keys, files=len(manifest['files']), bytes=total_bytes)
-        db.commit()
+        if record_export:
+            audit(db, user, 'learning.course_export_prepared', 'course_version', version.id, organization_id=org_id,
+                course_id=course.id, export_id=export_id, snapshot_sha256=source_digest, manifest_sha256=sha256(manifest_bytes).hexdigest(),
+                include_sources=payload.include_sources, include_answer_keys=payload.include_answer_keys, files=len(manifest['files']), bytes=total_bytes)
+            db.commit()
         archive.seek(0)
         return archive, f'lernium-course-{course.id}-v{version.revision}.zip'
     except BaseException:
