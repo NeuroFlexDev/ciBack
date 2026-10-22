@@ -56,7 +56,7 @@ class CourseEdit(StateInput):
 class ReissueInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     locale: Literal['ru', 'en'] = 'ru'
-    role: Literal['owner', 'admin', 'author', 'reviewer', 'manager', 'member'] | None = None
+    role: Literal['owner', 'admin', 'author', 'reviewer', 'manager', 'member', 'candidate'] | None = None
 
 
 class RequestCreate(BaseModel):
@@ -164,8 +164,9 @@ def reissue_invitation(invite_id: int, payload: ReissueInput, db: Session = Depe
     audit(db, actor, 'invitation.reissued', 'invitation', row.id)
     # One transaction: failure to reserve a seat leaves the prior invitation valid.
     return make_invitation(db, actor, InviteInput(email=row.email, organization_id=row.organization_id,
-        role=payload.role or row.role, locale=payload.locale),
-        position_id=row.position_id if (payload.role or row.role) == "member" else None)
+        role=payload.role or row.role, locale=payload.locale,
+        manager_id=row.manager_id if (payload.role or row.role) in {'member', 'candidate'} else None),
+        position_id=row.position_id if (payload.role or row.role) in {'member', 'candidate'} else None)
 
 
 @router.post('/courses', status_code=201)

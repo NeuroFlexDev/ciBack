@@ -40,7 +40,8 @@ def dashboard(db, user, *, days=30, activity_days=7, now=None):
     durations = [(svc.utc(row.completed_at) - svc.utc(row.created_at)).total_seconds() / 3600 for row in completed]
     durations = [value for value in durations if value >= 0]
     if admin:
-        people = db.query(User).filter(User.organization_id == organization_id, User.is_active.is_(True)).count()
+        from app.services.business_hierarchy import people_filter
+        people = db.query(User).filter(people_filter(user), User.is_active.is_(True)).count()
         courses = db.query(Course).filter(Course.organization_id == organization_id, Course.is_deleted.is_(False)).count()
     elif report:
         people, courses = len({row.user_id for row in active}), len(course_ids)
@@ -58,7 +59,7 @@ def dashboard(db, user, *, days=30, activity_days=7, now=None):
             if day in daily:
                 daily[day] += 1
     return {
-        'scope': 'organization' if admin else 'authorized_team' if report else 'self',
+        'scope': 'organization' if svc.is_manager(db, user) else 'authorized_team' if report else 'self',
         'period_days': days, 'activity_days': activity_days, 'as_of': now.isoformat() + 'Z',
         'metrics': {
             'assignments_in_period': len(cohort), 'completed_in_period': len(completed),

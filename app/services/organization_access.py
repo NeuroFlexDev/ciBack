@@ -82,6 +82,9 @@ def check_course_limit(db: Session, owner_id: int):
     if user and user.organization_id:
         from app.models.learning import LearningRoleGrant
         from app.services.business_service import manages_business
+        from app.services.business_hierarchy import is_business
+        if is_business(user) and not manages_business(user):
+            raise HTTPException(403, 'Создавать регламенты и тесты может руководитель компании')
         if not manages_business(user) and user.organization_role != 'author' and not db.query(LearningRoleGrant).filter_by(
                 organization_id=user.organization_id, user_id=user.id, role='author', scope_type='organization').first():
             raise HTTPException(403, 'Создание курсов требует отдельной роли автора организации')

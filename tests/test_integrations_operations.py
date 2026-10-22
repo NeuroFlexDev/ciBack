@@ -63,6 +63,7 @@ def test_integration_keys_never_impersonate_users_or_cross_tenants(client,db_ses
     assert client.get('/api/auth/me',headers=headers).status_code==401
     owner.organization_role="member";db_session.commit()
     assert client.get('/api/integrations/keys',headers=auth_headers).status_code==403
+    assert client.get('/api/v1/members', headers=headers).status_code == 403
 
 
 def test_expired_revoked_and_suspended_keys_fail_closed(client,db_session,owner,auth_headers):
@@ -93,6 +94,7 @@ def test_disabled_delivery_option_blocks_keys_and_federation_but_preserves_histo
 
 
 def test_organization_admin_can_manage_allowed_integrations_but_not_billing(client,db_session,owner,auth_headers):
+    owner.organization.kind = 'education'
     owner.organization_role='admin';db_session.commit()
     assert client.post('/api/integrations/keys',headers=auth_headers,json=key_payload()).status_code==201
     assert client.get('/api/integrations/keys',headers=auth_headers).status_code==200
@@ -101,6 +103,7 @@ def test_organization_admin_can_manage_allowed_integrations_but_not_billing(clie
 
 def test_explicit_organization_admin_grant_is_tenant_scoped_and_revocable(client,db_session,owner,auth_headers):
     from app.models.learning import LearningRoleGrant
+    owner.organization.kind = 'education'
     owner.organization_role='member'
     foreign=Organization(name='Other tenant');db_session.add(foreign);db_session.flush()
     grant=LearningRoleGrant(organization_id=foreign.id,user_id=owner.id,created_by=owner.id,

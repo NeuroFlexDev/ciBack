@@ -60,10 +60,16 @@ def settings_for(db, org_id, lock=False):
 
 
 def role_grants(db, user):
+    from app.services.business_hierarchy import is_business
+    if is_business(user) and user.organization_role in {'member', 'candidate'}:
+        return []
     return db.query(LearningRoleGrant).filter_by(organization_id=user.organization_id, user_id=user.id).all()
 
 
 def is_manager(db, user):
+    from app.services.business_hierarchy import is_business
+    if is_business(user):
+        return user.organization_role == 'owner'
     return user.organization_role in {'owner', 'admin'} or any(g.role == 'admin' and g.scope_type == 'organization' for g in role_grants(db, user))
 
 
@@ -134,6 +140,13 @@ def org_course(db, user, course_id):
 
 
 def allowed_assigner(db, user, course, target_id=None, group_id=None):
+    from app.services.business_hierarchy import is_business, can_manage_person
+    if is_business(user):
+        if user.organization_role == 'owner':
+            return
+        if group_id is not None or target_id is None or not can_manage_person(db, user, target_id):
+            raise HTTPException(403, 'Назначать регламенты и тесты можно только участникам своей команды')
+        return
     if is_manager(db, user):
         return
     grants = role_grants(db, user)
@@ -383,6 +396,9 @@ def update_completion(db, row):
 def can_review(db, user, assignment):
     if assignment.organization_id != organization(user):
         return False
+    from app.services.business_hierarchy import is_business, can_manage_person
+    if is_business(user):
+        return can_manage_person(db, user, assignment.user_id)
     version = db.get(CourseVersion, assignment.course_version_id)
     return can_scope(db, user, 'reviewer', course_id=version.course_id, group_id=assignment.group_id, user_id=assignment.user_id)
 
@@ -390,8 +406,10 @@ def can_review(db, user, assignment):
 def can_report(db, user, assignment):
     if assignment.organization_id != organization(user):
         return False
-    from app.services.business_service import manages_business
-    if is_manager(db, user) or manages_business(user):
+    from app.services.business_hierarchy import is_business, can_manage_person
+    if is_business(user):
+        return can_manage_person(db, user, assignment.user_id)
+    if is_manager(db, user):
         return True
     version = db.get(CourseVersion, assignment.course_version_id)
     return can_scope(db, user, 'manager', group_id=assignment.group_id, user_id=assignment.user_id) or can_scope(db, user, 'reviewer', course_id=version.course_id, group_id=assignment.group_id, user_id=assignment.user_id)

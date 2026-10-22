@@ -25,7 +25,9 @@ def company(db_session):
     users = {}
     for key, role, tenant in [('owner', 'owner', org), ('manager', 'manager', org), ('employee', 'member', org), ('outsider', 'manager', other), ('government', 'manager', government)]:
         users[key] = User(email=f'{key}@business.test', password_hash=hash_password('example-password-123'), organization_id=tenant.id, organization_role=role)
-    db_session.add_all(users.values()); db_session.commit()
+    db_session.add_all(users.values()); db_session.flush()
+    users['employee'].manager_id = users['manager'].id
+    db_session.commit()
     return org, users
 
 
@@ -45,6 +47,8 @@ def test_owner_manager_employee_position_course_flow(client, db_session, company
     assert client.put(f'/api/business/employees/{employee.id}/manager', headers=headers(owner), json={'role': 'manager', 'expected_auth_version': 0}).status_code == 200
     assert client.get('/api/auth/me', headers=old_employee_token).status_code == 401
     assert client.put(f'/api/business/employees/{employee.id}/manager', headers=headers(owner), json={'role': 'member', 'expected_auth_version': employee.auth_version}).status_code == 200
+    assert client.put(f'/api/business/employees/{employee.id}/reporting-line', headers=headers(owner), json={
+        'manager_id': manager.id, 'expected_manager_id': None, 'expected_auth_version': employee.auth_version}).status_code == 200
     position = make_position(client, manager)
     response = client.put(f'/api/business/employees/{employee.id}/position', headers=headers(manager), json={'position_id': position['id'], 'expected_position_id': None})
     assert response.status_code == 200, response.text

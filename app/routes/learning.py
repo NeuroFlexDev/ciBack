@@ -49,7 +49,7 @@ def permissions(db: Session = Depends(get_db), user: User = Depends(get_current_
             'can_manage_admins': user.organization_role == 'owner',
             'can_manage_business': business,
             'can_author': business or not user.organization_id or user.organization_role == 'author' or any(g.role == 'author' for g in grants),
-            'can_review': any(g.role == 'reviewer' for g in grants),
+            'can_review': business or any(g.role == 'reviewer' for g in grants),
             'can_report': business or bool(user.organization_id and (svc.is_manager(db, user) or any(g.role in {'manager', 'reviewer'} for g in grants))),
             'grants': [{k: getattr(g, k) for k in ['id', 'role', 'scope_type', 'scope_id']} for g in grants]}
 
@@ -116,6 +116,7 @@ def group_out(db, row):
 @router.get('/team/groups')
 def groups(q: str = Query('', max_length=100), archived: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
+    from app.services.business_hierarchy import is_business, people_filter
     if archived:
         svc.require_manager(db, user)
     query = db.query(LearningGroup).filter_by(organization_id=org_id, is_archived=archived)
@@ -126,7 +127,13 @@ def groups(q: str = Query('', max_length=100), archived: bool = False, db: Sessi
         scoped_ids = {g.scope_id for g in svc.role_grants(db, user) if g.scope_type == 'group'}
         own_ids = {g.group_id for g in db.query(LearningGroupMember).filter_by(user_id=user.id)}
         rows = [r for r in rows if r.id in scoped_ids | own_ids]
-    return {'items': [group_out(db, r) for r in rows]}
+    items = [group_out(db, r) for r in rows]
+    if is_business(user) and user.organization_role != 'owner':
+        visible = {r.id for r in db.query(User).filter(people_filter(user, include_self=True))}
+        for item in items:
+            item['user_ids'] = [uid for uid in item['user_ids'] if uid in visible]
+            item['staff'] = [entry for entry in item['staff'] if entry['user_id'] == user.id]
+    return {'items': items}
 
 
 @router.post('/team/groups', status_code=201)
@@ -298,7 +305,11 @@ def restore_department(department_id: int, payload: LifecycleInput | None = None
 def people(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
     rows = db.query(LearningPerson).filter_by(organization_id=org_id).all()
-    if not svc.is_manager(db, user):
+    from app.services.business_hierarchy import is_business, people_filter
+    if is_business(user):
+        visible = {r.id for r in db.query(User).filter(people_filter(user, include_self=True))}
+        rows = [r for r in rows if r.user_id in visible]
+    elif not svc.is_manager(db, user):
         rows = [r for r in rows if r.user_id == user.id or svc.can_scope(db, user, 'manager', user_id=r.user_id)]
     return {'items': [{k: getattr(r, k) for k in ['user_id', 'department_id', 'position', 'external_id', 'attributes']} for r in rows]}
 
@@ -563,7 +574,8 @@ def course_directory(db: Session = Depends(get_db), user: User = Depends(get_cur
 def catalogue(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_id = svc.organization(user)
     versions = db.query(CourseVersion).join(Course).join(PublishedLearningContent, PublishedLearningContent.course_version_id == CourseVersion.id).filter(Course.organization_id == org_id, Course.is_deleted.is_(False), CourseVersion.publication_status == 'published').order_by(CourseVersion.course_id, CourseVersion.revision.desc()).all()
-    if not svc.is_manager(db, user):
+    from app.services.business_service import manages_business
+    if not svc.is_manager(db, user) and not manages_business(user):
         allowed = {g.scope_id for g in svc.role_grants(db, user) if g.role == 'manager' and g.scope_type == 'course'}
         versions = [v for v in versions if v.course_id in allowed]
     return {'items': [{'course_id': v.course_id, 'course_version_id': v.id, 'title': v.name, 'revision': v.revision, 'published_at': v.published_at} for v in versions]}

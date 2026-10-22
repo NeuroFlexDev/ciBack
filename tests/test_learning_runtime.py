@@ -21,7 +21,9 @@ def headers(user):
 
 @pytest.fixture
 def world(db_session):
-    a, b = Organization(name='Company'), Organization(name='Training center')
+    # These contracts exercise the granular author/reviewer/group roles used by
+    # education. B2B's four-role hierarchy has its own isolation contracts.
+    a, b = Organization(name='Training organization', kind='education'), Organization(name='Training center', kind='education')
     db_session.add_all([a, b])
     db_session.flush()
     users = {}

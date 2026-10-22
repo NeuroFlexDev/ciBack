@@ -72,9 +72,9 @@ def test_user_creation_is_invitation_not_forged_account_or_consent(client, db_se
 def test_invitation_reissue_revokes_old_link_changes_role_and_preserves_accepted_history(client, db_session, admin):
     tenant = org(db_session, seat_limit=1)
     old, old_token = invite(client, admin, tenant)
-    response = client.post(f"/api/admin/invitations/{old['id']}/resend", headers=headers(admin), json={'role': 'author', 'locale': 'en'})
+    response = client.post(f"/api/admin/invitations/{old['id']}/resend", headers=headers(admin), json={'role': 'candidate', 'locale': 'en'})
     assert response.status_code == 201, response.text
-    assert response.json()['role'] == 'author' and response.json()['id'] != old['id']
+    assert response.json()['role'] == 'candidate' and response.json()['id'] != old['id']
     assert client.post('/api/auth/invitations/inspect', json={'token': old_token}).status_code == 410
     new_token = response.json()['url'].split('#token=')[1]
     assert client.post('/api/auth/invitations/accept', json=acceptance(new_token)).status_code == 201

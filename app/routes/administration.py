@@ -45,7 +45,8 @@ class InviteInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     email: str = Field(min_length=5, max_length=255)
     organization_id: int = Field(gt=0)
-    role: Literal['owner','admin','author','reviewer','manager','member'] = 'member'
+    role: Literal['owner','admin','author','reviewer','manager','member','candidate'] = 'member'
+    manager_id: int | None = Field(default=None, gt=0)
     locale: Literal['ru', 'en'] = 'ru'
     @field_validator('email')
     @classmethod
@@ -57,7 +58,7 @@ class UserChange(BaseModel):
     model_config = ConfigDict(extra='forbid')
     is_active: StrictBool
     organization_id: int | None = Field(default=None, gt=0)
-    organization_role: Literal['owner','admin','author','reviewer','manager','member'] = 'member'
+    organization_role: Literal['owner','admin','author','reviewer','manager','member','candidate'] = 'member'
     full_name: str | None = Field(default=None, min_length=1, max_length=160)
     expected_auth_version: int | None = Field(default=None, ge=0)
 
@@ -91,12 +92,13 @@ def org_dict(db, org):
 
 def user_dict(user):
     return {**UserResponse.model_validate(user).model_dump(), 'is_active':user.is_active,
+            'manager_id': user.manager_id,
             'auth_version':user.auth_version, 'created_at':user.created_at, 'organization_name':user.organization.name if user.organization else None}
 
 
 def invitation_dict(row):
     status = 'accepted' if row.accepted_at else 'revoked' if row.revoked_at else 'expired' if row.expires_at <= datetime.utcnow() else 'pending'
-    return {key:getattr(row,key) for key in ['id','email','organization_id','role','created_at','expires_at']} | {'status':status}
+    return {key:getattr(row,key) for key in ['id','email','organization_id','role','manager_id','created_at','expires_at']} | {'status':status}
 
 
 def scoped_team(user):
@@ -118,15 +120,24 @@ def make_invitation(db, actor, payload, *, position_id=None):
     from app.services.business_service import manages_business, position_for
     business = manages_business(actor)
     if not actor.is_admin:
-        if business and actor.organization_role == 'manager':
-            if payload.organization_id != actor.organization_id or payload.role != 'member':
-                raise HTTPException(403, 'Управляющий приглашает только сотрудников своей компании')
+        if business and actor.organization_role in {'manager', 'admin'}:
+            if payload.organization_id != actor.organization_id or payload.role not in {'member', 'candidate'}:
+                raise HTTPException(403, 'Руководитель приглашает только сотрудников и кандидатов своей команды')
         elif require_team_owner(actor,db) != payload.organization_id:
             raise HTTPException(403,'Недоступная организация')
     org = db.get(Organization, payload.organization_id)
     check_seat(db, org)
+    from app.services.business_hierarchy import resolve_manager
+    if org.kind == 'business':
+        if payload.role not in {'owner', 'manager', 'member', 'candidate'}:
+            raise HTTPException(422, 'Выберите роль: руководитель, сотрудник или кандидат')
+        manager_id = resolve_manager(db, actor, org.id, payload.role, payload.manager_id)
+    else:
+        if payload.role == 'candidate' or payload.manager_id is not None:
+            raise HTTPException(422, 'Кандидаты и руководители команды доступны только для компании')
+        manager_id = None
     if position_id is not None:
-        if org.kind != 'business' or payload.role != 'member':
+        if org.kind != 'business' or payload.role not in {'member', 'candidate'}:
             raise HTTPException(422, 'Должность указывается только для сотрудника компании')
         position_for(db, org.id, position_id)
     if org.kind == 'business' and payload.role == 'manager' and not actor.is_admin and actor.organization_role != 'owner':
@@ -145,7 +156,7 @@ def make_invitation(db, actor, payload, *, position_id=None):
             Invitation.revoked_at.is_(None), Invitation.expires_at > datetime.utcnow()).first():
         raise HTTPException(409, 'Действующее приглашение уже существует. Сначала отзовите его.')
     raw = secrets.token_urlsafe(32)
-    row = Invitation(email=payload.email, organization_id=org.id, role=payload.role, position_id=position_id,
+    row = Invitation(email=payload.email, organization_id=org.id, role=payload.role, position_id=position_id, manager_id=manager_id,
         invited_by=actor.id, token_hash=hashlib.sha256(raw.encode()).hexdigest(), expires_at=datetime.utcnow()+timedelta(days=7))
     db.add(row); db.flush()
     audit(db, actor, 'invitation.created', 'invitation', row.id, organization_id=org.id, role=payload.role)
@@ -213,6 +224,15 @@ def change_user(db, actor, target, payload):
     if not actor.is_admin and actor.organization_kind == 'business' and actor.organization_role != 'owner' and (payload.organization_role == 'manager' or target.organization_role == 'manager'):
         raise HTTPException(403, 'Доступом управляющего распоряжается владелец компании')
     old_org=target.organization_id
+    if payload.organization_id and db.get(Organization, payload.organization_id).kind == 'business' and payload.organization_role not in {'owner', 'manager', 'member', 'candidate'}:
+        raise HTTPException(422, 'Для компании доступны роли: владелец, руководитель, сотрудник и кандидат')
+    from app.services.business_hierarchy import clear_reporting_lines, MANAGER_ROLES
+    if target.organization_role in MANAGER_ROLES and (payload.organization_id != old_org or payload.organization_role not in MANAGER_ROLES):
+        clear_reporting_lines(db, target)
+    if payload.organization_id != old_org or payload.organization_role not in {'member', 'candidate'}:
+        target.manager_id = None
+    if payload.organization_role == 'candidate' and (not payload.organization_id or db.get(Organization, payload.organization_id).kind != 'business'):
+        raise HTTPException(422, 'Роль кандидата доступна только в компании')
     if payload.organization_role == 'owner' and target.organization_role != 'owner':
         raise HTTPException(403, 'Новый владелец должен принять персональное приглашение или предложение передачи')
     if not actor.is_admin:
@@ -343,10 +363,14 @@ def team(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
     org=db.get(Organization,user.organization_id)
     from app.services.learning_service import is_manager
     owner=is_manager(db,user)
-    members=db.query(User).filter(User.organization_id==org.id).order_by(User.id).all()
+    from app.services.business_hierarchy import people_filter, is_business
+    members=db.query(User).filter(people_filter(user, include_self=True)).order_by(User.id).all()
     # Every member sees the team; only managers receive invitation addresses.
     pending=db.query(Invitation).filter(Invitation.organization_id==org.id).order_by((Invitation.accepted_at.is_(None) & Invitation.revoked_at.is_(None) & (Invitation.expires_at > datetime.utcnow())).desc(), Invitation.id.desc()).limit(100).all() if owner else []
-    return {'organization':org_dict(db,org),'members':[user_dict(m) for m in members],
+    organization_data = org_dict(db,org)
+    if is_business(user) and not owner:
+        organization_data = {k: organization_data[k] for k in ('id', 'name', 'kind', 'is_active')}
+    return {'organization':organization_data,'members':[user_dict(m) for m in members],
         'invitations':[invitation_dict(i) for i in pending],'can_manage':owner}
 
 
@@ -389,7 +413,7 @@ def resend_invite(invite_id:int,db:Session=Depends(get_db),user:User=Depends(get
     if row.accepted_at:raise HTTPException(409,'Приглашение уже принято')
     row.revoked_at=datetime.utcnow()
     db.flush()
-    return make_invitation(db,user,InviteInput(email=row.email,organization_id=org_id,role=row.role),position_id=row.position_id)
+    return make_invitation(db,user,InviteInput(email=row.email,organization_id=org_id,role=row.role,manager_id=row.manager_id),position_id=row.position_id)
 
 
 @router.post('/team/invitations',status_code=201)
