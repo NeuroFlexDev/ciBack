@@ -19,6 +19,7 @@ from app.models.ai_state import AICall, AIResponseCache
 from app.core.config import settings
 from app.ai import gateway, routing, token_forecast
 from app.ai.models import model_policy
+from app.ai.context_budget import count_messages, require_fits
 
 
 ArtifactModel = TypeVar("ArtifactModel", bound=BaseModel)
@@ -179,7 +180,8 @@ class AgentRuntime:
                     from app.services.generation_service import render_prompt, agent_messages
                     messages = agent_messages(render_prompt(template_name, **{**prompt_context, "external_context": ""}),
                                               expect_json=True, repair_feedback=repair_feedback)
-                    estimate = gateway.token_count(messages)
+                    baseline_model = policy.fallback if use_fallback else policy.model
+                    estimate = count_messages(messages, baseline_model)
                     request_features = token_forecast.features(messages, agent, prompt_context)
                     request_features["is_revision"] = (sequence > 0 if agent in {"competency_mapper", "course_architect"}
                                                        else sequence >= 1000)
@@ -192,8 +194,6 @@ class AgentRuntime:
                     predictions[route_id("vsellm", baseline_model)] = token_forecast.predict(
                         token_forecast.current_model(), role=agent, model_id=baseline_model,
                         request_features=request_features, max_output_tokens=output_limit)
-                    if estimate > settings.AI_MAX_INPUT_TOKENS:
-                        raise HTTPException(413, "AI context budget exceeded; split the document or course")
                     previous = self.db.query(AICall).filter(AICall.run_id == self.run_id,
                                                           AICall.status != "unavailable").all()
                     if any(item.agent == agent and item.status in {"reserved", "received"} and
@@ -204,8 +204,6 @@ class AgentRuntime:
                         error.request_sent = False
                         raise error
                     consumed = sum(item.input_tokens + item.output_tokens for item in previous)
-                    if len(previous) >= settings.AI_MAX_CALLS_PER_RUN or consumed + estimate + output_limit > settings.AI_MAX_TOKENS_PER_RUN:
-                        raise HTTPException(402, "AI run budget exhausted")
                     if settings.AI_ROUTING_MODE != "off":
                         history = self.db.query(AICall).join(GenerationRun).filter(
                             GenerationRun.owner_id == self.owner_id, AICall.agent == agent,
@@ -219,9 +217,13 @@ class AgentRuntime:
                             excluded_models=excluded_models, min_tier=min_tier,
                             available_providers=gateway.available_provider_ids(),
                             forecast=predictions,
+                            input_estimates={route_id(item.provider, item.model): count_messages(messages, item.model) for item in routing.enabled_candidates(agent)},
                         )
                     selected_model = decision.selected_model if decision else (policy.fallback if use_fallback else policy.model)
                     selected_provider = decision.selected_provider if decision else "vsellm"
+                    estimate = require_fits(messages, selected_model, output_limit, selected_provider)
+                    if len(previous) >= settings.AI_MAX_CALLS_PER_RUN or consumed + estimate + output_limit > settings.AI_MAX_TOKENS_PER_RUN:
+                        raise HTTPException(402, "AI run budget exhausted")
                     metadata = decision.metadata if decision else {"selected_model": selected_model, "selected_provider": selected_provider}
                     metadata = {**metadata, "forecast": token_forecast.predict(token_forecast.current_model(),
                         role=agent, model_id=selected_model, request_features=request_features, max_output_tokens=output_limit),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator, model_serializer
 
 
 class AgenticContract(BaseModel):
@@ -168,6 +168,29 @@ class SourceRef(AgenticContract):
     page: int | None = Field(default=None, gt=0)
     section: str | None = Field(default=None, max_length=512)
     quote: str = Field(min_length=1, max_length=4000)
+    source_type: Literal["uploaded", "web_search"] = "uploaded"
+    source_url: str | None = Field(default=None, max_length=2048)
+    source_title: str | None = Field(default=None, max_length=512)
+    retrieved_at: str | None = Field(default=None, max_length=40)
+    evidence_kind: Literal["document_excerpt", "provider_summary"] = "document_excerpt"
+
+    @model_validator(mode="after")
+    def web_provenance(self):
+        if self.source_type == "web_search":
+            from app.ai.web_search import public_url
+            if not self.source_url or not public_url(self.source_url) or not self.retrieved_at or self.evidence_kind != "provider_summary":
+                raise ValueError("Web sources require public URL, retrieval date and explicit summary provenance")
+        elif self.source_url is not None or self.evidence_kind != "document_excerpt":
+            raise ValueError("Uploaded evidence cannot impersonate a web source")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_provenance(self, handler):
+        result = handler(self)
+        if self.source_type == "uploaded":
+            for key in ("source_type", "source_url", "source_title", "retrieved_at", "evidence_kind"):
+                result.pop(key, None)
+        return result
 
 
 KnowledgeKind = Literal[

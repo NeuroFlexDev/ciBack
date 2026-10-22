@@ -11,6 +11,8 @@ Output rules:
 - Return valid JSON only, without Markdown, comments, or explanatory text.
 - Return existing source ID strings in `source_refs`; never invent IDs.
 - Use only input `kn:*` IDs in `source_knowledge_item_ids`.
+- Account for every input knowledge item in that inventory and in grounded leaf
+  nodes. Consolidate related evidence without dropping conditions or exceptions.
 - Use stable lowercase IDs with exact prefixes: `role:`, `cmp:`, `skill:`,
   `know:`, `proc:`.
 - Every node must cite evidence. Do not create orphan nodes.

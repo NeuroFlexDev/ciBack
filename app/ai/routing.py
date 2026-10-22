@@ -71,6 +71,7 @@ def choose_route(
     available_providers: set[str] | None = None,
     forecast: dict | None = None,
     requested_model: str | None = None,
+    input_estimates: dict[str, int] | None = None,
 ) -> RouteDecision:
     """Rank explicitly approved candidates by estimated cost per contract pass.
 
@@ -99,9 +100,10 @@ def choose_route(
             continue
         if available_providers is not None and candidate.provider not in available_providers:
             continue
-        if (input_tokens > candidate.max_input_tokens
+        candidate_input = (input_estimates or {}).get(route_id(candidate.provider, candidate.model), input_tokens)
+        if (candidate_input > min(candidate.max_input_tokens, settings.AI_MAX_INPUT_TOKENS)
                 or output_tokens > candidate.max_output_tokens
-                or input_tokens + output_tokens > candidate.context_window):
+                or candidate_input + output_tokens > candidate.context_window):
             continue
         samples = sorted((row for row in observations if row.get("selected_model") == candidate.model
                           and row.get("selected_provider", "vsellm") == candidate.provider),
@@ -120,7 +122,7 @@ def choose_route(
         # heuristic; it is not a calibrated probability of final course quality.
         probability = Decimal(9 + passes) / Decimal(10 + len(samples))
         predicted = (forecast or {}).get(route_id(candidate.provider, candidate.model), {})
-        cost = estimate_cost(candidate, predicted.get("input_tokens", input_tokens),
+        cost = estimate_cost(candidate, predicted.get("input_tokens", candidate_input),
                              predicted.get("output_tokens", output_tokens))
         ranked.append((cost / probability, route_id(candidate.provider, candidate.model), candidate,
                        cost, probability, len(samples)))

@@ -19,8 +19,10 @@ def candidate_price(provider: str, model: str, role: str = "chat"):
         return configured
     if provider != "vsellm" or model not in RATES:
         return None
+    from app.ai.context_budget import MODEL_LIMITS
+    context_window, max_output = MODEL_LIMITS[model]
     input_price, output_price = RATES[model]
     return AIRoutingCandidate(provider=provider, model=model, roles=[role], approved=True,
         input_rub_per_million=input_price, output_rub_per_million=output_price,
-        max_input_tokens=settings.AI_MAX_INPUT_TOKENS, max_output_tokens=128000,
-        context_window=400000, independent_review=role == "critic_qa", vision=role == "vision")
+        max_input_tokens=settings.AI_MAX_INPUT_TOKENS, max_output_tokens=max_output,
+        context_window=context_window, independent_review=role == "critic_qa", vision=role == "vision")

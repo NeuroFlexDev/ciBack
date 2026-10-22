@@ -57,7 +57,7 @@ def preflight_generation(course_id: int, payload: GenerationRunCreate,
                                                  document_ids=payload.document_ids)
     documents = PipelineRepository.selected_indexed_documents(db, course_id, current_user.id, payload.document_ids)
     from app.services.generation_preflight import generation_preflight
-    return generation_preflight(documents, payload.settings.model_dump(mode="json"))
+    return generation_preflight(documents, {**payload.settings.model_dump(mode="json"), "web_search_enabled": payload.web_search_enabled})
 
 
 @router.delete("/documents/{document_id}", status_code=204)
@@ -96,8 +96,11 @@ def launch_generation(
     if payload.request_id:
         previous = db.query(GenerationRun).filter_by(owner_id=current_user.id, request_id=payload.request_id).first()
         if previous:
-            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context"}}
+            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context", "web_search_enabled"}}
+            requested_search = (payload.web_search_enabled if "web_search_enabled" in payload.model_fields_set
+                                or "web_search_enabled" in previous.settings_snapshot else False)
             if (previous.course_id != course_id or previous_settings != payload.settings.model_dump(mode="json", exclude={"expected_revision"})
+                    or previous.settings_snapshot.get("web_search_enabled", False) != requested_search
                     or {item["document_id"] for item in previous.input_documents_snapshot} != set(payload.document_ids)):
                 raise HTTPException(409, {"code": "idempotency_conflict", "message": "Ключ запуска уже использован с другими параметрами"})
             return GenerationRunAccepted(run_id=previous.id, course_id=course_id, status=previous.status,
@@ -120,7 +123,8 @@ def launch_generation(
         db, course_id, current_user.id, payload.settings, commit=False
     )
     run = PipelineService.prepare_graph_generation(
-        db, course_id=course_id, owner_id=current_user.id, document_ids=payload.document_ids, request_id=payload.request_id
+        db, course_id=course_id, owner_id=current_user.id, document_ids=payload.document_ids, request_id=payload.request_id,
+        web_search_enabled=payload.web_search_enabled
     )
     try:
         enqueue_generation(run.id)

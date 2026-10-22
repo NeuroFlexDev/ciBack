@@ -31,3 +31,4 @@ rl-renderPM==4.0.3
 defusedxml==0.7.1
 markdown-it-py==4.2.0
 mdit-py-plugins==0.6.1
+tiktoken==0.14.0
