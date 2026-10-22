@@ -6,8 +6,10 @@ import re
 import textwrap
 from tempfile import TemporaryDirectory
 from threading import Lock
+from time import monotonic
 from urllib.parse import urlsplit
 from reportlab.lib import colors
+from reportlab.graphics import renderPDF
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
@@ -111,6 +113,17 @@ class Cover(Flowable):
         c.restoreState()
 
 
+class VectorDiagram(Flowable):
+    def __init__(self, drawing):
+        super().__init__()
+        self.drawing = drawing
+        self.width, self.height = drawing.width, drawing.height
+        self.spaceBefore, self.spaceAfter = 12, 16
+
+    def draw(self):
+        renderPDF.draw(self.drawing, self.canv, 0, 0)
+
+
 class CourseDocument(BaseDocTemplate):
     def __init__(self, output, title, private):
         super().__init__(output, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=58, bottomMargin=55,
@@ -159,7 +172,14 @@ class ContentBuilder:
         expected = {item['id'] for item in inventory}
         if set(diagrams) != expected:
             raise PDFRenderError('Состав схем не соответствует опубликованной версии. Обновите экспорт.')
-        self.diagrams = {key: drawing_from_svg(svg, CONTENT_WIDTH, 565) for key, svg in diagrams.items()}
+        self.diagrams = {}
+        diagram_deadline = monotonic() + 30
+        for key, svg in diagrams.items():
+            remaining = diagram_deadline - monotonic()
+            if remaining <= 0:
+                raise PDFRenderError('Схемы превысили время подготовки PDF. Разделите большой курс.')
+            self.diagrams[key] = drawing_from_svg(svg, CONTENT_WIDTH, 565, normalize=True,
+                timeout=min(10, remaining))
         self.maths = math_images(maths, folder)
         self.images = {name: raster_asset(data, folder, name) for name, data in images.items()}
         self.md = parser()
@@ -245,14 +265,18 @@ class ContentBuilder:
             elif token.type == 'fence':
                 kind = token.info.strip().lower()
                 if kind in KINDS:
-                    output.extend([Spacer(1, 12), self.diagrams[diagram_key(kind, token.content)], Spacer(1, 16)])
+                    output.append(VectorDiagram(self.diagrams[diagram_key(kind, token.content)]))
                 else:
                     wrapped = '\n'.join('\n'.join(textwrap.wrap(line.expandtabs(4), 88, replace_whitespace=False, drop_whitespace=False)) or ' ' for line in token.content.splitlines())
                     output.append(XPreformatted(escape(wrapped), self.styles['code']))
             elif token.type == 'math_block':
                 path, width, height = self.maths[token.content]
                 scale = min(1.15, CONTENT_WIDTH / width, 350 / height)
-                output.extend([Spacer(1, 8), Image(str(path), width*scale, height*scale), Spacer(1, 14)])
+                formula = Image(str(path), width*scale, height*scale)
+                # Leading Spacer breaks heading.keepWithNext at a page edge.
+                # Attach spacing to the media so heading + content move together.
+                formula.spaceBefore, formula.spaceAfter = 8, 14
+                output.append(formula)
             elif token.type == 'hr':
                 output.append(HRFlowable(width='100%', color=colors.HexColor('#d9e1cb'), spaceBefore=12, spaceAfter=12))
             elif token.type == 'table_open':
