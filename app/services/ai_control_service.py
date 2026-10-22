@@ -166,6 +166,29 @@ def update_model(db, actor, payload):
     return save(db, actor, row, "ai.model.updated", payload.provider + "::" + payload.model, candidates=rows)
 
 
+def openrouter_details(items, ids):
+    """Keep only bounded, typed public metadata; never store arbitrary catalog bodies."""
+    details = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item["id"] not in ids:
+            continue
+        try:
+            context = item["context_length"]
+            output = item["top_provider"]["max_completion_tokens"]
+            if type(context) is not int or type(output) is not int or not 0 < output <= context <= 10_000_000:
+                continue
+            prices = [Decimal(str(item["pricing"][key])) * 1_000_000 for key in ("prompt", "completion")]
+            if any(not price.is_finite() or not 0 <= price <= 1_000_000 for price in prices):
+                continue
+            details.append({"id": item["id"], "context_window": context, "max_output_tokens": output,
+                "input_usd_per_million": str(prices[0]), "output_usd_per_million": str(prices[1]),
+                "json_mode": "response_format" in item.get("supported_parameters", []),
+                "vision": "image" in item.get("architecture", {}).get("input_modalities", [])})
+        except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
+            continue
+    return details[:500]
+
+
 def check_provider(db, actor, provider_id, payload):
     row = row_for(db, payload.expected_revision)
     provider, stored = provider_object(row, provider_id)
@@ -180,8 +203,19 @@ def check_provider(db, actor, provider_id, payload):
     probe = provider.model_copy(update={"timeout_seconds": min(provider.timeout_seconds, 10)})
     result = {"status": "unavailable", "checked_at": datetime.now(timezone.utc).isoformat(), "models": []}
     try:
+        openrouter = str(provider.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
         with http_client(probe) as client:
-            response = client.get(str(provider.base_url).rstrip("/") + "/models", headers=headers)
+            # /models is public on OpenRouter and cannot prove credential validity.
+            authorization = client.get(str(provider.base_url).rstrip("/") + "/key", headers=headers) if openrouter else None
+            if authorization is not None and authorization.status_code != 200:
+                response = authorization
+            else:
+                if authorization is not None:
+                    auth_data = authorization.json().get("data")
+                    if not isinstance(auth_data, dict):
+                        raise ValueError("Invalid authorization response")
+                    result["credential_verified"] = True
+                response = client.get(str(provider.base_url).rstrip("/") + "/models", headers=headers)
         if response.status_code == 200:
             data = response.json()
             if not isinstance(data, dict) or not isinstance(data.get("data"), list):
@@ -189,6 +223,8 @@ def check_provider(db, actor, provider_id, payload):
             ids = [item["id"] for item in data["data"] if isinstance(item, dict) and isinstance(item.get("id"), str)
                    and 0 < len(item["id"]) <= 255 and key not in item["id"] and all(ord(c) >= 32 for c in item["id"])]
             result.update(status="catalog_available", models=sorted(set(ids))[:500])
+            if openrouter:
+                result["model_details"] = openrouter_details(data["data"], set(result["models"]))
         elif response.status_code in {401, 403}:
             result["status"] = "access_denied"
         elif response.status_code in {404, 405}:

@@ -239,3 +239,61 @@ def test_installation_local_only_policy_cannot_be_overridden(client, auth_header
     assert response.status_code == 422
     assert client.get('/api/admin/ai', headers=auth_headers).json()['policy']['local_only']
     assert control.policy()['local_only']
+
+
+def test_catalog_metadata_is_typed_bounded_and_never_copies_remote_payloads():
+    valid = {'id': 'model-a', 'context_length': 1000000,
+             'top_provider': {'max_completion_tokens': 32000},
+             'pricing': {'prompt': '0.0000003', 'completion': '0.0000012'},
+             'supported_parameters': ['response_format'],
+             'architecture': {'input_modalities': ['text', 'image']},
+             'description': 'untrusted-secret-reflection'}
+    malformed = [
+        {**valid, 'pricing': {'prompt': 'NaN', 'completion': 'Infinity'}},
+        {**valid, 'context_length': True},
+        {**valid, 'top_provider': {'max_completion_tokens': 1000001}},
+        {**valid, 'architecture': None},
+        {**valid, 'supported_parameters': None},
+    ]
+    result = service.openrouter_details([valid, *malformed, {'id': 'unknown'}, 'invalid'], {'model-a'})
+    assert result == [{'id': 'model-a', 'context_window': 1000000, 'max_output_tokens': 32000,
+                      'input_usd_per_million': '0.3000000', 'output_usd_per_million': '1.2000000',
+                      'json_mode': True, 'vision': True}]
+    assert 'untrusted-secret-reflection' not in json.dumps(result)
+    assert len(service.openrouter_details([valid] * 600, {'model-a'})) == 500
+
+
+def test_openrouter_check_enriches_catalog_without_enabling_models(client, auth_headers, managed, monkeypatch):
+    client.put('/api/admin/ai/providers/cloud', headers=auth_headers,
+               json=provider_payload(base_url='https://openrouter.ai/api/v1'))
+    payload = {'data': [{'id': 'example/flash', 'context_length': 64000,
+                        'top_provider': {'max_completion_tokens': 8000},
+                        'pricing': {'prompt': '0.0000001', 'completion': '0.0000005'},
+                        'supported_parameters': ['response_format'],
+                        'architecture': {'input_modalities': ['text']}}]}
+    @contextmanager
+    def transport(provider):
+        yield Mock(get=Mock(side_effect=[httpx.Response(200, json={'data': {'limit': 10}}), httpx.Response(200, json=payload)]))
+    monkeypatch.setattr(service, 'http_client', transport)
+    response = client.post('/api/admin/ai/providers/cloud/check', headers=auth_headers, json={'expected_revision': 1})
+    assert response.status_code == 200
+    assert response.json()['model_details'][0]['context_window'] == 64000
+    overview = client.get('/api/admin/ai', headers=auth_headers).json()
+    assert overview['providers'][0]['last_check']['model_details'][0]['json_mode'] is True
+    assert not any(m['provider'] == 'cloud' for m in overview['models'])
+
+
+def test_openrouter_public_catalog_does_not_validate_an_invalid_key(client, auth_headers, managed, monkeypatch):
+    client.put('/api/admin/ai/providers/cloud', headers=auth_headers,
+               json=provider_payload(base_url='https://openrouter.ai/api/v1'))
+    get = Mock(return_value=httpx.Response(401, json={'error': {'message': 'secret-test-provider-key'}}))
+    @contextmanager
+    def transport(provider):
+        yield Mock(get=get)
+    monkeypatch.setattr(service, 'http_client', transport)
+    result = client.post('/api/admin/ai/providers/cloud/check', headers=auth_headers, json={'expected_revision': 1})
+    assert result.json()['status'] == 'access_denied'
+    assert result.json()['models'] == []
+    assert 'secret-test-provider-key' not in result.text
+    get.assert_called_once()
+    assert get.call_args.args[0] == 'https://openrouter.ai/api/v1/key'
