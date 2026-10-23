@@ -236,8 +236,11 @@ class AgenticCoursePipeline:
         def context(records):
             selected = ingestion if len(records) == len(ingestion["knowledge_items"]) else ingestion_excerpt(ingestion, records)
             return {**common, "ingestion_artifact_json": _json(selected), "qa_feedback_json": _json(feedback)}
+        # Input context can fit a whole book while a 10k-token response cannot
+        # express every expanded competency/skill/procedure. Bound semantic
+        # records too; the merged durable ontology still preserves every fact.
         batches = partition_records(ingestion["knowledge_items"], context,
-            role="competency_mapper", template="competency_mapper_prompt.j2")
+            role="competency_mapper", template="competency_mapper_prompt.j2", max_records=24)
         results = []
         for index, batch in enumerate(batches):
             known = {item["id"] for item in batch}

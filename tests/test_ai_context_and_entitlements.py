@@ -103,3 +103,12 @@ def test_local_fallback_does_not_interpret_reference_markers_inside_evidence():
     assert answer['degraded']
     assert '[course:999999]' in answer['text'] and '/courses/999999' not in answer['text']
     assert '[Source](/courses/1/edit)' in answer['text']
+
+
+def test_large_fact_inventory_is_bounded_by_output_complexity_without_loss(monkeypatch):
+    from app.ai.knowledge_batches import partition_records
+    monkeypatch.setattr('app.ai.knowledge_batches.prompt_fits', lambda *a, **k: True)
+    facts = [{'id': f'kn:fact_{i}'} for i in range(137)]
+    batches = partition_records(facts, lambda items: {'facts': items}, role='competency_mapper', template='unused', max_records=24)
+    assert max(map(len, batches)) == 24 and len(batches) == 6
+    assert [fact for batch in batches for fact in batch] == facts

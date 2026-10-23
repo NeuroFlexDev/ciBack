@@ -205,3 +205,22 @@ def test_text_pdf_works_without_ocr_allowance_and_scan_fails_before_ocr(monkeypa
             bounded_extract_blocks(pdf.tobytes(), "application/pdf", ocr_page_limit=0)
     assert calls == []
 
+
+
+def test_deployment_suspension_drains_background_without_stopping_current_ai(db_session, auth_user, monkeypatch):
+    monkeypatch.setattr(resources, 'background_admission_paused', lambda: True)
+    queued = resources.reserve(db_session, owner_id=auth_user.id, operation='generation', lane='background', queued=True)
+    db_session.commit()
+    with pytest.raises(resources.CapacityBusy) as error:
+        resources.claim(db_session, queued.key)
+    assert error.value.detail['code'] == 'ai_deployment_pending'
+    db_session.rollback()
+    with pytest.raises(resources.CapacityBusy):
+        resources.reserve(db_session, owner_id=auth_user.id, operation='document', lane='background')
+    db_session.rollback()
+    # Calls inside an admitted generation and interactive help remain available.
+    resources.reserve(db_session, owner_id=auth_user.id, operation='lesson_writer')
+    resources.reserve(db_session, owner_id=auth_user.id, operation='chat', lane='interactive')
+    db_session.commit()
+    monkeypatch.setattr(resources, 'background_admission_paused', lambda: False)
+    assert resources.claim(db_session, queued.key)
