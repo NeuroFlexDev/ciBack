@@ -140,6 +140,15 @@ class AgentRuntime:
             **routing.cache_policy(),
         })
         cache_key = hashlib.sha256(f"{self.owner_id}:{self.course_id}:{input_fingerprint}".encode()).hexdigest()
+        initial_output_limit = output_limit
+        # A confirmed length stop is a known billed result. Repeating the same
+        # response ceiling cannot repair it. Carry the required headroom across
+        # checkpoint retries; admission still checks price and model capacity.
+        for previous in self.db.query(AICall).filter_by(run_id=self.run_id, agent=agent, error_code='ai_output_truncated'):
+            observation = (previous.routing or {}).get('observation', {})
+            if observation.get('sequence') == sequence:
+                output_limit = max(output_limit, min(initial_output_limit * 4,
+                    int(observation.get('max_output_tokens', initial_output_limit)) * 2))
         stored = PipelineRepository.get_agent_artifact(
             self.db, run_id=self.run_id, agent=agent, sequence=sequence
         )
@@ -318,6 +327,8 @@ class AgentRuntime:
             except Exception as exc:
                 if isinstance(exc, LegacyGraphResponse):
                     raise
+                response_ceiling_exhausted = (getattr(exc, 'ai_failure_kind', None) == 'truncated'
+                    and output_limit >= initial_output_limit * 4)
                 last_error = exc
                 self.db.rollback()
                 if resource:
@@ -337,7 +348,9 @@ class AgentRuntime:
                     if getattr(exc, "ai_usage", None):
                         call.routing = {**call.routing, "observation": {**call.routing["observation"], "usage_reported": True}}
                     failure_kind = getattr(exc, "ai_failure_kind", None)
-                    if isinstance(exc, (ValidationError, ValueError)) or failure_kind in {"invalid_json", "truncated", "empty"}:
+                    if failure_kind == "truncated":
+                        outcome = "output_truncated"
+                    elif isinstance(exc, (ValidationError, ValueError)) or failure_kind in {"invalid_json", "empty"}:
                         outcome = "contract_fail"
                     elif gateway.retryable(exc):
                         outcome = "provider_error"
@@ -347,7 +360,8 @@ class AgentRuntime:
                                                          usage=getattr(exc, "ai_usage", None) or reported_usage)
                     if decision and ai_control.policy()["mode"] == "adaptive":
                         from app.ai.providers import route_id
-                        excluded_models.add(route_id(decision.selected_provider, decision.selected_model))
+                        if outcome != "output_truncated":
+                            excluded_models.add(route_id(decision.selected_provider, decision.selected_model))
                         tier = decision.metadata.get("tier")
                         if tier is not None and outcome == "contract_fail":
                             min_tier = max(min_tier, tier + 1)
@@ -357,7 +371,11 @@ class AgentRuntime:
                         call.error_code = ("validation:" + ",".join(".".join(map(str,e["loc"])) + ":" + e["type"] for e in exc.errors(include_input=False,include_url=False)))[:128]
                     self.db.add(call)
                     self.db.commit()
-                if isinstance(exc, ValidationError):
+                if getattr(exc, 'ai_failure_kind', None) == 'truncated':
+                    output_limit = min(initial_output_limit * 4, output_limit * 2)
+                    repair_feedback = ('The previous response reached its output-token limit. More output room is now reserved. '
+                        'Return complete compact JSON; do not repeat source objects or explanations. Preserve all assigned IDs and objectives.')
+                elif isinstance(exc, ValidationError):
                     repair_feedback = json.dumps(exc.errors(include_input=False, include_url=False), default=str)[:5000]
                 elif isinstance(exc, ValueError):
                     repair_feedback = str(exc)[:3000]
@@ -370,7 +388,7 @@ class AgentRuntime:
                 stored = PipelineRepository.get_agent_artifact(
                     self.db, run_id=self.run_id, agent=agent, sequence=sequence
                 )
-                if attempt == self.max_attempts or not _retryable(exc):
+                if attempt == self.max_attempts or response_ceiling_exhausted or not _retryable(exc):
                     break
                 if live and not isinstance(exc, (ValidationError, ValueError)):
                     time.sleep(min(2 ** (attempt - 1), 8))
