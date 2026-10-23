@@ -385,7 +385,7 @@ def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depen
     from app.services.mfa_service import authenticated_factor
     authenticated_factor(db,user,request.state.auth_claims)
     row,org=valid_invitation(db,payload.token)
-    if normalize_email(user.email)!=row.email:
+    if normalize_email(user.email or '')!=row.email:
         raise HTTPException(403,'Приглашение адресовано другому аккаунту')
     if user.is_admin or user.organization_id:
         raise HTTPException(409,'Аккаунт уже подключён к организации или является оператором')

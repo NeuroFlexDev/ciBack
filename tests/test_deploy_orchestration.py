@@ -37,7 +37,7 @@ args=sys.argv[1:]
 root=Path(os.environ['TEST_ROOT']);deploy=root/'deploy'
 with (root/'commands.jsonl').open('a') as log:log.write(json.dumps({'args':args,'image':(deploy/'.images.env').read_text()})+'\\n')
 if args[0]=='login':sys.stdin.read();raise SystemExit(0)
-if args[0]=='run':raise SystemExit(1 if os.environ.get('OLD_LACKS_MFA')=='1' else 0)
+if args[0]=='run':raise SystemExit(1 if os.environ.get('OLD_LACKS_LOGIN' if 'LoginCredentials' in args[-1] else 'OLD_LACKS_MFA')=='1' else 0)
 assert args.pop(0)=='compose'
 while args and args[0].startswith('--'):args=args[2:]
 action=args[0]
@@ -55,6 +55,7 @@ elif action=='up' and 'admin-web' in args and os.environ.get('FAIL_ADMIN_WEB')==
 elif action=='up' and 'outbox' in args and os.environ.get('FAIL_ROLLOUT')=='1':raise SystemExit(1)
 elif action=='exec':
  if 'python' in args and args[-1] in {'begin','count','end','resume'}:print('1' if os.environ.get('ACTIVE_AI')=='1' and args[-1]!='end' else '0')
+ elif 'username' in args[-1]:print('t' if os.environ.get('LOGIN_ACCOUNTS')=='1' else 'f')
  elif 'to_regclass' in args[-1]:print('user_mfa' if os.environ.get('MFA_ENROLLED')=='1' else '')
  elif 'SELECT EXISTS' in args[-1]:print('t' if os.environ.get('MFA_ENROLLED')=='1' else 'f')
  else:print('synthetic database dump')
@@ -157,6 +158,14 @@ elif action=='exec':
         self.assertIn('Refusing rollback',result.stderr)
         self.assertIn(self.new,(self.deploy/'.images.env').read_text())
 
+
+
+    def test_rollback_cannot_lock_out_login_only_accounts(self):
+        self.env.update(FAIL_ROLLOUT='1',LOGIN_ACCOUNTS='1',OLD_LACKS_LOGIN='1')
+        result=self.execute()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('login accounts exist',result.stderr)
+        self.assertIn(self.new,(self.deploy/'.images.env').read_text())
 
     def test_active_jobs_prevent_release_change_and_queue_is_resumed(self):
         self.env['ACTIVE_AI']='1'

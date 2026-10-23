@@ -50,9 +50,11 @@ class AuthService:
     @staticmethod
     def authenticate(db: Session, email: str, password: str) -> tuple[User, str]:
         # Hold the user version stable from password proof through session/challenge issuance.
-        user = db.query(User).filter(User.email==normalize_email(email)).with_for_update().populate_existing().first()
+        identity = normalize_email(email)
+        column = User.email if '@' in identity else User.username
+        user = db.query(User).filter(column == identity).with_for_update().populate_existing().first()
         if not user or not user.is_active or not verify_password(password, user.password_hash):
-            raise _credentials_exception("Неверный email или пароль")
+            raise _credentials_exception("Неверный логин, почта или пароль")
         if surface.get() == "admin" and not user.is_admin:
             raise _credentials_exception("Вход доступен только оператору Лерниума")
         ensure_organization_active(user)

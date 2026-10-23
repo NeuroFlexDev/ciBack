@@ -243,7 +243,21 @@ rollback() {
 }
 
 rollback_auth_compatible() {
-    local table enabled enforced
+    local table enabled enforced login_column login_accounts
+    login_column="$(compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='\''public'\'' AND table_name='\''users'\'' AND column_name='\''username'\'')"')" || return 1
+    [[ "$login_column" == t || "$login_column" == f ]] || return 1
+    if [[ "$login_column" == t ]]; then
+        login_accounts="$(compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT EXISTS (SELECT 1 FROM users WHERE username IS NOT NULL)"')" || return 1
+        [[ "$login_accounts" == t || "$login_accounts" == f ]] || return 1
+        if [[ "$login_accounts" == t ]]; then
+            if ! docker run --rm --network none --read-only --memory 128m --cpus .5 --pids-limit 64 \
+                --cap-drop ALL --security-opt no-new-privileges:true --entrypoint python "$previous_image" \
+                -c 'from pathlib import Path; raise SystemExit(0 if "class LoginCredentials(" in Path("app/schemas/auth.py").read_text() else 1)'; then
+                printf 'Refusing rollback: login accounts exist and the previous image requires email. Operator recovery is required.\n' >&2
+                return 1
+            fi
+        fi
+    fi
     table="$(compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT to_regclass('\''public.user_mfa'\'')"')" || return 1
     enabled=false
     if [[ -n "$table" ]]; then
