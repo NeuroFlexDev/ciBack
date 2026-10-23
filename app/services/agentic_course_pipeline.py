@@ -304,6 +304,7 @@ class AgenticCoursePipeline:
         qa_feedback: QAArtifact | None,
         revision: int,
     ) -> WriterArtifact:
+        from app.ai.curriculum import complete_writer_inventories
         objective_by_id = {item.id: item for item in course_plan.objectives}
         drafts = []
         sources: dict[str, SourceRef] = {}
@@ -349,6 +350,8 @@ class AgenticCoursePipeline:
                                                for issue in qa_feedback.issues) else "null",
                 },
                 max_tokens=4096,
+                normalize_response=lambda value: complete_writer_inventories(value,
+                    [source.model_dump(mode="json") for source in lesson_sources]),
                 validator=validate_lesson,
             )
             if artifact.expected_lesson_ids != [lesson.id]:
