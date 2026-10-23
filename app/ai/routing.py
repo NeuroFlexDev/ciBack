@@ -15,7 +15,7 @@ from app.ai.pricing import candidate_price, SNAPSHOT
 from app.ai.context_budget import effective_input_limit
 
 
-ROUTER_VERSION = 2
+ROUTER_VERSION = 3
 
 
 def policy_fingerprint() -> str:
@@ -89,6 +89,7 @@ def choose_route(
                     if row.get("policy") == signature and row.get("input_bucket") == bucket
                     and row.get("outcome") in {"contract_pass", "contract_fail", "provider_error"}]
     ranked = []
+    unhealthy = set()
     candidates = enabled_candidates(role)
     baseline = candidate_price("vsellm", baseline_model, role)
     if ai_control.policy()["mode"] != "off" and baseline and baseline.approved and role in baseline.roles and not any(
@@ -115,11 +116,19 @@ def choose_route(
         # failures are handled by the pass-rate floor and per-step escalation.
         if (len(samples) >= 3 and all(row["outcome"] == "provider_error" for row in samples[:3])
                 and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS):
+            unhealthy.add(route_id(candidate.provider, candidate.model))
+            continue
+        # Two failed structured responses among the last three are enough to
+        # stop spending on that route temporarily, even before ten samples exist.
+        if (sum(row["outcome"] == "contract_fail" for row in samples[:3]) >= 2
+                and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS):
+            unhealthy.add(route_id(candidate.provider, candidate.model))
             continue
         contracts = [row for row in samples if row["outcome"] != "provider_error"]
         passes = sum(row["outcome"] == "contract_pass" for row in contracts)
         if (len(contracts) >= ai_control.policy()["min_samples"]
                 and passes / len(contracts) < ai_control.policy()["min_pass_rate"]):
+            unhealthy.add(route_id(candidate.provider, candidate.model))
             continue
         # A fixed 9/10 prior avoids certainty from one success. This is a ranking
         # heuristic; it is not a calibrated probability of final course quality.
@@ -131,6 +140,16 @@ def choose_route(
                        cost, probability, len(samples)))
     ranked.sort(key=lambda row: (row[0], row[1]))
     winner = ranked[0] if ranked else None
+    if not winner and ai_control.policy()["mode"] == "adaptive":
+        blocked = excluded_models or set()
+        static_id = route_id("vsellm", baseline_model)
+        if (baseline_model in blocked or static_id in blocked or static_id in unhealthy
+                or (available_providers is not None and "vsellm" not in available_providers)
+                or (baseline and (input_tokens > effective_input_limit(baseline.max_input_tokens)
+                    or output_tokens > baseline.max_output_tokens
+                    or input_tokens + output_tokens > baseline.context_window))):
+            from app.ai.providers import AIUnavailable
+            raise AIUnavailable()
     proposed = winner[2].model if winner else baseline_model
     proposed_provider = winner[2].provider if winner else "vsellm"
     selected = proposed if ai_control.policy()["mode"] == "adaptive" else baseline_model

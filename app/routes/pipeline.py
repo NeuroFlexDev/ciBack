@@ -57,7 +57,8 @@ def preflight_generation(course_id: int, payload: GenerationRunCreate,
                                                  document_ids=payload.document_ids)
     documents = PipelineRepository.selected_indexed_documents(db, course_id, current_user.id, payload.document_ids)
     from app.services.generation_preflight import generation_preflight
-    return generation_preflight(documents, {**payload.settings.model_dump(mode="json"), "web_search_enabled": payload.web_search_enabled})
+    from app.services.ai_entitlements import unlimited_ai
+    return generation_preflight(documents, {**payload.settings.model_dump(mode="json"), "web_search_enabled": payload.web_search_enabled}, unlimited=unlimited_ai(db, current_user.organization_id))
 
 
 @router.delete("/documents/{document_id}", status_code=204)

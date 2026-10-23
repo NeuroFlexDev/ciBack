@@ -256,11 +256,11 @@ class AgenticCoursePipeline:
         return merge_competencies(results)
 
     def _ingest(self, common: dict, catalog: list[dict], feedback=None) -> IngestionArtifact:
-        from app.ai.evidence import source_batches, merge_ingestion
+        from app.ai.evidence import source_batches, merge_ingestion, ingestion_sources, complete_ingestion_inventories
         artifacts = []
         from app.ai.knowledge_batches import partition_records
         batches = [part for batch in source_batches(catalog, settings.AI_INGESTION_BATCH_CHARS)
-                   for part in partition_records(batch, lambda records: {**common, "source_catalog_json": _json(records),
+                   for part in partition_records(batch, lambda records: {**common, "source_catalog_json": _json(ingestion_sources(records)),
                        "qa_feedback_json": _json(feedback)}, role="ingestion", template="ingestion_agent_prompt.j2")]
         for index, batch in enumerate(batches):
             # Extracted facts are a durable input checkpoint, not a model-answer
@@ -285,9 +285,10 @@ class AgenticCoursePipeline:
                         continue
             artifact = self.runtime.execute(agent="ingestion", artifact="document_knowledge",
                 sequence=index, template_name="ingestion_agent_prompt.j2", response_model=IngestionArtifact,
-                prompt_context={**common, "source_catalog_json": _json(batch),
+                prompt_context={**common, "source_catalog_json": _json(ingestion_sources(batch)),
                                 "qa_feedback_json": _json(feedback)}, max_tokens=6000,
                 allow_legacy_graph=settings.ENV == "test",
+                normalize_response=lambda value, batch=batch: complete_ingestion_inventories(value, batch),
                 validator=lambda value, batch=batch: _canonical_sources("ingestion", value.source_refs, batch, require_all=True))
             artifacts.append(artifact)
         return merge_ingestion(artifacts)

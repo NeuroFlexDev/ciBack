@@ -44,6 +44,53 @@ def source_batches(catalog: list[dict], max_chars: int) -> list[list[dict]]:
     return batches
 
 
+
+def ingestion_sources(catalog: list[dict]) -> list[dict]:
+    """Only useful evidence enters the prompt; canonical provenance stays server-side."""
+    fields = {"id", "document_id", "document_version", "quote", "section", "page",
+              "source_type", "source_url", "source_title", "retrieved_at", "evidence_kind"}
+    return [{key: value for key, value in source.items() if key in fields and value is not None}
+            for source in catalog]
+
+
+def complete_ingestion_inventories(raw: dict, catalog: list[dict]) -> dict:
+    """Derive redundant indexes, never invent, repair or discard semantic claims."""
+    from app.services.agent_runtime import expand_source_refs
+    if not isinstance(raw, dict):
+        raise ValueError("Ingestion must be an object")
+    canonical = {source["id"]: source for source in catalog}
+    # Even optional inventories may not introduce unknown or changed evidence.
+    expand_source_refs({"source_refs": raw.get("source_refs", [])}, canonical)
+    grouped = {}
+    for source in catalog:
+        grouped.setdefault((source["document_id"], source["document_version"]), []).append(source)
+    summaries = {}
+    for doc in raw.get("documents", []):
+        key = (doc.get("document_id"), doc.get("document_version"))
+        if key not in grouped or key in summaries:
+            raise ValueError("Unknown or duplicate document version")
+        if set(doc.get("source_ref_ids", [])) - {s["id"] for s in grouped[key]}:
+            raise ValueError("Unknown document citation")
+        summaries[key] = doc
+    items = raw.get("knowledge_items", [])
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("source_ref_ids"), list):
+            raise ValueError("Knowledge items require source citations")
+        if any(not isinstance(ref, str) or ref not in canonical for ref in item["source_ref_ids"]):
+            raise ValueError("Unknown knowledge citation")
+    documents = []
+    for (doc_id, version), sources in grouped.items():
+        refs = {s["id"] for s in sources}
+        linked = [item for item in items if refs.intersection(item["source_ref_ids"])]
+        prior = summaries.get((doc_id, version), {})
+        documents.append({"document_id": doc_id, "document_version": version,
+            "title": prior.get("title") or sources[0].get("source_title") or f"Документ {doc_id}",
+            "summary": prior.get("summary") or ("; ".join(str(item.get("title", "")) for item in linked)[:8000]
+                if linked else "В этом фрагменте не выделены утверждения для обучения."),
+            "source_ref_ids": [s["id"] for s in sources],
+            "knowledge_item_ids": [item.get("id") for item in linked]})
+    return {**raw, "source_refs": list(canonical), "documents": documents}
+
 def merge_ingestion(artifacts: list[IngestionArtifact]) -> IngestionArtifact:
     if len(artifacts) == 1:
         return artifacts[0]

@@ -223,7 +223,9 @@ class AgentRuntime:
                     selected_model = decision.selected_model if decision else (policy.fallback if use_fallback else policy.model)
                     selected_provider = decision.selected_provider if decision else "vsellm"
                     estimate = require_fits(messages, selected_model, output_limit, selected_provider)
-                    if len(previous) >= settings.AI_MAX_CALLS_PER_RUN or consumed + estimate + output_limit > settings.AI_MAX_TOKENS_PER_RUN:
+                    from app.services.ai_entitlements import unlimited_ai
+                    from app.services.ai_resources import scope
+                    if not unlimited_ai(self.db, scope(self.db, self.owner_id, self.course_id)) and (len(previous) >= settings.AI_MAX_CALLS_PER_RUN or consumed + estimate + output_limit > settings.AI_MAX_TOKENS_PER_RUN):
                         raise HTTPException(402, "AI run budget exhausted")
                     metadata = decision.metadata if decision else {"selected_model": selected_model, "selected_provider": selected_provider}
                     metadata = {**metadata, "forecast": token_forecast.predict(token_forecast.current_model(),

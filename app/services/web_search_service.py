@@ -153,7 +153,8 @@ def supplement(runtime, common: dict, source_catalog: list[dict], *, invoke=None
             calls = db.query(AICall).filter(AICall.run_id == runtime.run_id, AICall.status != "unavailable").all()
             # Native retrieval consumes input tokens too (observed in live QA).
             token_reserve = 32000 + settings.WEB_SEARCH_MAX_OUTPUT_TOKENS
-            if len(calls) >= settings.AI_MAX_CALLS_PER_RUN or sum(c.input_tokens + c.output_tokens for c in calls) + token_reserve > settings.AI_MAX_TOKENS_PER_RUN:
+            from app.services.ai_entitlements import unlimited_ai
+            if not unlimited_ai(db, user.organization_id) and (len(calls) >= settings.AI_MAX_CALLS_PER_RUN or sum(c.input_tokens + c.output_tokens for c in calls) + token_reserve > settings.AI_MAX_TOKENS_PER_RUN):
                 raise HTTPException(402, "Web search run budget exhausted")
             resource = ai_resources.reserve(db, owner_id=user.id, course_id=runtime.course_id,
                 run_id=runtime.run_id, operation="web_search", tokens=token_reserve,

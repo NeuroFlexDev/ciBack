@@ -154,7 +154,8 @@ class PipelineService:
         from app.services.organization_ai_context import organization_ai_context
         settings_snapshot["organization_context"] = organization_ai_context(db, course.organization_id)
         from app.services.generation_preflight import require_preflight
-        require_preflight(documents, settings_snapshot)
+        from app.services.ai_entitlements import unlimited_ai
+        require_preflight(documents, settings_snapshot, unlimited=unlimited_ai(db, course.organization_id))
         docs_snapshot = [
             {"document_id": item.id, "version": item.version, "content_hash": item.content_hash}
             for item in documents
@@ -627,7 +628,8 @@ class PipelineService:
 
         if prepared_run is None:
             from app.services.generation_preflight import require_preflight
-            require_preflight(documents, settings_snapshot)
+            from app.services.ai_entitlements import unlimited_ai
+            require_preflight(documents, settings_snapshot, unlimited=unlimited_ai(db, course.organization_id))
             from app.services.organization_access import check_generation_limit
             check_generation_limit(db, owner_id)
         run = prepared_run or GenerationRun(

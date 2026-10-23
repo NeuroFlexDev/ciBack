@@ -34,7 +34,7 @@ def admit_request(db, user):
         raise HTTPException(403, "Организация приостановлена")
     locked(db)
     usage = monthly_requests(db, user.id, user.organization_id)
-    if usage["admission_total"] >= material_policy(db, user)["chat_monthly_limit"]:
+    if not (organization and organization.ai_unlimited) and usage["admission_total"] >= material_policy(db, user)["chat_monthly_limit"]:
         raise HTTPException(429, {"code": "assistant_limit",
             "message": "Достигнут месячный лимит интерактивных запросов AI. Уроки и отправка ответов доступны.",
             "confirmed_requests": usage["confirmed"],

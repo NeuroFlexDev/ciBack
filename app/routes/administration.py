@@ -38,6 +38,7 @@ class OrgInput(BaseModel):
     course_limit: int = Field(default=50, ge=1, le=1000000)
     source_limit: int = Field(default=20, ge=1, le=1000)
     generation_limit: int = Field(default=100, ge=0, le=1000000)
+    ai_unlimited: StrictBool = False
     expected_state: str | None = Field(default=None, min_length=64, max_length=64)
 
 
@@ -85,7 +86,7 @@ class InviteAccept(TokenInput):
 
 def org_dict(db, org):
     users = db.query(User).filter(User.organization_id == org.id)
-    return {**{key:getattr(org,key) for key in ['id','name','kind','is_active','seat_limit','course_limit','source_limit','generation_limit','created_at']},
+    return {**{key:getattr(org,key) for key in ['id','name','kind','is_active','seat_limit','course_limit','source_limit','generation_limit','ai_unlimited','created_at']},
             'state_token':state_token(org,ORG_FIELDS), 'active_users':users.filter(User.is_active.is_(True)).count(), 'reserved_seats':seats(db,org.id),
             'courses':db.query(Course).filter(Course.organization_id == org.id, Course.is_deleted.is_(False)).count()}
 
@@ -194,7 +195,10 @@ def update_org(org_id:int, payload:OrgInput, db:Session=Depends(get_db), admin:U
         raise HTTPException(409, {'code':'client_refresh_required','message':'Обновите страницу админки и сравните черновик с текущей записью перед сохранением.'})
     row=lock_org(db,org_id)
     check_state(row,ORG_FIELDS,payload.expected_state)
-    for key,value in payload.model_dump(exclude={'expected_state'}).items():setattr(row,key,value)
+    changes = payload.model_dump(exclude={'expected_state'})
+    if 'ai_unlimited' not in payload.model_fields_set:
+        changes.pop('ai_unlimited', None)
+    for key,value in changes.items():setattr(row,key,value)
     audit(db,admin,'organization.updated','organization',row.id,fields=list(payload.model_fields_set))
     # Existing data survives a reduced limit. New operations remain blocked until usage fits.
     db.commit();return org_dict(db,row)
