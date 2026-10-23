@@ -54,11 +54,13 @@ elif action=='ps':print('backend\\nworker')
 elif action=='up' and 'admin-web' in args and os.environ.get('FAIL_ADMIN_WEB')=='1':raise SystemExit(1)
 elif action=='up' and 'outbox' in args and os.environ.get('FAIL_ROLLOUT')=='1':raise SystemExit(1)
 elif action=='exec':
- if 'to_regclass' in args[-1]:print('user_mfa' if os.environ.get('MFA_ENROLLED')=='1' else '')
+ if 'python' in args and args[-1] in {'begin','count','end'}:print('1' if os.environ.get('ACTIVE_AI')=='1' and args[-1]!='end' else '0')
+ elif 'to_regclass' in args[-1]:print('user_mfa' if os.environ.get('MFA_ENROLLED')=='1' else '')
  elif 'SELECT EXISTS' in args[-1]:print('t' if os.environ.get('MFA_ENROLLED')=='1' else 'f')
  else:print('synthetic database dump')
 ''')
         self.executable('curl','#!/bin/sh\nexit 0\n')
+        self.executable('sleep','#!/bin/sh\nexit 0\n')
         # Only the root ownership invariant is bypassed in this isolated unprivileged CI test.
         self.executable('stat','#!/bin/sh\ncase "$2" in %u) echo 0;; %a) echo 700;; *) exit 1;; esac\n')
         self.env = {**os.environ,'PATH':str(self.bin)+os.pathsep+os.environ['PATH'],'TEST_ROOT':str(self.root)}
@@ -149,6 +151,15 @@ elif action=='exec':
         self.assertNotEqual(result.returncode,0)
         self.assertIn('Refusing rollback',result.stderr)
         self.assertIn(self.new,(self.deploy/'.images.env').read_text())
+
+
+    def test_active_jobs_prevent_release_change_and_queue_is_resumed(self):
+        self.env['ACTIVE_AI']='1'
+        result=self.execute()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn(self.old,(self.deploy/'.images.env').read_text())
+        self.assertFalse(any('up' in args or 'pull' in args for args in self.commands()))
+        self.assertTrue(any(args[-1]=='end' for args in self.commands()))
 
 
 if __name__=='__main__':unittest.main()

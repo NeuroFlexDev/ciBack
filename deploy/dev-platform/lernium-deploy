@@ -89,6 +89,51 @@ compose() {
         "$@"
 }
 
+# Primitives available in the previous release make the first upgrade drainable.
+drain_control() {
+    compose exec -T backend python - "$ai_drain_token" "$1" <<'PY_DRAIN'
+import sys
+from datetime import datetime
+from redis import Redis
+from sqlalchemy import func
+from app.core.config import settings
+from app.database.db import SessionLocal
+from app.models.ai_resources import AIResourceUsage
+from app.services.ai_resources import locked
+client = Redis.from_url(settings.REDIS_URL, socket_connect_timeout=3, socket_timeout=3)
+lease = "lernium:deployment:ai-drain"
+token, mode = sys.argv[1:3]
+if mode == "end":
+    client.eval("if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1], KEYS[2]) else return 0 end", 2, lease, "rq:suspended", token)
+else:
+    with SessionLocal() as db:
+        if mode == "begin":
+            locked(db)
+            acquired = client.eval("if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end; redis.call('SET', KEYS[1], ARGV[1], 'EX', 900); redis.call('SET', KEYS[2], '1', 'EX', 900); return 1", 2, lease, "rq:suspended", token)
+            if not acquired:
+                raise SystemExit("AI workers are already suspended; existing suspension preserved")
+            db.commit()
+        count = db.query(func.count(AIResourceUsage.id)).filter(AIResourceUsage.lane == "background", AIResourceUsage.status == "running", AIResourceUsage.expires_at > datetime.utcnow()).scalar()
+        print(count)
+client.close()
+PY_DRAIN
+}
+
+drain_background_jobs() {
+    local active attempt
+    ai_draining=true
+    active="$(drain_control begin)" || return 1
+    for ((attempt=0; attempt<60; attempt++)); do
+        [[ "$active" =~ ^[0-9]+$ ]] || return 1
+        if [[ "$active" == 0 ]]; then return 0; fi
+        if ((attempt % 6 == 0)); then printf 'Waiting for %s active AI/document jobs before deployment.\n' "$active"; fi
+        sleep 5
+        active="$(drain_control count)" || return 1
+    done
+    printf 'Background jobs are still active; keeping the current release running.\n' >&2
+    return 1
+}
+
 wait_for_url() {
     local url="$1"
     local attempts="${2:-40}"
@@ -253,8 +298,13 @@ if [[ "$component" == backend ]]; then
 fi
 
 
+ai_draining=false
+ai_drain_token="$(cat /proc/sys/kernel/random/uuid)"
 docker_config="$(mktemp -d /tmp/lernium-docker-config.XXXXXX)"
 cleanup() {
+    if [[ "$ai_draining" == true ]]; then
+        drain_control end || printf 'Could not resume AI queue; deployment suspension expires automatically.\n' >&2
+    fi
     ghcr_token=""
     rm -rf -- "${docker_config}"
 }
@@ -263,6 +313,9 @@ export DOCKER_CONFIG="${docker_config}"
 printf '%s\n' "${ghcr_token}" | docker login ghcr.io --username "${ghcr_user}" --password-stdin >/dev/null
 ghcr_token=""
 
+if [[ "$component" == backend ]] && grep -qxF backend <<< "$running"; then
+    drain_background_jobs || fail "AI jobs did not drain; release was not changed"
+fi
 set_image "${image_variable}" "${image}"
 if ! deploy_current_image; then
     rollback || fail "${component} failed and rollback readiness failed; operator recovery required"

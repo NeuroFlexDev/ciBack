@@ -81,7 +81,22 @@ def scoped(query, organization_id, owner_id):
     return query.filter(AIResourceUsage.organization_id.is_(None), AIResourceUsage.owner_id == owner_id)
 
 
+def background_admission_paused():
+    if settings.ENV == "test":
+        return False
+    from redis import Redis, RedisError
+    try:
+        with Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2) as connection:
+            return bool(connection.exists("rq:suspended"))
+    except RedisError:
+        raise CapacityBusy("ai_queue_unavailable", "Очередь временно недоступна. Материалы сохранены; повторите позже.") from None
+
+
 def _capacity(db, owner_id, organization_id, lane, state, *, exclude=None):
+    # Deployment suspends admission under this same database mutex. Existing
+    # jobs can finish their internal AI calls; queued work waits for resume.
+    if lane == "background" and state == "running" and background_admission_paused():
+        raise CapacityBusy("ai_deployment_pending", "Сервис обновляется. Задания в очереди сохранены; обработка продолжится после обновления.")
     query = db.query(AIResourceUsage).filter(AIResourceUsage.lane == lane, AIResourceUsage.status == state)
     if exclude:
         query = query.filter(AIResourceUsage.id != exclude)

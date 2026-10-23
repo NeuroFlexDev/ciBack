@@ -198,6 +198,9 @@ def test_real_worker_without_providers_preserves_a_resumable_run(db_session, aut
     monkeypatch.setattr(settings, "ENV", "production")
     monkeypatch.setattr(settings, "AI_MAX_ATTEMPTS", 1)
     monkeypatch.setattr(settings, "AI_CHECKPOINT_SQLITE_PATH", tmp_path / "offline.sqlite")
+    # Exercise provider unavailability with an available admission queue. This
+    # test deliberately runs production paths without a real Redis service.
+    monkeypatch.setattr("app.services.ai_resources.background_admission_paused", lambda: False)
     monkeypatch.setattr("app.workers.generation.SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
     monkeypatch.setattr(gateway, "ChatOpenAI", lambda **kw: pytest.fail("must not call network"))

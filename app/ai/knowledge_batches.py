@@ -9,17 +9,19 @@ from app.ai.models import model_policy
 from app.schemas.agentic_pipeline import CompetencyMapArtifact
 
 
-def partition_records(records: list, context: Callable[[list], dict], *, role: str, template: str) -> list[list]:
+def partition_records(records: list, context: Callable[[list], dict], *, role: str, template: str, max_records: int | None = None) -> list[list]:
     """Stable batches by the complete rendered prompt, not quote character count.
 
     No record is clipped, discarded or summarized. An indivisible oversized
     record fails explicitly before dispatch rather than silently losing facts.
     """
+    if max_records is not None and max_records < 1:
+        raise ValueError("Batch size must be positive")
     if not records:
         return []
     batches, offset = [], 0
     while offset < len(records):
-        low, high, size = 1, len(records) - offset, 0
+        low, high, size = 1, min(len(records) - offset, max_records or len(records)), 0
         while low <= high:
             middle = (low + high) // 2
             if prompt_fits(role, template, context(records[offset:offset + middle])):
