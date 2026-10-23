@@ -4,7 +4,7 @@ from .administration import Organization, Invitation, AdminEvent
 from .materials import CourseImage, LearnerAssistantMessage, OrganizationMaterialPolicy, ScopedAIUsage
 from .integrations import OutboundMessage, IntegrationKey, IntegrationOperation, WebhookEndpoint, OIDCProvider, ExternalIdentity, OIDCSession, BillingAccount, Invoice, PaymentEvent, LTIPlatform, LTIResource, LTIIdentity, LTISession, LTIGradeBinding
 from .approval import Approval
-from .account import PasswordReset
+from .account import PasswordReset, EmailBinding
 from .legal import LegalReceipt, LegalRequest
 from .ai_state import AICall, AIResponseCache, ChatMemory, ChunkEmbedding, CanvasWorkspace
 from .agent_artifact import AgentArtifact

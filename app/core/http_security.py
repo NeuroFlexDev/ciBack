@@ -84,7 +84,7 @@ async def account_bucket(request):
     # LTI launch uses form_post with an id_token up to 32 KiB. Do not consume
     # its form stream or apply the smaller JSON credential-body limit.
     form_launch = bool(re.fullmatch(r'/api/lti/[^/]+/launch', path))
-    credential_json = path.startswith('/api/auth/') or path in {'/api/change-password', '/api/lti/exchange', '/api/legal/requests'}
+    credential_json = path.startswith('/api/auth/') or path in {'/api/change-password', '/api/me/email', '/api/me/email/confirm', '/api/lti/exchange', '/api/legal/requests'}
     if request.method == 'POST' and credential_json and not form_launch and json_media_type(request):
         body = await bounded_json(request, 32 * 1024 if path == '/api/legal/requests' else MAX_AUTH_JSON_BYTES)
         if isinstance(body, dict):
@@ -106,7 +106,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         request_id = uuid.uuid4().hex
         request.state.request_id = request_id
-        shared_auth = request.url.path.startswith(('/api/auth/', '/api/lti/')) or request.url.path == '/api/change-password'
+        shared_auth = request.url.path.startswith(('/api/auth/', '/api/lti/')) or request.url.path in {'/api/change-password', '/api/me/email', '/api/me/email/confirm'}
         limited = shared_auth or request.url.path in ('/api/legal/requests', '/api/billing/webhooks/yookassa')
         state_creation = request.method == "GET" and (request.url.path.endswith('/start') or request.url.path.endswith('/login')) and limited
         if settings.ENV != "test" and settings.AUTH_RATE_LIMIT_ENABLED and (request.method == "POST" or state_creation) and limited:

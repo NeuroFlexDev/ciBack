@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictBool, field_validator
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.database.db import get_db
@@ -88,6 +89,83 @@ class InviteEmployee(BaseModel):
     def valid_email(cls, value):
         from app.schemas.auth import AuthCredentials
         return AuthCredentials.valid_email(value)
+
+
+class CreateEmployee(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    full_name: str = Field(min_length=1, max_length=160)
+    username: str = Field(min_length=3, max_length=64)
+    password: SecretStr = Field(min_length=12, max_length=128)
+    role: Literal['manager', 'member', 'candidate'] = 'member'
+    manager_id: int | None = Field(default=None, gt=0)
+    position_id: int | None = Field(default=None, gt=0)
+
+    @field_validator('username')
+    @classmethod
+    def login_name(cls, value):
+        from app.schemas.auth import valid_username
+        return valid_username(value)
+
+    @field_validator('full_name')
+    @classmethod
+    def nonblank(cls, value):
+        if not value.strip():
+            raise ValueError('Укажите имя сотрудника')
+        return value.strip()
+
+
+class EmployeePassword(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    new_password: SecretStr = Field(min_length=12, max_length=128)
+    expected_auth_version: int = Field(ge=0)
+
+
+@router.post('/employees', status_code=201)
+def create_employee(payload: CreateEmployee, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    org = require_business(db, user, owner=payload.role == 'manager', lock=True)
+    check_seat(db, org)
+    manager_id = resolve_manager(db, user, org.id, payload.role, payload.manager_id)
+    if payload.position_id and payload.role == 'manager':
+        raise HTTPException(422, 'Должность назначается сотруднику или кандидату')
+    position = position_for(db, org.id, payload.position_id) if payload.position_id else None
+    if db.query(User.id).filter_by(username=payload.username).first():
+        raise HTTPException(409, 'Этот логин уже занят. Выберите другой.')
+    from app.core.security import hash_password
+    from app.routes.administration import user_dict
+    employee = User(email=None, username=payload.username, full_name=payload.full_name,
+        password_hash=hash_password(payload.password.get_secret_value()), organization_id=org.id,
+        organization_role=payload.role, manager_id=manager_id, is_admin=False, is_active=True)
+    db.add(employee)
+    try:
+        db.flush()
+        if position:
+            db.add(LearningPerson(user_id=employee.id, organization_id=org.id, position_id=position.id, position=position.name))
+        audit(db, user, 'business.employee_created', 'user', employee.id, organization_id=org.id, role=payload.role)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, 'Этот логин уже занят. Выберите другой.') from None
+    return user_dict(employee)
+
+
+@router.post('/employees/{user_id}/password')
+def employee_password(user_id: int, payload: EmployeePassword, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    identities = lock_members(db, [user.id, user_id], expected_auth_versions={user.id: user.auth_version})
+    actor, target = identities[user.id], identities[user_id]
+    org = require_business(db, actor)
+    require_person(db, actor, target)
+    if not target.username or target.id == actor.id or target.organization_role not in {'member', 'candidate', 'manager'}:
+        raise HTTPException(404, 'Аккаунт сотрудника не найден')
+    if target.organization_role == 'manager' and actor.organization_role != 'owner':
+        raise HTTPException(403, 'Доступом управляющего распоряжается владелец компании')
+    if target.auth_version != payload.expected_auth_version:
+        raise HTTPException(409, 'Аккаунт уже изменён. Обновите список.')
+    from app.core.security import hash_password
+    target.password_hash = hash_password(payload.new_password.get_secret_value())
+    target.auth_version += 1
+    audit(db, actor, 'business.employee_password_reset', 'user', target.id, organization_id=org.id)
+    db.commit()
+    return {'user_id': target.id, 'auth_version': target.auth_version}
 
 
 class PositionCourse(BaseModel):
@@ -201,7 +279,7 @@ def employees(q: str = Query('', max_length=100), offset: int = Query(0, ge=0), 
     if manager_id is not None:
         query = query.filter(User.manager_id == manager_id)
     if q.strip():
-        query = query.filter(User.email.icontains(q.strip(), autoescape=True) | User.full_name.icontains(q.strip(), autoescape=True))
+        query = query.filter(User.email.icontains(q.strip(), autoescape=True) | User.username.icontains(q.strip(), autoescape=True) | User.full_name.icontains(q.strip(), autoescape=True))
     from app.routes.administration import user_dict
     rows = query.order_by(User.id).offset(offset).limit(limit).all()
     people = {p.user_id: p for p in db.query(LearningPerson).filter(LearningPerson.organization_id == org.id, LearningPerson.user_id.in_([r.id for r in rows]))}

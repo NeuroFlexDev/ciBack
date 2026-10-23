@@ -89,6 +89,8 @@ def receipts(db: Session = Depends(get_db), user: User = Depends(get_current_use
 
 @router.put("/me/marketing")
 def marketing(payload: MarketingChoice, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if not user.email:
+        raise HTTPException(409, "Сначала подключите почту в профиле.")
     if payload.accepted:
         require_current_version(payload.legal_version)
     # Withdrawal is allowed even when the client has an older document version.

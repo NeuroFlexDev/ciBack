@@ -29,10 +29,29 @@ class RegistrationCredentials(AuthCredentials):
         return value
 
 
+def valid_username(value: str) -> str:
+    value = value.strip().lower()
+    if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{2,63}', value):
+        raise ValueError('Логин: от 3 до 64 латинских букв, цифр, точек, дефисов или подчёркиваний')
+    return value
+
+
+class LoginCredentials(BaseModel):
+    # Keep the existing wire field compatible with email-only clients.
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator('email')
+    @classmethod
+    def identity(cls, value):
+        return AuthCredentials.valid_email(value) if '@' in value else valid_username(value)
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    email: str
+    email: str | None
+    username: str | None = None
     full_name: str = ""
     is_admin: bool = False
     organization_id: int | None = None

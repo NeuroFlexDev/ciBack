@@ -210,7 +210,7 @@ def start_enrollment(db,user,password,claims):
     factor.enrollment_expires_at=now()+timedelta(minutes=10)
     audit(db,user,'mfa.enrollment_started','user',user.id)
     db.commit()
-    uri='otpauth://totp/'+quote('Lernium:'+user.email,safe='')+'?'+urlencode({'secret':secret,'issuer':'Lernium','algorithm':'SHA1','digits':6,'period':30})
+    uri='otpauth://totp/'+quote('Lernium:'+(user.email or user.username or str(user.id)),safe='')+'?'+urlencode({'secret':secret,'issuer':'Lernium','algorithm':'SHA1','digits':6,'period':30})
     return {'enrollment_token':raw,'secret':secret,'otpauth_uri':uri,'expires_at':factor.enrollment_expires_at.isoformat()+'Z'}
 
 
