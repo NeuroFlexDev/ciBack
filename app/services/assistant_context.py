@@ -142,11 +142,11 @@ def local_answer(query, context):
     if matching:
         parts = ['Сейчас отвечаю по сохранённым материалам. Подходящие выдержки:']
         for row in matching:
-            parts += ['\n'.join('> ' + line for line in row['quote'][:1000].splitlines()) + '\n[' + row['ref'] + ']']
+            parts += ['\n'.join('> ' + line for line in row['quote'][:1000].splitlines()) + '\n' + resolve_references('[' + row['ref'] + ']', context)]
     elif context.catalog:
         parts = ['Сейчас доступен локальный режим. Можно открыть эти материалы и уточнить вопрос:',
-            '\n'.join('- [' + row['ref'] + ']' for row in context.catalog[:8])]
+            '\n'.join('- ' + resolve_references('[' + row['ref'] + ']', context) for row in context.catalog[:8])]
     else:
         parts = ['Сейчас доступен локальный режим. В вашем пространстве пока нет доступных материалов для ответа. Добавьте материалы или откройте назначенный регламент.']
-    return {'text': resolve_references('\n\n'.join(parts), context), 'provider': 'local', 'model': 'local/extractive',
+    return {'text': '\n\n'.join(parts), 'provider': 'local', 'model': 'local/extractive',
         'degraded': True, 'usage_reported': False, 'usage': {'input_tokens': 0, 'output_tokens': 0}}
