@@ -283,3 +283,58 @@ def test_cache_is_scoped_to_course_and_owner(db_session,auth_user,monkeypatch):
     execute(make_runtime(db_session,auth_user,generate))
     assert len(calls)==2
     assert db_session.query(AIResponseCache).count()==2
+
+
+def test_confirmed_output_truncation_increases_reserved_response_and_preserves_spend(db_session, auth_user, monkeypatch):
+    from app.services import generation_service
+    monkeypatch.setattr(gateway, 'configured', lambda: True)
+    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'prompt')
+    limits=[]
+    def generate(*args, **kwargs):
+        limits.append(kwargs['max_tokens'])
+        if len(limits)==1:
+            error=HTTPException(502,'Truncated')
+            error.ai_failure_kind='truncated'
+            error.ai_usage={'input_tokens':120,'output_tokens':6000,'cached_tokens':0}
+            raise error
+        return {'value':7,'_usage':{'input_tokens':130,'output_tokens':30},'_usage_reported':True}
+    runtime=make_runtime(db_session,auth_user,generate)
+    assert execute(runtime).value==7
+    assert limits==[6000,12000]
+    calls=db_session.query(AICall).order_by(AICall.id).all()
+    assert calls[0].error_code=='ai_output_truncated' and calls[0].output_tokens==6000
+    assert calls[0].routing['outcome']=='output_truncated'
+    assert calls[1].routing['observation']['max_output_tokens']==12000
+
+
+def test_checkpoint_retry_remembers_confirmed_output_truncation(db_session, auth_user, monkeypatch):
+    from app.services import generation_service
+    monkeypatch.setattr(gateway,'configured',lambda:True)
+    monkeypatch.setattr(generation_service,'render_prompt',lambda *a,**kw:'prompt')
+    seen=[]
+    def truncated(*args,**kwargs):
+        seen.append(kwargs['max_tokens'])
+        error=HTTPException(502,'Truncated');error.ai_failure_kind='truncated'
+        error.ai_usage={'input_tokens':100,'output_tokens':kwargs['max_tokens'],'cached_tokens':0}
+        raise error
+    runtime=make_runtime(db_session,auth_user,truncated);runtime.max_attempts=1
+    with pytest.raises(HTTPException):execute(runtime)
+    def success(*args,**kwargs):
+        seen.append(kwargs['max_tokens']);return {'value':9}
+    runtime.generate=success
+    assert execute(runtime).value==9 and seen==[6000,12000]
+
+
+def test_output_recovery_stops_at_its_bounded_ceiling(db_session, auth_user, monkeypatch):
+    from app.services import generation_service
+    monkeypatch.setattr(gateway,'configured',lambda:True)
+    monkeypatch.setattr(generation_service,'render_prompt',lambda *a,**kw:'prompt')
+    seen=[]
+    def truncated(*args,**kwargs):
+        seen.append(kwargs['max_tokens'])
+        error=HTTPException(502,'Truncated');error.ai_failure_kind='truncated'
+        error.ai_usage={'input_tokens':100,'output_tokens':kwargs['max_tokens'],'cached_tokens':0}
+        raise error
+    runtime=make_runtime(db_session,auth_user,truncated);runtime.max_attempts=8
+    with pytest.raises(HTTPException):execute(runtime)
+    assert seen==[6000,12000,24000]
