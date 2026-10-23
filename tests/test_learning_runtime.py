@@ -162,6 +162,33 @@ def test_reminders_respect_frozen_window_membership_and_transaction_deduplicatio
     assert queue_due_reminders(db_session, now=future)['reason'] == 'mail_not_configured'
 
 
+def test_reminders_skip_login_only_accounts_until_email_is_connected(client, db_session, world, monkeypatch):
+    from app.services import mail_service
+    from app.services.learning_reminders import queue_due_reminders
+    from app.models.administration import AdminEvent
+    messages = []
+    monkeypatch.setattr(mail_service, 'configured', lambda: True)
+    monkeypatch.setattr(mail_service, 'queue_mail', lambda db, recipient, *args, **kw: messages.append(recipient))
+    course, *_ = publish(client, db_session, world['author'])
+    now = datetime.utcnow()
+    first = assign(client, world, course, due_at=(now + timedelta(days=1)).isoformat())
+    assign(client, world, course, target=world['second'], due_at=(now + timedelta(days=1)).isoformat())
+    world['learner'].email = None
+    world['learner'].username = 'login.only.employee'
+    db_session.commit()
+    report = queue_due_reminders(db_session, now=now)
+    db_session.commit()
+    assert (report['scanned'], report['skipped'], report['queued']) == (2, 1, 1)
+    assert messages == [world['second'].email]
+    assert db_session.query(AdminEvent).filter_by(action='learning.reminder_queued', target_id=str(first['id'])).count() == 0
+    world['learner'].email = 'verified@example.test'
+    db_session.commit()
+    assert queue_due_reminders(db_session, now=now)['queued'] == 1
+    db_session.commit()
+    assert messages[-1] == 'verified@example.test'
+    assert queue_due_reminders(db_session, now=now)['queued'] == 0
+
+
 def test_complete_snapshot_safe_learner_and_cross_tenant_isolation(client, db_session, world):
     course, module, lesson, question, task, version = publish(client, db_session, world['author'])
     assignment = assign(client, world, course)

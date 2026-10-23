@@ -36,7 +36,7 @@ def queue_due_reminders(db, *, after_id=0, limit=100, now=None):
     for row in rows:
         db.refresh(row)
         person = db.get(User, row.user_id)
-        if (not organizations[row.organization_id].is_active or not person or not person.is_active
+        if (not organizations[row.organization_id].is_active or not person or not person.is_active or not person.email
                 or person.organization_id != row.organization_id or row.state != 'active' or row.completed_at):
             continue
         if row.prerequisite_id:
