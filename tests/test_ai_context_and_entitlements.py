@@ -83,3 +83,23 @@ def test_ingestion_derives_indexes_accepts_numeric_lists_and_rejects_fiction():
     raw['knowledge_items'][0]['source_ref_ids'] = ['src:invented']
     with pytest.raises(ValueError, match='Unknown'):
         complete_ingestion_inventories(raw, [SOURCE])
+
+
+@pytest.mark.parametrize('bad', [
+    {'documents': None}, {'knowledge_items': None}, {'source_refs': {}},
+    {'documents': ['invalid']}, {'documents': [{'document_id': [], 'document_version': 1}]},
+    {'documents': [{'document_id': 1, 'document_version': 1, 'source_ref_ids': [None]}]},
+])
+def test_malformed_ingestion_collections_are_repairable(bad):
+    from app.ai.evidence import complete_ingestion_inventories
+    with pytest.raises(ValueError):
+        complete_ingestion_inventories(bad, [SOURCE])
+
+
+def test_local_fallback_does_not_interpret_reference_markers_inside_evidence():
+    from app.services.assistant_context import AssistantContext
+    context = AssistantContext(passages=[{'ref':'chunk:1', 'title':'Source', 'quote':'Reference syntax: [course:999999].', 'url':'/courses/1/edit'}])
+    answer = local_answer('Reference syntax', context)
+    assert answer['degraded']
+    assert '[course:999999]' in answer['text'] and '/courses/999999' not in answer['text']
+    assert '[Source](/courses/1/edit)' in answer['text']

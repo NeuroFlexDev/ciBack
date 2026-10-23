@@ -58,6 +58,9 @@ def complete_ingestion_inventories(raw: dict, catalog: list[dict]) -> dict:
     from app.services.agent_runtime import expand_source_refs
     if not isinstance(raw, dict):
         raise ValueError("Ingestion must be an object")
+    for name in ("source_refs", "documents", "knowledge_items"):
+        if name in raw and not isinstance(raw[name], list):
+            raise ValueError(f"{name} must be a list")
     canonical = {source["id"]: source for source in catalog}
     # Even optional inventories may not introduce unknown or changed evidence.
     expand_source_refs({"source_refs": raw.get("source_refs", [])}, canonical)
@@ -66,6 +69,11 @@ def complete_ingestion_inventories(raw: dict, catalog: list[dict]) -> dict:
         grouped.setdefault((source["document_id"], source["document_version"]), []).append(source)
     summaries = {}
     for doc in raw.get("documents", []):
+        if not isinstance(doc, dict) or type(doc.get("document_id")) is not int or type(doc.get("document_version")) is not int:
+            raise ValueError("Documents require integer identities")
+        refs = doc.get("source_ref_ids", [])
+        if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
+            raise ValueError("Document citations must be ID strings")
         key = (doc.get("document_id"), doc.get("document_version"))
         if key not in grouped or key in summaries:
             raise ValueError("Unknown or duplicate document version")
