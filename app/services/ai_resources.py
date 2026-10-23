@@ -87,7 +87,7 @@ def background_admission_paused():
     from redis import Redis, RedisError
     try:
         with Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2) as connection:
-            return bool(connection.exists("rq:suspended"))
+            return bool(connection.exists("rq:suspended", "lernium:deployment:ai-drain"))
     except RedisError:
         raise CapacityBusy("ai_queue_unavailable", "Очередь временно недоступна. Материалы сохранены; повторите позже.") from None
 

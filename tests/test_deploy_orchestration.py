@@ -54,7 +54,7 @@ elif action=='ps':print('backend\\nworker')
 elif action=='up' and 'admin-web' in args and os.environ.get('FAIL_ADMIN_WEB')=='1':raise SystemExit(1)
 elif action=='up' and 'outbox' in args and os.environ.get('FAIL_ROLLOUT')=='1':raise SystemExit(1)
 elif action=='exec':
- if 'python' in args and args[-1] in {'begin','count','end'}:print('1' if os.environ.get('ACTIVE_AI')=='1' and args[-1]!='end' else '0')
+ if 'python' in args and args[-1] in {'begin','count','end','resume'}:print('1' if os.environ.get('ACTIVE_AI')=='1' and args[-1]!='end' else '0')
  elif 'to_regclass' in args[-1]:print('user_mfa' if os.environ.get('MFA_ENROLLED')=='1' else '')
  elif 'SELECT EXISTS' in args[-1]:print('t' if os.environ.get('MFA_ENROLLED')=='1' else 'f')
  else:print('synthetic database dump')
@@ -80,15 +80,20 @@ elif action=='exec':
         commands=self.commands()
         pull=next(args for args in commands if 'pull' in args)
         self.assertEqual(pull[pull.index('pull')+1:],['backend','outbox','worker','migrate'])
-        up=next(args for args in commands if 'up' in args and 'outbox' in args)
+        up=next(args for args in commands if 'up' in args and 'outbox' in args and '--wait' in args)
         self.assertIn('--wait',up)
+        recreated=next(i for i,args in enumerate(commands) if 'up' in args and '--force-recreate' in args)
+        resumed=next(i for i,args in enumerate(commands) if args[-1]=='resume')
+        waited=commands.index(up)
+        self.assertLess(recreated,resumed)
+        self.assertLess(resumed,waited)
         self.assertIn(self.new,(self.deploy/'.images.env').read_text())
 
     def test_admin_api_is_deployed_with_backend_workers(self):
         self.env['ADMIN_API']='1'
         result=self.execute()
         self.assertEqual(result.returncode,0,result.stderr)
-        up=next(args for args in self.commands() if 'up' in args and 'admin-api' in args)
+        up=next(args for args in self.commands() if 'up' in args and 'admin-api' in args and '--wait' in args)
         self.assertIn('--wait',up)
         self.assertIn('worker',up)
 
