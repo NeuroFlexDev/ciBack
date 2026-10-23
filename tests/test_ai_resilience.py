@@ -108,7 +108,7 @@ def test_local_answer_quotes_only_accessible_sources(db_session, auth_user, monk
     result = chat_generate(chat_id=chat.id, user_id=auth_user.id, text="Что делать при утечке?", db=db_session)
     assert result["raw"]["degraded"]
     assert chunk.text in result["answer"]
-    assert f"[chunk:{chunk.id}]" in result["answer"]
+    assert f"[rule.txt](/courses/{course.id}/edit)" in result["answer"]
 
 
 def test_unsent_unavailable_call_does_not_consume_token_reservation(db_session, auth_user, monkeypatch):

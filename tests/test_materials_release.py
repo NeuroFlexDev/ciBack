@@ -201,5 +201,6 @@ def test_learner_assistant_uses_snapshot_and_valid_citation_only(db_session, aut
     assert exc.value.status_code == 404
     monkeypatch.setattr("app.ai.gateway.invoke_messages", lambda *a, **kw: {"text": json.dumps({"answer": "x", "cited_lesson_ids": [999]})})
     failed = assistant.send_message(db_session, auth_user, 8, 5, "Question", "question-789")
-    assert failed.status == "failed"
-    assert not failed.citations and failed.answer is None
+    assert failed.status == "completed" and failed.model == "local/extractive"
+    assert not failed.citations and "локальный режим" in failed.answer
+    assert failed.answer != "x"

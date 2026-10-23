@@ -248,3 +248,18 @@ def test_usage_route_exposes_decision_only_to_owner(adaptive, client, db_session
     db_session.commit()
     other_runtime = make_runtime(db_session, other, lambda: None)
     assert client.get(f"/api/generation-runs/{other_runtime.run_id}/usage", headers=auth_headers).status_code == 404
+
+
+def test_two_contract_failures_temporarily_skip_route_before_minimum_samples(adaptive):
+    history = observations(['contract_fail', 'contract_pass', 'contract_fail'])
+    assert choose(history=history).selected_model == settings.AI_MODEL_FAST
+    assert choose(history=history, now=5000).selected_model == 'test/cheap'
+
+
+def test_static_recovery_never_retries_an_excluded_or_unavailable_route(adaptive):
+    from app.ai.providers import AIUnavailable, route_id
+    excluded = {route_id('vsellm', 'test/cheap'), route_id('vsellm', settings.AI_MODEL_FAST)}
+    with pytest.raises(AIUnavailable):
+        choose(excluded_models=excluded)
+    with pytest.raises(AIUnavailable):
+        choose(available_providers=set())

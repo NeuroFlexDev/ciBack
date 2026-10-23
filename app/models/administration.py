@@ -17,6 +17,7 @@ class Organization(Base):
     course_limit = Column(Integer, nullable=False, default=50, server_default='50')
     source_limit = Column(Integer, nullable=False, default=20, server_default='20')
     generation_limit = Column(Integer, nullable=False, default=100, server_default='100')
+    ai_unlimited = Column(Boolean, nullable=False, default=False, server_default='false')
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 

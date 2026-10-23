@@ -57,7 +57,7 @@ def billing_view(db,organization_id,offset=0,limit=50):
     query=db.query(Invoice).filter_by(organization_id=organization_id)
     org=lock_org(db,organization_id)
     return {"account":account_dict(account),"invoices":{"total":query.count(),"items":[invoice_dict(row) for row in query.order_by(Invoice.created_at.desc()).offset(offset).limit(limit)]},
-        "quotas":{key:getattr(org,key) for key in ("seat_limit","course_limit","source_limit","generation_limit")}}
+        "quotas":{key:getattr(org,key) for key in ("seat_limit","course_limit","source_limit","generation_limit","ai_unlimited")}}
 
 
 @router.get("/admin/organizations/{org_id}/billing")

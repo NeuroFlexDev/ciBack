@@ -124,7 +124,29 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
     except Exception as exc:
         if item.error_code == "assistant_access_revoked":
             raise HTTPException(403, {"code": "ai_access_revoked", "message": "Доступ к помощнику изменился во время запроса. Результат не выдан."}) from None
-        item.status = "failed"
-        item.error_code = "assistant_context_limit" if isinstance(exc, HTTPException) and exc.status_code == 413 else "assistant_unavailable"
+        # A provider outage must not remove access to the assigned lesson.
+        # Refresh authorization even on failure: an outage is never a bypass.
+        try:
+            current_user = refresh_principal(db, user_id, stamp)
+            current_assignment, _ = assignment_context(db, current_user, assignment_id)
+            if current_assignment.course_version_id != version_id:
+                raise HTTPException(403, "Назначенная версия изменилась")
+        except HTTPException:
+            item.status, item.error_code = "failed", "assistant_access_revoked"
+            db.commit()
+            raise HTTPException(403, {"code": "ai_access_revoked", "message": "Доступ к помощнику изменился во время запроса."}) from None
+        from app.ai.evidence import rank_sources
+        saved = lesson.get("content") or ""
+        passages = [{"quote": saved[start:start + 1500]} for start in range(0, len(saved), 1500)]
+        matches = rank_sources(question, passages, limit=2)
+        if matches:
+            item.answer = "Сейчас отвечаю по сохранённому материалу. Подходящие выдержки:\n\n" + "\n\n".join(
+                "\n".join("> " + line for line in passage["quote"].splitlines()) for passage in matches)
+            item.citations = [{"lesson_id": lesson_id, "title": lesson["title"],
+                "url": f"/learning/{assignment_id}?item=lesson:{lesson_id}", "course_version_id": version_id}]
+        else:
+            item.answer = "Сейчас доступен локальный режим. В этом материале не нашлось точного подтверждения ответа. Уточните вопрос или откройте материал «" + lesson["title"] + "»."
+            item.citations = []
+        item.status, item.model, item.error_code = "completed", "local/extractive", "assistant_local_fallback"
     db.commit()
     return item

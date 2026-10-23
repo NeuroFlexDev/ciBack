@@ -205,7 +205,7 @@ class KnowledgeItem(AgenticContract):
     statement: str = Field(min_length=1, max_length=8000)
     source_ref_ids: list[SourceRefId] = Field(min_length=1)
     related_item_ids: list[KnowledgeItemId] = Field(default_factory=list)
-    attributes: dict[str, str | int | float | bool | list[str]] = Field(
+    attributes: dict[str, str | int | float | bool | list[str | int | float | bool]] = Field(
         default_factory=dict
     )
 

@@ -126,7 +126,8 @@ def prepare_generation(db, user, course_id, prompt, request_id):
     used = db.query(CourseImage).join(Course).filter(scope, CourseImage.prompt.is_not(None),
                                                    CourseImage.created_at >= since).count()
     from app.services.material_quota import material_policy, check_storage
-    if used >= material_policy(db, user)["image_monthly_limit"]:
+    from app.services.ai_entitlements import unlimited_ai
+    if not unlimited_ai(db, user.organization_id) and used >= material_policy(db, user)["image_monthly_limit"]:
         raise HTTPException(429, "Исчерпан месячный лимит генерации иллюстраций")
     check_storage(db, user, settings.IMAGE_MAX_BYTES)
     item = CourseImage(owner_id=user.id, course_id=course_id, prompt=prompt, request_id=request_id,

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_UP
 from uuid import uuid4
 from fastapi import HTTPException
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, update, or_
 from app.core.config import settings
 from app.models.ai_resources import AIResourceMutex, AIResourceUsage
 from app.models.course import Course
@@ -92,10 +92,17 @@ def _capacity(db, owner_id, organization_id, lane, state, *, exclude=None):
 
 
 def _budget(db, owner_id, organization_id, tokens, pages, cost, run_id=None):
+    from app.services.ai_entitlements import unlimited_ai
+    from app.models.administration import Organization
+    if unlimited_ai(db, organization_id):
+        return
     month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     query = db.query(AIResourceUsage).filter(AIResourceUsage.created_at >= month)
+    # Exempt traffic is metered separately and must not exhaust other tenants' pool.
+    exempt = select(Organization.id).where(Organization.ai_unlimited.is_(True))
+    installation = query.filter((AIResourceUsage.organization_id.is_(None)) | (~AIResourceUsage.organization_id.in_(exempt)))
     limits = organization_limits(db, organization_id)
-    for suffix, subset in (("INSTALL", query), ("ORG", scoped(query, organization_id, owner_id))):
+    for suffix, subset in (("INSTALL", installation), ("ORG", scoped(query, organization_id, owner_id))):
         spent = subset.with_entities(func.coalesce(func.sum(AIResourceUsage.tokens), 0),
             func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0), func.coalesce(func.sum(AIResourceUsage.cost_rub), 0)).one()
         limit = lambda name: limits[name.lower()] if suffix == "ORG" else getattr(settings, f"AI_INSTALL_{name}")
@@ -125,12 +132,15 @@ def reserve(db, *, owner_id, course_id=None, operation, lane="metered", tokens=0
     if lane in {"background", "interactive"}:
         _capacity(db, owner_id, org_id, lane, status)
     cost = Decimal(cost).quantize(Decimal(".000001"), rounding=ROUND_UP)
-    if partial_ocr:
+    from app.services.ai_entitlements import unlimited_ai
+    if partial_ocr and not unlimited_ai(db, org_id):
         # Text-only PDFs need no OCR. Atomically reserve the remaining allowance
         # and let the isolated parser enforce it before each OCR dispatch.
         month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         query = db.query(AIResourceUsage).filter(AIResourceUsage.created_at >= month)
-        install_used = query.with_entities(func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0)).scalar()
+        from app.models.administration import Organization
+        exempt = select(Organization.id).where(Organization.ai_unlimited.is_(True))
+        install_used = query.filter(or_(AIResourceUsage.organization_id.is_(None), ~AIResourceUsage.organization_id.in_(exempt))).with_entities(func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0)).scalar()
         org_used = scoped(query, org_id, owner_id).with_entities(func.coalesce(func.sum(AIResourceUsage.ocr_pages), 0)).scalar()
         pages = max(0, min(pages, settings.AI_INSTALL_MONTHLY_OCR_PAGES - install_used,
             organization_limits(db, org_id)["monthly_ocr_pages"] - org_used))
@@ -274,7 +284,8 @@ def usage_summary(db, owner_id):
     images = db.query(CourseImage).filter(CourseImage.course_id.in_(courses), CourseImage.prompt.is_not(None), CourseImage.created_at >= month).count()
     from app.services.interactive_quota import monthly_requests
     requests = monthly_requests(db, owner_id, org_id, month=month)
-    return {"month": month.date().isoformat(), "tokens_reserved_or_used": values[0], "ocr_pages_reserved_or_used": values[1],
+    from app.services.ai_entitlements import unlimited_ai
+    return {"ai_unlimited": unlimited_ai(db, org_id), "month": month.date().isoformat(), "tokens_reserved_or_used": values[0], "ocr_pages_reserved_or_used": values[1],
         "cost_rub_reserved_upper_bound": str(values[2]), "tokens_limit": limits["monthly_tokens"],
         "ocr_pages_limit": limits["monthly_ocr_pages"], "cost_rub_limit": str(limits["monthly_rub"]),
         "background_running_limit": limits["background_limit"], "queued_limit": limits["queued_limit"],

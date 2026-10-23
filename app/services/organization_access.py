@@ -92,7 +92,7 @@ def check_course_limit(db: Session, owner_id: int):
         if not org.is_active:
             raise HTTPException(403, 'Организация приостановлена')
         count = db.query(Course).filter(Course.organization_id == org.id, Course.is_deleted.is_(False)).count()
-        if count >= org.course_limit:
+        if not org.ai_unlimited and count >= org.course_limit:
             raise HTTPException(409, 'Достигнут лимит курсов организации. Обратитесь к администратору.')
 
 
@@ -105,7 +105,7 @@ def check_source_limit(db: Session, owner_id: int, course_id: int):
             raise HTTPException(403, 'Организация приостановлена')
         # New sources are current immediately; replacing a version does not consume another source.
         count = db.query(Document).filter(Document.course_id == course_id, Document.is_deleted.is_(False), Document.is_current.is_(True)).with_entities(Document.document_key).distinct().count()
-        if count >= org.source_limit:
+        if not org.ai_unlimited and count >= org.source_limit:
             raise HTTPException(409, 'Достигнут лимит источников на курс. Обратитесь к администратору для изменения лимита.')
 
 
@@ -119,5 +119,5 @@ def check_generation_limit(db: Session, owner_id: int):
         start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         count = db.query(GenerationRun).filter(GenerationRun.owner_id.in_(member_ids(db, org.id)),
             GenerationRun.run_type == 'graph_generation', GenerationRun.created_at >= start).count()
-        if count >= org.generation_limit:
+        if not org.ai_unlimited and count >= org.generation_limit:
             raise HTTPException(409, 'Достигнут месячный лимит запусков генерации организации')

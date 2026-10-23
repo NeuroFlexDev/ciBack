@@ -16,7 +16,7 @@ def state_token(row, fields):
     return hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()
 
 
-ORG_FIELDS = ('id', 'name', 'kind', 'is_active', 'seat_limit', 'course_limit', 'source_limit', 'generation_limit')
+ORG_FIELDS = ('id', 'name', 'kind', 'is_active', 'seat_limit', 'course_limit', 'source_limit', 'generation_limit', 'ai_unlimited')
 COURSE_FIELDS = ('id', 'name', 'description', 'owner_id', 'organization_id', 'status', 'publication_status', 'content_revision', 'is_deleted')
 REQUEST_FIELDS = ('reference', 'status', 'closed_at')
 
