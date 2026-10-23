@@ -52,8 +52,9 @@ def test_chat_generate_limits_llm_history_but_retains_all(
         chat_id=chat.id, user_id=auth_user.id, text="latest", db=db_session, engine_name="lc_giga"
     )
 
-    assert len(engine.history) == 21
-    assert engine.history[0]["content"] == "5"
+    assert len(engine.history) == 22
+    assert engine.history[0]["role"] == "system"
+    assert engine.history[1]["content"] == "5"
     assert len(ChatRepository.get_history(db_session, chat.id, auth_user.id)) == 27
 
 
