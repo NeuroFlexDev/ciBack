@@ -369,6 +369,12 @@ class AgentRuntime:
                     call.error_code = gateway.safe_error(exc)
                     if isinstance(exc, ValidationError):
                         call.error_code = ("validation:" + ",".join(".".join(map(str,e["loc"])) + ":" + e["type"] for e in exc.errors(include_input=False,include_url=False)))[:128]
+                        # Contract diagnostics exclude raw model responses, source
+                        # contents and Pydantic context objects.
+                        call.routing = {**call.routing, "validation_errors": [
+                            {"loc": list(e["loc"]), "type": e["type"], "message": e["msg"][:600]}
+                            for e in exc.errors(include_input=False, include_context=False, include_url=False)[:8]
+                        ]}
                     self.db.add(call)
                     self.db.commit()
                 if getattr(exc, 'ai_failure_kind', None) == 'truncated':

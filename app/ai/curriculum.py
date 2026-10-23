@@ -2,6 +2,49 @@
 from app.schemas.agentic_pipeline import CoursePlan, WriterArtifact, AssessmentArtifact
 
 
+def complete_writer_inventories(raw: dict, catalog: list[dict]) -> dict:
+    """Index the citations actually authored in sections without changing content.
+
+    Lesson and artifact citation lists are redundant indexes. Models often copy
+    the entire planned evidence list into them, including unused sources. Keep
+    section claims/citations intact and reject invented or altered evidence even
+    when it appears only in a redundant index.
+    """
+    import copy
+    from app.services.agent_runtime import expand_source_refs
+    if not isinstance(raw, dict):
+        raise ValueError("Writer response must be an object")
+    result = copy.deepcopy(raw)
+    canonical = {source['id']: source for source in catalog}
+    inventory = result.get('source_refs', [])
+    if not isinstance(inventory, list):
+        raise ValueError("Writer source_refs must be a list")
+    expand_source_refs({'source_refs': inventory}, canonical)
+
+    def citations(node):
+        refs = node.get('source_ref_ids', [])
+        if not isinstance(refs, list) or any(not isinstance(ref, str) or ref not in canonical for ref in refs):
+            raise ValueError("Unknown or malformed writer citation")
+        return refs
+
+    lessons = result.get('lessons')
+    if not isinstance(lessons, list):
+        return result  # The response schema reports the missing semantic content.
+    all_refs = []
+    for lesson in lessons:
+        if not isinstance(lesson, dict):
+            continue
+        citations(lesson)
+        sections = lesson.get('sections')
+        if not isinstance(sections, list) or not all(isinstance(s, dict) for s in sections):
+            continue
+        refs = list(dict.fromkeys(ref for section in sections for ref in citations(section)))
+        lesson['source_ref_ids'] = refs
+        all_refs.extend(refs)
+    result['source_refs'] = list(dict.fromkeys(all_refs))
+    return result
+
+
 def complete_competency_inventories(raw: dict, *, sources: set[str], knowledge: set[str]) -> dict:
     """Complete redundant citation indexes, never invent ontology nodes or evidence.
 

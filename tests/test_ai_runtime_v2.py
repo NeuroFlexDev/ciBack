@@ -164,6 +164,20 @@ def test_retry_contains_validation_feedback(db_session,auth_user):
     assert 'value' in calls[1]['repair_feedback']
 
 
+def test_contract_diagnostics_exclude_raw_model_input(db_session, auth_user, monkeypatch):
+    from app.services import generation_service
+    monkeypatch.setattr(gateway, 'configured', lambda: True)
+    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'prompt')
+    runtime = make_runtime(db_session, auth_user, lambda *a, **kw: {'value': 'SENSITIVE_SOURCE_TEXT'})
+    runtime.max_attempts = 1
+    with pytest.raises(ValidationError):
+        execute(runtime)
+    diagnostic = db_session.query(AICall).one().routing['validation_errors']
+    assert diagnostic[0]['loc'] == ['value']
+    assert diagnostic[0]['type'] == 'int_parsing'
+    assert 'SENSITIVE_SOURCE_TEXT' not in json.dumps(diagnostic)
+
+
 def test_semantic_validator_retries_before_persisting_success(db_session,auth_user):
     calls=[]
     def generate(*args,**kwargs):
