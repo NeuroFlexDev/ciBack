@@ -91,7 +91,11 @@ compose() {
 
 # Primitives available in the previous release make the first upgrade drainable.
 drain_control() {
-    compose exec -T backend python - "$ai_drain_token" "$1" <<'PY_DRAIN'
+    local command=(exec -T backend python)
+    # RQ 2.12 refuses to boot while suspended. This one-off command also works
+    # when the candidate backend is unhealthy or stopped during rollback.
+    if [[ "$1" == resume ]]; then command=(run --rm --no-deps --entrypoint python backend); fi
+    compose "${command[@]}" - "$ai_drain_token" "$1" <<'PY_DRAIN'
 import sys
 from datetime import datetime
 from redis import Redis
@@ -105,6 +109,8 @@ lease = "lernium:deployment:ai-drain"
 token, mode = sys.argv[1:3]
 if mode == "end":
     client.eval("if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1], KEYS[2]) else return 0 end", 2, lease, "rq:suspended", token)
+elif mode == "resume":
+    client.eval("if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[2]) else return 0 end", 2, lease, "rq:suspended", token)
 else:
     with SessionLocal() as db:
         if mode == "begin":
@@ -173,7 +179,11 @@ deploy_current_image() {
                 > "${backup_dir}/database-$(date -u +%Y%m%dT%H%M%SZ).dump" || return 1
             compose run --rm --no-deps migrate || return 1
             if [[ -f "${deployment_dir}/.legacy-pending" ]]; then /usr/local/sbin/lernium-import-legacy || return 1; fi
-            compose up -d --no-deps --force-recreate --wait --wait-timeout 180 "${backend_services[@]}" || return 1
+            compose up -d --no-deps --force-recreate "${backend_services[@]}" || return 1
+            # All old containers are gone. Allow RQ to boot, keeping the owned
+            # admission lease until every new service passes readiness.
+            if [[ "$ai_draining" == true ]]; then drain_control resume || return 1; fi
+            compose up -d --no-deps --wait --wait-timeout 180 "${backend_services[@]}" || return 1
             wait_for_url http://127.0.0.1:8000/api/readiness || return 1
             if [[ ! -f "${deployment_dir}/.bootstrap-pending" ]]; then wait_for_url "${health_url}/api/readiness" || return 1; fi
             ;;
@@ -198,7 +208,7 @@ rollback() {
     if [[ "$component" == backend ]]; then
         # Freeze enrollment before checking compatibility: otherwise a user can
         # enable MFA after the query and be rolled back to password-only code.
-        compose stop --timeout 30 backend || return 1
+        compose stop --timeout 30 "${backend_services[@]}" || return 1
         rollback_auth_compatible || return 1
     fi
     set_image "${image_variable}" "${previous_image}"
@@ -214,6 +224,7 @@ rollback() {
                     fi
                 done
             fi
+            if [[ "$ai_draining" == true ]]; then drain_control resume || return 1; fi
             compose up -d --no-deps --force-recreate --wait --wait-timeout 180 "${previous_backend_services[@]}" || return 1
             wait_for_url http://127.0.0.1:8000/api/readiness || return 1
             if [[ "$profile_pending" == true && "$edge_mode" == caddy ]]; then
