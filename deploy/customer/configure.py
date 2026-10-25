@@ -26,6 +26,7 @@ def configure(args):
     runtime={"ENV":"prod","DEBUG":"false","DATABASE_URL":f"postgresql+psycopg2://lernium:{password}@db:5432/lernium",
         "JWT_SECRET":secrets.token_urlsafe(48),"DATA_ENCRYPTION_KEY":base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
         "PUBLIC_APP_URL":"https://"+args.domain,"CORS_ORIGINS":"https://"+args.domain,
+        "EXPO_PUSH_ENABLED":"false","EXPO_PUSH_ACCESS_TOKEN":"",
         "REGISTRATION_ENABLED":"false","CONTACT_REQUESTS_ENABLED":"false","AUTH_RATE_LIMIT_ENABLED":"true",
         "REDIS_URL":"redis://redis:6379/0","UPLOAD_DIR":"/data/uploads","SMTP_STARTTLS":"true",
         "MFA_REQUIRED_FOR_OPERATORS":"false","MFA_STEP_UP_SECONDS":"600"}

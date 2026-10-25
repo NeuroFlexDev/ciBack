@@ -12,6 +12,15 @@ a working tree.
 - Caddy terminates TLS and routes landing, application, and API requests.
 - PostgreSQL, Redis, uploads, and Caddy state live in named Docker volumes.
 
+## iOS Universal Links and Android App Links
+
+After LER-89 provides the contour's real signing identifiers, generate
+`associations/apple-app-site-association` and `associations/assetlinks.json`
+using `../generate_associations.py`. Follow [MOBILE_DEEP_LINKS.md](../../MOBILE_DEEP_LINKS.md)
+for the exact DEV/PROD generation and public HTTPS acceptance steps. The Caddy
+container mounts this directory and serves both well-known files directly.
+Keep a separate association directory and app identifiers in each contour.
+
 ## Server bootstrap
 
 The bootstrap script installs the runtime profile to `/opt/lernium/deploy`, so

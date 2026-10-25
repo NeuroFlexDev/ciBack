@@ -17,6 +17,14 @@ class Competency(Base, BaseModelMixin):
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     level = Column(String(64), nullable=True)
+    role_id = Column(
+        Integer,
+        ForeignKey("business_positions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    role = relationship("BusinessPosition")
+    # Legacy label retained while older generated competency records are read.
     job_role = Column(String(255), nullable=True)
 
     course = relationship("Course", back_populates="competencies")

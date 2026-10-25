@@ -1,5 +1,19 @@
 """Tenant-scoped AI cache, usage ledger, conversational memory and embeddings."""
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:  # SQLite-only tooling may omit the production adapter.
+    from sqlalchemy.types import UserDefinedType
+
+    class Vector(UserDefinedType):
+        cache_ok = True
+
+        def __init__(self, dimensions):
+            self.dimensions = dimensions
+
+        def get_col_spec(self, **kw):
+            return f"VECTOR({self.dimensions})"
 from app.database.db import Base
 
 
@@ -44,6 +58,9 @@ class ChunkEmbedding(Base):
     model = Column(String(255), nullable=False)
     text_hash = Column(String(64), nullable=False)
     vector = Column(JSON, nullable=False)
+    # JSON remains the portable migration/fallback representation. PostgreSQL
+    # uses a fixed-size vector column so pgvector can index and rank it.
+    vector_pg = Column("embedding", JSON().with_variant(Vector(1536), "postgresql"), nullable=True)
 
 
 class CanvasWorkspace(Base):

@@ -17,12 +17,20 @@ def stop(*_):
 
 
 def main():
+    last_reminder_scan = 0
+    reminder_cursor = 0
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     while running:
         try:
             (Path(tempfile.gettempdir()) / "lernium-outbox-heartbeat").touch()
             with SessionLocal() as db:
+                if time.time() - last_reminder_scan >= 60:
+                    from app.services.mobile_push import enqueue_due_reminders
+                    scan = enqueue_due_reminders(db, after_id=reminder_cursor)
+                    reminder_cursor = scan["next_cursor"] if scan["more"] else 0
+                    db.commit()
+                    last_reminder_scan = time.time()
                 processed = process_one(db)
             if not processed:
                 time.sleep(2)

@@ -113,6 +113,17 @@ class LearningAssignment(Base):
     prerequisite_id = Column(Integer, ForeignKey('learning_assignments.id'), nullable=True)
 
 
+class LearningProgressOperation(Base):
+    __tablename__ = 'learning_progress_operations'
+    __table_args__ = (UniqueConstraint('assignment_id', 'operation_key', name='uq_learning_progress_operation_key'),)
+    id = Column(Integer, primary_key=True)
+    assignment_id = Column(Integer, ForeignKey('learning_assignments.id', ondelete='CASCADE'), nullable=False, index=True)
+    operation_key = Column(String(64), nullable=False)
+    operation_type = Column(String(16), nullable=False)
+    payload = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
 class LearningGroupEnrollment(Base):
     __tablename__ = 'learning_group_enrollments'
     __table_args__ = (UniqueConstraint('group_id', 'course_version_id', 'cycle_key', name='uq_learning_group_enrollment'),)

@@ -13,6 +13,8 @@ from app.services.auth_service import get_current_user
 app = FastAPI(title="Lernium API")
 from app.core.http_security import SecurityMiddleware
 from app.routes import account
+from app.routes import mobile_auth
+app.include_router(mobile_auth.router, prefix="/api", tags=["Mobile authentication"])
 from app.routes import legal
 app.add_middleware(SecurityMiddleware)
 from app.core.upload_limits import UploadBodyLimitMiddleware

@@ -390,6 +390,8 @@ class PipelineService:
         document_id: int,
         owner_id: int,
         storage: FileStorage,
+        run_id: int | None = None,
+        queue_only: bool = False,
     ) -> GenerationRun:
         document = PipelineRepository.get_owned_document(db, document_id, owner_id)
         if document is None:
@@ -399,42 +401,71 @@ class PipelineService:
         if document.status == DocumentStatus.ARCHIVED.value:
             raise HTTPException(status_code=409, detail="Документ архивирован")
 
-        fingerprint = hashlib.sha256(
-            f"{document.id}:{document.version}:{document.content_hash}".encode()
-        ).hexdigest()
-        input_docs = [
-            {
-                "document_id": document.id,
-                "version": document.version,
-                "content_hash": document.content_hash,
-            }
-        ]
-        run = GenerationRun(
-            owner_id=owner_id,
-            course_id=document.course_id,
-            document_id=document.id,
-            run_type=GenerationRunType.DOCUMENT_INDEX.value,
-            status=GenerationRunStatus.QUEUED.value,
-            input_docs=input_docs,
-            input_fingerprint=fingerprint,
-        )
-        document.status = DocumentStatus.QUEUED.value
-        document.processing_error = None
-        db.add(run)
-        db.flush()
-        from app.services.ai_resources import reserve, finish
-        resource = reserve(db, owner_id=owner_id, course_id=document.course_id, operation="document", lane="background",
-            key=f"document:{run.id}", run_id=run.id, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
-            pages=settings.AI_OCR_MAX_PAGES if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED else 0)
-        db.commit()
-        db.refresh(run)
-        run_id = run.id
+        if run_id is not None:
+            run = db.get(GenerationRun, run_id)
+            if (run is None or run.run_type != GenerationRunType.DOCUMENT_INDEX.value
+                    or run.document_id != document.id or run.owner_id != owner_id
+                    or run.status not in {GenerationRunStatus.QUEUED.value, GenerationRunStatus.RUNNING.value}):
+                return run
+            from app.models.ai_resources import AIResourceUsage
+            resource = db.query(AIResourceUsage).filter_by(key=f"document:{run.id}").first()
+            if resource is None:
+                from app.services.ai_resources import reserve
+                resource = reserve(db, owner_id=owner_id, course_id=document.course_id, operation="document", lane="background",
+                    key=f"document:{run.id}", run_id=run.id, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
+                    pages=settings.AI_OCR_MAX_PAGES if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED else 0)
+            run.status = GenerationRunStatus.RUNNING.value
+            if document.status != DocumentStatus.INDEXED.value:
+                document.status = DocumentStatus.PROCESSING.value
+            db.commit()
+        else:
+            active_run = db.query(GenerationRun).filter(
+                GenerationRun.document_id == document.id,
+                GenerationRun.run_type == GenerationRunType.DOCUMENT_INDEX.value,
+                GenerationRun.status.in_((GenerationRunStatus.QUEUED.value, GenerationRunStatus.RUNNING.value)),
+                GenerationRun.is_deleted.is_(False),
+            ).order_by(GenerationRun.id.desc()).first()
+            if active_run is not None:
+                return active_run
+            fingerprint = hashlib.sha256(
+                f"{document.id}:{document.version}:{document.content_hash}".encode()
+            ).hexdigest()
+            input_docs = [
+                {
+                    "document_id": document.id,
+                    "version": document.version,
+                    "content_hash": document.content_hash,
+                }
+            ]
+            run = GenerationRun(
+                owner_id=owner_id,
+                course_id=document.course_id,
+                document_id=document.id,
+                run_type=GenerationRunType.DOCUMENT_INDEX.value,
+                status=GenerationRunStatus.QUEUED.value,
+                input_docs=input_docs,
+                input_fingerprint=fingerprint,
+            )
+            if document.status != DocumentStatus.INDEXED.value:
+                document.status = DocumentStatus.QUEUED.value
+            document.processing_error = None
+            db.add(run)
+            db.flush()
+            from app.services.ai_resources import reserve
+            resource = reserve(db, owner_id=owner_id, course_id=document.course_id, operation="document", lane="background",
+                key=f"document:{run.id}", run_id=run.id, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
+                pages=settings.AI_OCR_MAX_PAGES if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED else 0)
+            db.commit()
+            db.refresh(run)
+            run_id = run.id
+            if queue_only:
+                from app.services.job_queue import enqueue_document_index
+                enqueue_document_index(run.id)
+                return run
 
         started = time.perf_counter()
         try:
-            run.status = GenerationRunStatus.RUNNING.value
-            document.status = DocumentStatus.PROCESSING.value
-            db.commit()
+            from app.services.ai_resources import finish
 
             content = storage.read_bytes(document.storage_key)
             blocks, extraction_usage = extract_blocks(content, document.mime_type, with_usage=True, ocr_page_limit=resource.ocr_pages)
@@ -536,7 +567,7 @@ class PipelineService:
                 failed_run.status = GenerationRunStatus.FAILED.value
                 failed_run.error = error
                 failed_run.latency_ms = _elapsed_ms(started)
-            if failed_document is not None:
+            if failed_document is not None and failed_document.status != DocumentStatus.INDEXED.value:
                 failed_document.status = DocumentStatus.FAILED.value
                 failed_document.processing_error = _safe_document_error(exc)
             db.commit()

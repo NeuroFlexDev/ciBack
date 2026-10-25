@@ -48,6 +48,15 @@ class DeliveryInput(StrictInput):
     @field_validator('delivery')
     @classmethod
     def neutral_resource_profile(cls, value):
+        policy = value.get('mobile_data_policy')
+        if policy is not None:
+            if not isinstance(policy, dict) or set(policy) - {'material_downloads', 'offline_access', 'cache_ttl_hours', 'backups'}:
+                raise ValueError('Invalid mobile data policy')
+            if any(key in policy and not isinstance(policy[key], bool) for key in ('material_downloads', 'offline_access', 'backups')):
+                raise ValueError('Mobile policy flags must be boolean')
+            ttl = policy.get('cache_ttl_hours', 24)
+            if not isinstance(ttl, int) or isinstance(ttl, bool) or not 1 <= ttl <= 8760:
+                raise ValueError('Invalid mobile cache lifetime')
         if 'resource_profile' in value and value['resource_profile'] not in ('pilot', 'team', 'organization', 'custom'):
             raise ValueError('Выберите профиль ресурсов: пилот, команда, организация или индивидуальный')
         return value
@@ -176,12 +185,14 @@ class AssignmentInput(StrictInput):
 
 class ProgressInput(StrictInput):
     expected_revision: int = Field(ge=0)
+    operation_key: str | None = Field(default=None, min_length=8, max_length=64, pattern=r'^[A-Za-z0-9:_-]+$')
     lesson_id: int = Field(gt=0)
     completed: bool = True
 
 
 class BookmarkInput(StrictInput):
     expected_revision: int = Field(ge=0)
+    operation_key: str | None = Field(default=None, min_length=8, max_length=64, pattern=r'^[A-Za-z0-9:_-]+$')
     item_key: str = Field(min_length=1, max_length=64)
 
 

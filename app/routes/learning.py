@@ -15,12 +15,37 @@ from app.models.course_version import CourseVersion
 from app.models.user import User
 from app.models.learning import *
 from app.schemas.learning import *
+from app.schemas.mobile_contract import (AssignmentListResponse, AssignmentDetailResponse,
+    AssignmentSummaryResponse, LearningResponseItem, ResultsResponse)
 from app.services.auth_service import get_current_user, require_admin
 from app.services.organization_access import audit, lock_org, lock_member, lock_members
 from app.services import learning_service as svc
 from app.services.tenant_lifecycle import GROUP_FIELDS, DEPARTMENT_FIELDS, state_token, require_state, require_client_version
 
 router = APIRouter()
+
+
+def _progress_conflict(row, message):
+    raise HTTPException(409, {'message': message, 'current_revision': row.progress_revision,
+        'assignment': {'id': row.id, 'course_version_id': row.course_version_id,
+            'progress_revision': row.progress_revision, 'completed_lessons': row.completed_lessons,
+            'last_lesson_id': row.last_lesson_id, 'last_item_key': row.last_item_key,
+            'completed_at': row.completed_at}})
+
+
+def _known_progress_operation(db, row, payload, kind):
+    if not payload.operation_key:
+        return False
+    operation = db.query(LearningProgressOperation).filter_by(
+        assignment_id=row.id, operation_key=payload.operation_key).first()
+    if operation:
+        if operation.operation_type != kind or operation.payload != payload.model_dump(exclude={'expected_revision', 'operation_key'}):
+            raise HTTPException(409, {'message': 'Ключ операции уже использован с другим содержимым.',
+                'current_revision': row.progress_revision})
+        return True
+    db.add(LearningProgressOperation(assignment_id=row.id, operation_key=payload.operation_key,
+        operation_type=kind, payload=payload.model_dump(exclude={'expected_revision', 'operation_key'})))
+    return False
 
 
 @router.get('/team/management-capabilities')
@@ -681,7 +706,7 @@ def revoke_assignment(assignment_id: int, db: Session = Depends(get_db), user: U
     return {'ok': True, 'results_preserved': True}
 
 
-@router.get('/learning/assignments')
+@router.get('/learning/assignments', response_model=AssignmentListResponse)
 def my_learning(include_history: bool = False, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if not user.organization_id:
         return {'total': 0, 'items': []}
@@ -694,14 +719,45 @@ def my_learning(include_history: bool = False, limit: int = Query(50, ge=1, le=1
     return {'total': total, 'items': [svc.assignment_summary(db, r) for r in rows]}
 
 
-@router.get('/learning/assignments/{assignment_id}')
+@router.get('/learning/assignments/{assignment_id}', response_model=AssignmentDetailResponse,
+            response_model_exclude_unset=True)
 def my_assignment(assignment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     row = svc.learner_assignment(db, user, assignment_id)
     responses = db.query(LearningResponse).filter_by(assignment_id=row.id).order_by(LearningResponse.assessment_id, LearningResponse.attempt)
     return {**svc.assignment_summary(db, row), 'content': svc.public_snapshot(db, row), 'responses': [svc.response_dict(db, r, row) for r in responses]}
 
 
-@router.put('/learning/assignments/{assignment_id}/progress')
+@router.get('/learning/assignments/{assignment_id}/offline-manifest')
+def offline_manifest(assignment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    row = svc.learner_assignment(db, user, assignment_id)
+    policy = svc.settings_for(db, row.organization_id).delivery.get('mobile_data_policy', {})
+    from app.routes.mobile_auth import require_mobile_feature
+    require_mobile_feature(db, row.organization_id, 'offline_access')
+    require_mobile_feature(db, row.organization_id, 'material_downloads')
+    version = db.get(CourseVersion, row.course_version_id)
+    snapshot = svc.snapshot_for(db, row.course_version_id)
+    issued = datetime.utcnow()
+    expires = issued + timedelta(hours=int(policy.get('cache_ttl_hours', 24)))
+    resources = []
+    from app.models.materials import PublishedSourceFile
+    for source in snapshot.get('sources', []):
+        pin = db.get(PublishedSourceFile, (row.course_version_id, source.get('document_id')))
+        if not pin or (source.get('version') is not None and source['version'] != pin.document_version) or (
+                source.get('content_hash') is not None and source['content_hash'] != pin.content_hash):
+            continue
+        resources.append({'id': f"source:{pin.document_id}", 'type': 'source', 'version': pin.document_version,
+            'mime_type': pin.mime_type, 'size_bytes': pin.size_bytes, 'sha256': pin.content_hash,
+            'url': f'/api/learning/assignments/{row.id}/sources/{pin.document_id}/content'})
+    for media in snapshot.get('media', []):
+        resources.append({'id': f"image:{media['id']}", 'type': 'image', 'version': media['version'],
+            'mime_type': media['mime_type'], 'size_bytes': media['size_bytes'], 'sha256': media['sha256'],
+            'url': f"/api/learning/assignments/{row.id}/media/{media['id']}/content"})
+    return {'assignment_id': row.id, 'course_version_id': row.course_version_id,
+        'publication_revision': version.revision, 'issued_at': issued, 'expires_at': expires,
+        'server_time': issued, 'resources': resources}
+
+
+@router.put('/learning/assignments/{assignment_id}/progress', response_model=AssignmentSummaryResponse)
 def progress(assignment_id: int, payload: ProgressInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     row = svc.learner_assignment(db, user, assignment_id, lock=True)
     svc.ensure_learning_write(db, row.organization_id)
@@ -709,8 +765,11 @@ def progress(assignment_id: int, payload: ProgressInput, db: Session = Depends(g
     lesson_ids = {l['id'] for m in snapshot['modules'] for l in m['lessons']}
     if payload.lesson_id not in lesson_ids:
         raise HTTPException(404, 'Урок не найден в назначенной версии')
+    if _known_progress_operation(db, row, payload, 'progress'):
+        db.commit()
+        return svc.assignment_summary(db, row)
     if row.progress_revision != payload.expected_revision:
-        raise HTTPException(409, {'message': 'Прогресс изменился на другом устройстве. Обновите данные.', 'current_revision': row.progress_revision})
+        _progress_conflict(row, 'Прогресс изменился на другом устройстве. Обновите данные.')
     completed = set(row.completed_lessons)
     if payload.completed:
         completed.add(payload.lesson_id)
@@ -725,7 +784,7 @@ def progress(assignment_id: int, payload: ProgressInput, db: Session = Depends(g
     return svc.assignment_summary(db, row)
 
 
-@router.put('/learning/assignments/{assignment_id}/bookmark')
+@router.put('/learning/assignments/{assignment_id}/bookmark', response_model=AssignmentSummaryResponse)
 def bookmark(assignment_id: int, payload: BookmarkInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     row = svc.learner_assignment(db, user, assignment_id, lock=True)
     snapshot = svc.snapshot_for(db, row.course_version_id)
@@ -733,8 +792,11 @@ def bookmark(assignment_id: int, payload: BookmarkInput, db: Session = Depends(g
     allowed.update(a['id'] for a in svc.assessments(snapshot))
     if payload.item_key not in allowed:
         raise HTTPException(404, 'Элемент не найден в назначенной версии')
+    if _known_progress_operation(db, row, payload, 'bookmark'):
+        db.commit()
+        return svc.assignment_summary(db, row)
     if row.progress_revision != payload.expected_revision:
-        raise HTTPException(409, {'message': 'Место продолжения изменилось на другом устройстве. Обновите данные.', 'current_revision': row.progress_revision})
+        _progress_conflict(row, 'Место продолжения изменилось на другом устройстве. Обновите данные.')
     row.last_item_key = payload.item_key
     if payload.item_key.startswith('lesson:'):
         row.last_lesson_id = int(payload.item_key.split(':')[1])
@@ -743,7 +805,8 @@ def bookmark(assignment_id: int, payload: BookmarkInput, db: Session = Depends(g
     return svc.assignment_summary(db, row)
 
 
-@router.put('/learning/assignments/{assignment_id}/responses/{assessment_id}')
+@router.put('/learning/assignments/{assignment_id}/responses/{assessment_id}',
+            response_model=LearningResponseItem, response_model_exclude_unset=True)
 def save_response(assignment_id: int, assessment_id: str, payload: AnswerInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     row = svc.learner_assignment(db, user, assignment_id, lock=True)
     response = svc.save_answer(db, user, row, assessment_id, payload)
@@ -751,7 +814,8 @@ def save_response(assignment_id: int, assessment_id: str, payload: AnswerInput, 
     return svc.response_dict(db, response, row)
 
 
-@router.post('/learning/assignments/{assignment_id}/responses/{assessment_id}/submit')
+@router.post('/learning/assignments/{assignment_id}/responses/{assessment_id}/submit',
+             response_model=LearningResponseItem, response_model_exclude_unset=True)
 def submit_response(assignment_id: int, assessment_id: str, payload: SubmitInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     row = svc.learner_assignment(db, user, assignment_id, lock=True)
     response = svc.save_answer(db, user, row, assessment_id, payload, submit=True)
@@ -759,7 +823,8 @@ def submit_response(assignment_id: int, assessment_id: str, payload: SubmitInput
     return svc.response_dict(db, response, row)
 
 
-@router.get('/learning/assignments/{assignment_id}/results')
+@router.get('/learning/assignments/{assignment_id}/results', response_model=ResultsResponse,
+            response_model_exclude_unset=True)
 def my_results(assignment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     row = svc.learner_assignment(db, user, assignment_id, allow_revoked=True, allow_locked=True)
     responses = db.query(LearningResponse).filter_by(assignment_id=row.id).order_by(LearningResponse.assessment_id, LearningResponse.attempt)
@@ -824,6 +889,8 @@ def grade(response_id: int, payload: GradeInput, db: Session = Depends(get_db), 
     response.grading_metadata = {'method': 'reviewer'}
     audit(db, user, 'learning.graded', 'response', response.id, organization_id=assignment.organization_id, points=payload.points, assignment_id=assignment.id)
     svc.event(db, assignment.organization_id, 'submission.graded', f'response:{response.id}:revision:{response.revision}', {'response_id': response.id, 'assignment_id': assignment.id, 'points': response.points, 'max_points': assessment['max_points']})
+    from app.services.mobile_push import enqueue as enqueue_push
+    enqueue_push(db, assignment, 'result', f'response:{response.id}:revision:{response.revision}')
     db.flush()
     svc.update_completion(db, assignment)
     db.commit()

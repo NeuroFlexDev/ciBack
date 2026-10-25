@@ -9,7 +9,7 @@ services:
       retries: 10
 
   db:
-    image: postgres
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ciuser}
@@ -78,7 +78,7 @@ services:
       AI_MODEL_WRITER: ${AI_MODEL_WRITER:-openai/gpt-5.4-mini}
       AI_MODEL_CRITIC: ${AI_MODEL_CRITIC:-anthropic/claude-sonnet-4.6}
       AI_MODEL_FALLBACK: ${AI_MODEL_FALLBACK:-google/gemini-2.5-flash}
-      AI_MODEL_EMBEDDING: ${AI_MODEL_EMBEDDING:-openai/text-embedding-3-small}
+      AI_MODEL_EMBEDDING: ${AI_MODEL_EMBEDDING:-text-embedding-3-small}
       AI_REQUEST_TIMEOUT_SECONDS: ${AI_REQUEST_TIMEOUT_SECONDS:-90}
       AI_MAX_ATTEMPTS: ${AI_MAX_ATTEMPTS:-3}
       AI_MAX_INPUT_TOKENS: ${AI_MAX_INPUT_TOKENS:-0}
@@ -146,7 +146,7 @@ services:
       AI_MODEL_WRITER: ${AI_MODEL_WRITER:-openai/gpt-5.4-mini}
       AI_MODEL_CRITIC: ${AI_MODEL_CRITIC:-anthropic/claude-sonnet-4.6}
       AI_MODEL_FALLBACK: ${AI_MODEL_FALLBACK:-google/gemini-2.5-flash}
-      AI_MODEL_EMBEDDING: ${AI_MODEL_EMBEDDING:-openai/text-embedding-3-small}
+      AI_MODEL_EMBEDDING: ${AI_MODEL_EMBEDDING:-text-embedding-3-small}
       AI_REQUEST_TIMEOUT_SECONDS: ${AI_REQUEST_TIMEOUT_SECONDS:-90}
       AI_MAX_ATTEMPTS: ${AI_MAX_ATTEMPTS:-3}
       AI_MAX_INPUT_TOKENS: ${AI_MAX_INPUT_TOKENS:-0}

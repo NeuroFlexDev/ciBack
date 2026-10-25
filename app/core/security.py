@@ -65,7 +65,7 @@ def verify_password(password: str, encoded_password: str) -> bool:
     return hmac.compare_digest(password_hash, expected_hash)
 
 
-def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None = None, mfa_at: int | None = None) -> str:
+def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None = None, mfa_at: int | None = None, sid: str | None = None, sv: int | None = None) -> str:
     issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + timedelta(minutes=settings.ACCESS_TOKEN_TTL_MINUTES)
     payload = {
@@ -79,6 +79,9 @@ def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None
     }
     if mfa_at is not None:
         payload['mfa_at'] = mfa_at
+    if sid is not None:
+        payload['sid'] = sid
+        payload['sv'] = sv
     return jwt.encode(
         payload,
         signing_key(),

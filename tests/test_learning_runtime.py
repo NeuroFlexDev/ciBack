@@ -13,6 +13,7 @@ from app.models.test import Test as Question
 from app.models.task import Task
 from app.models.user import User
 from app.models.learning import LearningAssignment, LearningResponse, LearningGradeEvent, PublishedLearningContent, AssessmentDefinition
+from app.models.integrations import OutboundMessage, MobilePushPreference
 
 
 def headers(user):
@@ -238,6 +239,90 @@ def test_progress_and_drafts_survive_reload_conflict_and_submit_retry(client, db
     assert client.post(draft_path+'/submit', headers=h, json={**payload, 'answer': {'text': 'Different text'}}).status_code == 409
 
 
+def test_progress_and_bookmark_operation_keys_are_idempotent_and_conflict_with_payload_change(client, db_session, world):
+    c, _, lesson, _, _, _ = publish(client, db_session, world['author'])
+    assignment = assign(client, world, c)
+    base = f'/api/learning/assignments/{assignment["id"]}'
+    h = headers(world['learner'])
+    event = {'expected_revision': 0, 'operation_key': 'mobile-done-0001', 'lesson_id': lesson.id}
+    first = client.put(base+'/progress', headers=h, json=event)
+    retry = client.put(base+'/progress', headers=h, json=event)
+    assert first.status_code == retry.status_code == 200
+    assert retry.json()['progress_revision'] == first.json()['progress_revision'] == 1
+    changed = client.put(base+'/progress', headers=h, json={**event, 'completed': False})
+    assert changed.status_code == 409
+    bookmark = {'expected_revision': 1, 'operation_key': 'mobile-place-0001', 'item_key': f'lesson:{lesson.id}'}
+    first_bookmark = client.put(base+'/bookmark', headers=h, json=bookmark)
+    second_bookmark = client.put(base+'/bookmark', headers=h, json=bookmark)
+    assert first_bookmark.status_code == second_bookmark.status_code == 200
+    assert second_bookmark.json()['progress_revision'] == 2
+    conflict = client.put(base+'/bookmark', headers=h, json={**bookmark, 'operation_key': 'mobile-place-0002', 'expected_revision': 0})
+    assert conflict.status_code == 409
+    assert conflict.json()['detail']['current_revision'] == 2
+    assert conflict.json()['detail']['assignment']['last_item_key'] == f'lesson:{lesson.id}'
+
+
+def test_offline_manifest_is_gated_and_bound_to_assignment_snapshot(client, db_session, world):
+    from app.services.learning_service import settings_for
+    course, _, lesson, _, _, version = publish(client, db_session, world['author'])
+    assignment = assign(client, world, course)
+    path = f"/api/learning/assignments/{assignment['id']}/offline-manifest"
+    learner = headers(world['learner'])
+    assert client.get(path, headers=learner).status_code == 403
+    config = settings_for(db_session, world['org'].id)
+    config.delivery = {'mobile_data_policy': {'offline_access': True, 'material_downloads': True, 'cache_ttl_hours': 48}}
+    db_session.commit()
+    mobile_policy = client.get('/api/auth/mobile/policy', headers=learner)
+    assert mobile_policy.status_code == 200
+    assert mobile_policy.json()['features'] == {'material_downloads': True, 'offline_access': True}
+    result = client.get(path, headers=learner)
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body['course_version_id'] == version.id
+    assert body['publication_revision'] == version.revision
+    assert body['expires_at'] > body['issued_at']
+    assert body['resources'] == []
+    config.delivery = {'mobile_data_policy': {'material_downloads': True}}
+    db_session.commit()
+    assert client.get(path, headers=learner).status_code == 403
+    assert client.get('/api/auth/mobile/policy', headers=learner).json()['features'] == {'material_downloads': True}
+    revoked = client.delete(f"/api/learning/assignments/{assignment['id']}", headers=headers(world['owner']))
+    assert revoked.status_code == 200
+    assert client.get(path, headers=learner).status_code == 403
+
+
+def test_offline_file_range_and_if_range_restart(tmp_path, monkeypatch):
+    from hashlib import sha256
+    from starlette.requests import Request
+    from app.services import offline_files
+    from app.services.file_storage import LocalFileStorage
+    content = b'0123456789'
+    key = 'pinned/file.bin'
+    storage = LocalFileStorage(tmp_path, 1024)
+    storage.save(__import__('io').BytesIO(content), key)
+    monkeypatch.setattr(offline_files, 'get_file_storage', lambda: storage)
+    def request(headers):
+        scope = {'type': 'http', 'method': 'GET', 'path': '/', 'headers': [(k.encode(), v.encode()) for k, v in headers.items()]}
+        return Request(scope)
+    digest = sha256(content).hexdigest()
+    partial = offline_files.file_response(request({'range': 'bytes=2-5'}), key, len(content), digest, 'application/octet-stream')
+    assert partial.status_code == 206
+    assert partial.headers['accept-ranges'] == 'bytes'
+    assert partial.headers['etag'] == f'"{digest}"'
+    import asyncio
+    async def collect(response):
+        return b''.join([chunk async for chunk in response.body_iterator])
+    assert asyncio.run(collect(partial)) == b'2345'
+    restarted = offline_files.file_response(request({'range': 'bytes=2-', 'if-range': '"stale"'}), key, len(content), digest, 'application/octet-stream')
+    assert restarted.status_code == 200
+    assert asyncio.run(collect(restarted)) == content
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as invalid:
+        offline_files.file_response(request({'range': 'bytes=20-'}), key, len(content), digest, 'application/octet-stream')
+    assert invalid.value.status_code == 416
+    assert invalid.value.headers['Content-Range'] == f'bytes */{len(content)}'
+
+
 def test_server_grading_reveal_policy_and_versioned_attempt_rules(client, db_session, world):
     c, _, lesson, question, _, _ = publish(client, db_session, world['author'], practice=False)
     settings = client.get('/api/team/settings', headers=headers(world['owner'])).json()
@@ -291,6 +376,102 @@ def test_manual_review_scope_criteria_and_append_only_grade_history(client, db_s
     assert [x['points'] for x in history] == [3, 4]
     assert history[1]['old_points'] == 3
     assert client.get(f'/api/learning/assignments/{a["id"]}/results', headers=headers(world['learner'])).json()['responses'][0]['feedback'] == revised['feedback']
+
+
+def test_push_outbox_only_contains_assignments_and_confirmed_grade_revisions(client, db_session, world, monkeypatch):
+    from pydantic import SecretStr
+    from cryptography.fernet import Fernet
+    from app.core.integration_config import integration_settings
+    monkeypatch.setattr(integration_settings, 'DATA_ENCRYPTION_KEY', SecretStr(Fernet.generate_key().decode()))
+    monkeypatch.setattr(integration_settings, 'EXPO_PUSH_ENABLED', True)
+    c, _, _, _, task, _ = publish(client, db_session, world['author'], assessment=False)
+    a = assign(client, world, c)
+    push_rows = db_session.query(OutboundMessage).filter_by(kind='push').all()
+    assert len(push_rows) == 1 and push_rows[0].deduplication_key == f'push:assignment:assignment:{a["id"]}:created'
+
+    sent = client.post(f'/api/learning/assignments/{a["id"]}/responses/task:{task.id}/submit',
+        headers=headers(world['learner']), json={'answer': {'text': 'A long enough submitted answer'}, 'submission_key': 'push-review-pending'}).json()
+    assert sent['status'] == 'pending_review'
+    assert db_session.query(OutboundMessage).filter(OutboundMessage.kind == 'push', OutboundMessage.deduplication_key.like('push:result:%')).count() == 0
+    grant(client, world, 'reviewer', 'reviewer', 'course', c.id)
+    endpoint = f'/api/learning/reviews/{sent["id"]}/grade'
+    graded = client.post(endpoint, headers=headers(world['reviewer']), json={
+        'expected_revision': sent['revision'], 'points': 1, 'feedback': 'Reviewed',
+        'criteria_scores': [{'id': 'explanation', 'points': 1}]}).json()
+    client.post(endpoint, headers=headers(world['reviewer']), json={
+        'expected_revision': graded['revision'], 'points': 0, 'feedback': 'Revised',
+        'criteria_scores': [{'id': 'explanation', 'points': 0}]})
+    results = db_session.query(OutboundMessage).filter(OutboundMessage.kind == 'push', OutboundMessage.deduplication_key.like('push:result:%')).all()
+    assert len(results) == 2
+
+
+def test_push_deadline_scheduler_uses_local_calendar_and_deduplicates(client, db_session, world, monkeypatch):
+    from datetime import timezone
+    from pydantic import SecretStr
+    from cryptography.fernet import Fernet
+    from app.core.integration_config import integration_settings
+    from app.services.mobile_push import enqueue_due_reminders
+    monkeypatch.setattr(integration_settings, 'DATA_ENCRYPTION_KEY', SecretStr(Fernet.generate_key().decode()))
+    monkeypatch.setattr(integration_settings, 'EXPO_PUSH_ENABLED', True)
+    c, _, _, _, _, _ = publish(client, db_session, world['author'], assessment=False, practice=False)
+    item = assign(client, world, c)
+    assignment = db_session.get(LearningAssignment, item['id'])
+    assignment.due_at = datetime(2026, 5, 10, 15, 0)  # 18:00 in Moscow
+    db_session.add(MobilePushPreference(user_id=world['learner'].id, timezone='Europe/Moscow'))
+    db_session.commit()
+    now = datetime(2026, 5, 7, 6, 1, tzinfo=timezone.utc)  # 09:01, three local calendar days before
+    first = enqueue_due_reminders(db_session, now=now)
+    second = enqueue_due_reminders(db_session, now=now)
+    assert first['queued'] == 1 and second['queued'] == 0
+    reminder = db_session.query(OutboundMessage).filter_by(deduplication_key=f'push:deadline:{item["id"]}:2026-05-10').one()
+    assert reminder.kind == 'push'
+
+
+def test_push_delivery_is_session_bound_and_removes_unregistered_token(client, db_session, world, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from pydantic import SecretStr
+    from cryptography.fernet import Fernet
+    from app.core.integration_config import integration_settings
+    from app.models.integrations import MobileSession, MobilePushDevice
+    from app.services.integration_secrets import seal
+    from app.services.mobile_sessions import digest
+    from app.services import mobile_push
+    monkeypatch.setattr(integration_settings, 'DATA_ENCRYPTION_KEY', SecretStr(Fernet.generate_key().decode()))
+    monkeypatch.setattr(integration_settings, 'EXPO_PUSH_ENABLED', True)
+    c, _, _, _, _, _ = publish(client, db_session, world['author'], assessment=False, practice=False)
+    item = assign(client, world, c)
+    assignment = db_session.get(LearningAssignment, item['id'])
+    session = MobileSession(id='push-session', user_id=world['learner'].id, refresh_token_hash='a' * 64,
+        auth_version=world['learner'].auth_version, expires_at=datetime.utcnow() + timedelta(hours=1))
+    db_session.add(session)
+    token = 'ExpoPushToken[device-token]'
+    device = MobilePushDevice(id='push-device', session_id=session.id, token_hash=digest(token),
+        token_encrypted=seal(token), platform='ios')
+    db_session.add(device)
+    db_session.flush()
+    seen = {}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self, _): return json.dumps({'data': [{'status': 'error', 'details': {'error': 'DeviceNotRegistered'}}]}).encode()
+
+    def fake_urlopen(request, timeout):
+        seen['request'] = json.loads(request.data)
+        seen['timeout'] = timeout
+        return Response()
+
+    monkeypatch.setattr(mobile_push, 'urlopen', fake_urlopen)
+    result = mobile_push.deliver(db_session, SimpleNamespace(id='outbox-1', organization_id=assignment.organization_id),
+        {'assignment_id': assignment.id, 'type': 'assignment'})
+    message = seen['request'][0]
+    assert result == 'delivered' and seen['timeout'] == 10
+    assert message['title'] == 'Новое назначение'
+    assert message['data'] == {'type': 'assignment', 'assignment_id': assignment.id,
+        'route': f'/learning/assignments/{assignment.id}'}
+    assert c.name not in json.dumps(message)
+    assert db_session.query(MobilePushDevice).count() == 0
 
 
 def test_group_multiple_membership_future_enrollment_and_revoke_preserves_history(client, db_session, world):

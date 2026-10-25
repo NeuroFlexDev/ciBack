@@ -6,6 +6,22 @@
     header @nonProduction X-Robots-Tag "noindex, nofollow, noarchive"
     @privatePages path /company /company/* /auth /auth/* /admin /admin/* /invite /invite/* /dashboard /dashboard/* /account /account/* /forgot-password /reset-password /courses /courses/* /employees /analytics /express /templates /ai-helper /learning /learning/* /reviews /reviews/* /course-reviews /groups /groups/* /assignments /programs /programs/* /team-settings /support-access /learning-analytics /integrations /integrations/* /billing
     header @privatePages X-Robots-Tag "noindex, nofollow"
+    @appleAssociation path /.well-known/apple-app-site-association
+    handle @appleAssociation {
+        root * /associations
+        rewrite * /apple-app-site-association
+        header Content-Type application/json
+        header Cache-Control "public, max-age=300"
+        file_server
+    }
+    @androidAssociation path /.well-known/assetlinks.json
+    handle @androidAssociation {
+        root * /associations
+        rewrite * /assetlinks.json
+        header Content-Type application/json
+        header Cache-Control "public, max-age=300"
+        file_server
+    }
     @demoRobots {
         path /robots.txt
         not host lernium.ru
