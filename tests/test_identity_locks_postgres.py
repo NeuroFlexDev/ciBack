@@ -45,6 +45,11 @@ def pg_sessions():
             cursor.execute("SET statement_timeout TO '6000ms'")
         connection.autocommit = False
     try:
+        # Base.metadata creates the ORM's native VECTOR column directly, so the
+        # isolated schema needs pgvector before create_all (migrations normally
+        # install it first in a deployed database).
+        with engine.begin() as connection:
+            connection.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
         Base.metadata.create_all(engine)
         yield sessionmaker(bind=engine, expire_on_commit=False)
     finally:

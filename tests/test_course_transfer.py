@@ -161,10 +161,12 @@ def test_owner_revocation_while_waiting_for_organization_lock_blocks_export(clie
     assert db_session.query(AdminEvent).filter_by(action='learning.course_export_prepared').count() == 0
 
 
-def test_session_revoked_while_reading_assets_returns_no_archive(client, db_session, world, monkeypatch):
+def test_session_revoked_while_reading_assets_returns_no_archive(client, db_session, world, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, 'UPLOAD_DIR', tmp_path)
     course, _, _, _, task, _ = publish(client, db_session, world['author'])
     image = CourseImage(course_id=course.id, owner_id=world['author'].id, status='approved', storage_key='image.png', mime_type='image/png')
     db_session.add(image); db_session.flush()
+    (tmp_path / image.storage_key).write_bytes(b'approved image bytes')
     task.description = f'![Approved](/images/{image.id}/content)'
     course.content_revision += 1; db_session.commit()
     assert client.post(f'/api/courses/{course.id}/publish', headers=headers(world['author'])).status_code == 200
