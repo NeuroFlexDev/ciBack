@@ -120,6 +120,27 @@ def test_reindex_is_idempotent_and_persists_run(
     assert document.status == "indexed"
 
 
+def test_reindex_request_queues_run_and_keeps_indexed_document_available(
+    db_session, auth_user, monkeypatch
+):
+    course, document, storage = _course_and_document(db_session, auth_user)
+    document.status = "indexed"
+    db_session.commit()
+    queued = []
+    monkeypatch.setattr("app.services.job_queue.enqueue_document_index", queued.append)
+
+    first = PipelineService.reindex_document(db_session, document_id=document.id,
+        owner_id=auth_user.id, storage=storage, queue_only=True)
+    again = PipelineService.reindex_document(db_session, document_id=document.id,
+        owner_id=auth_user.id, storage=storage, queue_only=True)
+
+    assert first.status == "queued"
+    assert again.id == first.id
+    assert queued == [first.id]
+    db_session.refresh(document)
+    assert document.status == "indexed"
+
+
 def test_reindex_failure_is_persisted(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{(tmp_path / 'failure.sqlite').as_posix()}")
     Base.metadata.create_all(engine)

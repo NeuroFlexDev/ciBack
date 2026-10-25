@@ -56,7 +56,7 @@ def claim(db):
 def deliver(db, row):
     if row.expires_at and row.expires_at <= datetime.utcnow():
         return "expired"
-    if row.kind != "mail":
+    if row.kind in {"webhook", "lti_score"}:
         from app.services.integration_access import integration_enabled
         if not integration_enabled(db, row.organization_id):
             return "cancelled"
@@ -80,6 +80,9 @@ def deliver(db, row):
     elif row.kind == "lti_score":
         from app.services.lti_service import deliver_score
         deliver_score(db, payload)
+    elif row.kind == "push":
+        from app.services.mobile_push import deliver as deliver_push
+        return deliver_push(db, row, payload)
     else:
         raise ValueError("Unknown delivery kind")
     return "delivered"

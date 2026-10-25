@@ -11,6 +11,8 @@ class IntegrationSettings(BaseSettings):
     OIDC_HTTP_TIMEOUT: int = Field(default=15, ge=1, le=60)
     YOOKASSA_SHOP_ID: str = ""
     YOOKASSA_SECRET_KEY: SecretStr = SecretStr("")
+    EXPO_PUSH_ACCESS_TOKEN: SecretStr = SecretStr("")
+    EXPO_PUSH_ENABLED: bool = False
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

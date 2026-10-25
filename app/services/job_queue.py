@@ -14,3 +14,16 @@ def enqueue_generation(run_id: int) -> None:
     queue.enqueue("app.workers.generation.execute_generation_run", run_id,
                   job_id=f"generation-run-{run_id}", job_timeout=settings.AI_JOB_TIMEOUT_SECONDS,
                   result_ttl=86400, failure_ttl=604800, retry=Retry(max=20, interval=15))
+
+
+def enqueue_document_index(run_id: int) -> None:
+    if settings.JOB_EAGER:
+        from app.workers.generation import execute_document_index_run
+        execute_document_index_run(run_id)
+        return
+    from redis import Redis
+    from rq import Queue, Retry
+    queue = Queue(settings.GENERATION_QUEUE_NAME, connection=Redis.from_url(settings.REDIS_URL))
+    queue.enqueue("app.workers.generation.execute_document_index_run", run_id,
+        job_id=f"document-index-run-{run_id}", job_timeout=settings.AI_JOB_TIMEOUT_SECONDS,
+        result_ttl=86400, failure_ttl=604800, retry=Retry(max=5, interval=15))

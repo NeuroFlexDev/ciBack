@@ -93,9 +93,11 @@ def author_download(db, user, course_id, document_id):
     return download(checked_bytes(document.storage_key, document.content_hash, document.size_bytes), document.original_filename, document.mime_type)
 
 
-def learner_download(db, user, assignment_id, document_id):
+def learner_download(db, user, assignment_id, document_id, request=None):
     from app.services.learning_service import learner_assignment, snapshot_for
     assignment = learner_assignment(db, user, assignment_id)
+    from app.routes.mobile_auth import require_mobile_feature
+    require_mobile_feature(db, assignment.organization_id, "material_downloads")
     sources = snapshot_for(db, assignment.course_version_id).get("sources", [])
     source = next((item for item in sources if item["document_id"] == document_id), None)
     pin = db.get(PublishedSourceFile, (assignment.course_version_id, document_id))
@@ -103,4 +105,7 @@ def learner_download(db, user, assignment_id, document_id):
         raise HTTPException(404, "Источник не опубликован для этого назначения")
     if source["version"] != pin.document_version or source["content_hash"] != pin.content_hash:
         raise HTTPException(503, "Снимок источника не прошёл проверку целостности")
+    if request is not None:
+        from app.services.offline_files import file_response
+        return file_response(request, pin.storage_key, pin.size_bytes, pin.content_hash, pin.mime_type)
     return download(checked_bytes(pin.storage_key, pin.content_hash, pin.size_bytes), pin.filename, pin.mime_type)

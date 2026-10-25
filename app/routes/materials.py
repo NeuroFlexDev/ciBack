@@ -1,6 +1,6 @@
 from typing import Literal
 from decimal import Decimal
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Response, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.database.db import get_db
@@ -42,9 +42,29 @@ def source_release_content(course_id: int, document_id: int, db: Session = Depen
 
 
 @router.get("/learning/assignments/{assignment_id}/sources/{document_id}/content")
-def learner_source_content(assignment_id: int, document_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def learner_source_content(assignment_id: int, document_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     from app.services.source_release import learner_download
-    return learner_download(db, user, assignment_id, document_id)
+    return learner_download(db, user, assignment_id, document_id, request)
+
+
+@router.get("/learning/assignments/{assignment_id}/media/{media_id}/content")
+def learner_media_content(assignment_id: int, media_id: int, request: Request,
+        db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.services.learning_service import learner_assignment, snapshot_for
+    from app.models.materials import CourseImage
+    from app.models.course_version import CourseVersion
+    assignment = learner_assignment(db, user, assignment_id)
+    from app.routes.mobile_auth import require_mobile_feature
+    require_mobile_feature(db, assignment.organization_id, "material_downloads")
+    require_mobile_feature(db, assignment.organization_id, "offline_access")
+    pinned = next((item for item in snapshot_for(db, assignment.course_version_id).get("media", [])
+        if item.get("id") == media_id), None)
+    image = db.get(CourseImage, media_id)
+    version = db.get(CourseVersion, assignment.course_version_id)
+    if not pinned or not image or not version or image.course_id != version.course_id:
+        raise HTTPException(404, "Published media not found for this assignment")
+    from app.services.offline_files import file_response
+    return file_response(request, pinned['storage_key'], pinned['size_bytes'], pinned['sha256'], pinned['mime_type'])
 
 
 @router.get("/materials/resource-usage")

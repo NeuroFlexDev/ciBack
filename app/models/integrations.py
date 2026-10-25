@@ -98,6 +98,50 @@ class OIDCSession(Base):
     exchange_code_hash = Column(String(64), nullable=True, unique=True)
     authenticated_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     exchanged_at = Column(DateTime, nullable=True)
+    mobile_handoff = Column(Boolean, nullable=False, default=False)
+
+
+class MobileSession(Base):
+    __tablename__ = "mobile_sessions"
+    id = Column(String(36), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    refresh_token_hash = Column(String(64), nullable=False, unique=True)
+    previous_refresh_token_hash = Column(String(64), nullable=True, unique=True)
+    token_version = Column(Integer, nullable=False, default=0)
+    auth_version = Column(Integer, nullable=False)
+    device_name = Column(String(120), nullable=False, default="Mobile device")
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    expires_at = Column(DateTime, nullable=False, index=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+
+class MobileRefreshToken(Base):
+    __tablename__ = "mobile_refresh_tokens"
+    token_hash = Column(String(64), primary_key=True)
+    session_id = Column(String(36), ForeignKey("mobile_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    issued_at = Column(DateTime, nullable=False, default=func.now())
+    consumed_at = Column(DateTime, nullable=True)
+
+
+class MobilePushDevice(Base):
+    __tablename__ = "mobile_push_devices"
+    id = Column(String(36), primary_key=True)
+    session_id = Column(String(36), ForeignKey("mobile_sessions.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    token_encrypted = Column(Text, nullable=True)
+    platform = Column(String(16), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+
+
+class MobilePushPreference(Base):
+    __tablename__ = "mobile_push_preferences"
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    assignment_enabled = Column(Boolean, nullable=False, default=True)
+    deadline_enabled = Column(Boolean, nullable=False, default=True)
+    result_enabled = Column(Boolean, nullable=False, default=True)
+    timezone = Column(String(64), nullable=False, default="UTC")
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
 
 class BillingAccount(Base):

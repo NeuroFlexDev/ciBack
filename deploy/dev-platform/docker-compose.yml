@@ -39,6 +39,8 @@ x-backend-environment: &backend-environment
   SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
   SMTP_SSL: ${SMTP_SSL:-false}
   DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+  EXPO_PUSH_ENABLED: ${EXPO_PUSH_ENABLED:-false}
+  EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
   MFA_REQUIRED_FOR_OPERATORS: ${MFA_REQUIRED_FOR_OPERATORS:-false}
   MFA_STEP_UP_SECONDS: ${MFA_STEP_UP_SECONDS:-600}
   INTEGRATION_PRIVATE_HOSTS: ${INTEGRATION_PRIVATE_HOSTS:-}
@@ -83,7 +85,7 @@ x-backend-environment: &backend-environment
   AI_MAX_TOKENS_PER_RUN: ${AI_MAX_TOKENS_PER_RUN:-600000}
   AI_MAX_CALLS_PER_RUN: ${AI_MAX_CALLS_PER_RUN:-180}
   AI_JOB_TIMEOUT_SECONDS: ${AI_JOB_TIMEOUT_SECONDS:-3600}
-  AI_MODEL_EMBEDDING: ${AI_MODEL_EMBEDDING:-openai/text-embedding-3-small}
+  AI_MODEL_EMBEDDING: ${AI_MODEL_EMBEDDING:-text-embedding-3-small}
   AI_REQUEST_TIMEOUT_SECONDS: ${AI_REQUEST_TIMEOUT_SECONDS:-90}
   AI_MAX_ATTEMPTS: ${AI_MAX_ATTEMPTS:-3}
   AI_MAX_INPUT_TOKENS: ${AI_MAX_INPUT_TOKENS:-0}
@@ -127,6 +129,7 @@ services:
       ADMIN_HOST: ${ADMIN_HOST:-admin.dev.lernium.ru}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./associations:/associations:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -301,7 +304,7 @@ services:
 
   db:
     logging: *logging
-    image: postgres:17-alpine
+    image: pgvector/pgvector:0.8.0-pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}

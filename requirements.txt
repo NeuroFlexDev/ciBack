@@ -6,6 +6,7 @@ feedparser
 python-multipart
 sqlalchemy
 psycopg2-binary
+pgvector>=0.4,<1
 jinja2
 python-docx
 PyMuPDF

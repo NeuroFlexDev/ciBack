@@ -20,6 +20,14 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def include_object(obj, name, type_, reflected, compare_to):
+    # pgvector's HNSW index exists only on PostgreSQL; migrations deliberately
+    # skip both its VECTOR column and index on SQLite.
+    if type_ == "index" and name == "ix_chunk_embeddings_embedding_hnsw":
+        return context.get_context().dialect.name == "postgresql"
+    return True
+
+
 def get_url() -> str:
     if settings.DATABASE_URL:
         return settings.DATABASE_URL
@@ -54,7 +62,8 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(connection=connection, target_metadata=target_metadata,
+                          include_object=include_object)
 
         with context.begin_transaction():
             context.run_migrations()

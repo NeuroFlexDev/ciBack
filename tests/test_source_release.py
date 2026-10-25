@@ -37,6 +37,9 @@ def test_release_requires_explicit_review_and_pins_assigned_original(client, db_
     assert client.put(f"{base}/{source.id}", headers=h, json=payload).status_code == 409
     assert client.post(f'/api/courses/{c.id}/publish', headers=h).status_code == 200
     current = assign(client, world, c)
+    from app.services.learning_service import settings_for
+    settings_for(db_session, world['org'].id).delivery = {'mobile_data_policy': {'material_downloads': True}}
+    db_session.commit()
     path = f"/api/learning/assignments/{current['id']}/sources/{source.id}/content"
     snapshot = client.get(f"/api/learning/assignments/{current['id']}", headers=headers(world['learner'])).json()['content']
     assert snapshot['sources'][0]['content_hash'] == source.content_hash

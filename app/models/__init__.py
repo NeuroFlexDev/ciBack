@@ -2,7 +2,7 @@ from .ai_control import AIControl
 from .business import BusinessPosition
 from .administration import Organization, Invitation, AdminEvent
 from .materials import CourseImage, LearnerAssistantMessage, OrganizationMaterialPolicy, ScopedAIUsage
-from .integrations import OutboundMessage, IntegrationKey, IntegrationOperation, WebhookEndpoint, OIDCProvider, ExternalIdentity, OIDCSession, BillingAccount, Invoice, PaymentEvent, LTIPlatform, LTIResource, LTIIdentity, LTISession, LTIGradeBinding
+from .integrations import OutboundMessage, IntegrationKey, IntegrationOperation, WebhookEndpoint, OIDCProvider, ExternalIdentity, OIDCSession, MobileSession, MobileRefreshToken, MobilePushDevice, MobilePushPreference, BillingAccount, Invoice, PaymentEvent, LTIPlatform, LTIResource, LTIIdentity, LTISession, LTIGradeBinding
 from .approval import Approval
 from .account import PasswordReset, EmailBinding
 from .legal import LegalReceipt, LegalRequest
@@ -38,7 +38,7 @@ from .mfa import UserMFA, MFARecoveryCode, MFAChallenge
 from .learning import (OrganizationLearningSettings, LearningRoleGrant, LearningDepartment, LearningPerson,
     LearningGroup, LearningGroupMember, PublishedLearningContent, AssessmentDefinition, LearningAssignment,
     LearningGroupEnrollment, LearningResponse, LearningGradeEvent, LearningProgram,
-    LearningProgramEnrollment, OrganizationOwnershipTransfer, LearningPublicationApproval)
+    LearningProgramEnrollment, OrganizationOwnershipTransfer, LearningPublicationApproval, LearningProgressOperation)
 
 __all__ = [
     "LegalReceipt",

@@ -1,5 +1,5 @@
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -62,8 +62,16 @@ def disable_provider(provider_id:int,db:Session=Depends(get_db),user=Depends(int
     db.commit();return {"ok":True}
 
 
-def start_response(db,provider,link_user_id=None):
+def start_response(db,provider,link_user_id=None,mobile=False):
+    if mobile and not settings.MOBILE_OIDC_REDIRECT_URI:
+        raise HTTPException(503,"Мобильный OIDC возврат не настроен оператором")
+    if mobile:
+        parsed=urlsplit(settings.MOBILE_OIDC_REDIRECT_URI)
+        if parsed.scheme!="https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise HTTPException(503,"Для мобильного возврата требуется HTTPS Universal Link / App Link")
     url,state,browser=oidc_service.begin(db,provider,link_user_id)
+    if mobile:
+        row=db.get(OIDCSession,oidc_service.digest(state));row.mobile_handoff=True;db.commit()
     response=RedirectResponse(url,status_code=303)
     response.set_cookie("lernium_oidc_"+state[:12],browser,max_age=600,httponly=True,secure=settings.PUBLIC_APP_URL.startswith("https:"),
         samesite="lax",path="/api/auth/oidc")
@@ -71,10 +79,10 @@ def start_response(db,provider,link_user_id=None):
 
 
 @router.get("/auth/oidc/{provider_id}/start")
-def start(provider_id:int,db:Session=Depends(get_db)):
+def start(provider_id:int,mobile:bool=False,db:Session=Depends(get_db)):
     provider=db.query(OIDCProvider).filter_by(id=provider_id,enabled=True).first()
     if not provider:raise HTTPException(404,"Подключение входа не найдено")
-    return start_response(db,provider)
+    return start_response(db,provider,mobile=mobile)
 
 
 @router.post("/auth/oidc/{provider_id}/link")
@@ -90,6 +98,12 @@ def link(provider_id:int,db:Session=Depends(get_db),user=Depends(get_current_use
 
 @router.get("/auth/oidc/callback")
 def callback(request:Request,state:str=Query(min_length=32,max_length=128),code:str|None=Query(None,min_length=1,max_length=4096),error:str|None=Query(None,max_length=255),db:Session=Depends(get_db)):
+    session=db.get(OIDCSession,oidc_service.digest(state))
+    mobile=bool(session and session.mobile_handoff and settings.MOBILE_OIDC_REDIRECT_URI)
+    target=settings.MOBILE_OIDC_REDIRECT_URI if mobile else settings.PUBLIC_APP_URL.rstrip("/")+"/auth"
+    if (error or not code) and session and not session.consumed_at:
+        session.consumed_at=datetime.utcnow()
+        db.commit()
     try:
         if error or not code:raise HTTPException(400,"Вход отменён сервисом учётных записей. Повторите вход или используйте пароль")
         browser=request.cookies.get("lernium_oidc_"+state[:12])
@@ -97,7 +111,9 @@ def callback(request:Request,state:str=Query(min_length=32,max_length=128),code:
         fragment={"sso_code":exchange,"sso_state":state}
     except HTTPException as exc:
         db.rollback();fragment={"sso_error":str(exc.detail)}
-    return RedirectResponse(settings.PUBLIC_APP_URL.rstrip("/")+"/auth#"+urlencode(fragment),status_code=303)
+    if mobile:
+        return RedirectResponse(target+(("&" if "?" in target else "?")+urlencode(fragment)),status_code=303)
+    return RedirectResponse(target+"#"+urlencode(fragment),status_code=303)
 
 
 class ExchangeInput(BaseModel):
@@ -109,7 +125,7 @@ class ExchangeInput(BaseModel):
 def exchange(payload:ExchangeInput,request:Request,db:Session=Depends(get_db)):
     row=db.get(OIDCSession,oidc_service.digest(payload.state))
     browser=request.cookies.get("lernium_oidc_"+payload.state[:12])
-    if not row or not row.exchange_code_hash or row.exchange_code_hash!=oidc_service.digest(payload.code) or row.expires_at<=datetime.utcnow() or row.exchanged_at or not browser or row.browser_hash!=oidc_service.digest(browser):
+    if not row or not row.exchange_code_hash or row.exchange_code_hash!=oidc_service.digest(payload.code) or row.expires_at<=datetime.utcnow() or row.exchanged_at or (not row.mobile_handoff and (not browser or row.browser_hash!=oidc_service.digest(browser))):
         raise HTTPException(400,"Сеанс входа недействителен. Повторите вход")
     user=db.get(User,row.authenticated_user_id)
     provider=db.get(OIDCProvider,row.provider_id)
@@ -120,7 +136,10 @@ def exchange(payload:ExchangeInput,request:Request,db:Session=Depends(get_db)):
     claimed=db.execute(update(OIDCSession).where(OIDCSession.state_hash==row.state_hash,OIDCSession.exchanged_at.is_(None)).values(exchanged_at=datetime.utcnow()))
     if claimed.rowcount!=1:raise HTTPException(400,"Сеанс входа уже использован")
     from app.services.mfa_service import authentication_result
-    result=authentication_result(db,user,primary='oidc',context={'oidc_provider_id':provider.id,'organization_id':provider.organization_id})
+    result=authentication_result(db,user,primary='oidc',context={'oidc_provider_id':provider.id,'organization_id':provider.organization_id,**({'mobile':True} if row.mobile_handoff else {})})
+    if row.mobile_handoff and not result.get('mfa_required'):
+        from app.services.mobile_sessions import issue
+        result=issue(db,user,amr=['oidc'])
     db.commit()
     from fastapi.responses import JSONResponse
     from fastapi.encoders import jsonable_encoder

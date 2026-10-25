@@ -104,6 +104,9 @@ class CourseMaterializationService:
                     title=competency.title,
                     description=competency.description,
                     level=competency.level,
+                    role_id=course.position_id,
+                    # Preserve generated role labels until each generated role
+                    # can be represented by a persisted business position.
                     job_role=", ".join(roles_by_competency.get(competency.id, [])) or None,
                 )
             )

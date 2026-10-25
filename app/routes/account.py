@@ -154,6 +154,9 @@ def password(payload: PasswordChange, request: Request, db: Session = Depends(ge
 
 @router.post("/auth/logout-all")
 def logout_all(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from app.models.integrations import MobileSession, MobilePushDevice
+    session_ids = db.query(MobileSession.id).filter(MobileSession.user_id == user.id)
+    db.query(MobilePushDevice).filter(MobilePushDevice.session_id.in_(session_ids)).delete(synchronize_session=False)
     db.execute(update(User).where(User.id == user.id).values(auth_version=User.auth_version + 1))
     db.commit()
     return {"ok": True}

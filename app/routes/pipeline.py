@@ -184,6 +184,7 @@ def reindex_document(
             document_id=document_id,
             owner_id=current_user.id,
             storage=storage,
+            queue_only=True,
         )
     except PipelineRunFailed as exc:
         raise _translate_failure(exc)

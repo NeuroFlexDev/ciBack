@@ -44,3 +44,38 @@ def execute_generation_run(run_id: int) -> None:
             from app.services.ai_resources import finish
             finish(db, f"generation:{run_id}", failed=db.get(GenerationRun, run_id).status not in {"succeeded", "completed"})
         db.close()
+
+
+def execute_document_index_run(run_id: int) -> None:
+    db = SessionLocal()
+    claimed = False
+    try:
+        run = db.get(GenerationRun, run_id)
+        if run is None or run.run_type != "document_index" or run.status != "queued":
+            return
+        from app.services.ai_resources import claim
+        claimed = claim(db, f"document:{run_id}")
+        if not claimed:
+            return
+        from app.services.file_storage import get_file_storage
+        PipelineService.reindex_document(db, document_id=run.document_id, owner_id=run.owner_id,
+            storage=get_file_storage(), run_id=run_id)
+    except Exception as exc:
+        db.rollback()
+        logger.error("Document index worker error; run_id=%s type=%s", run_id, type(exc).__name__)
+        run = db.get(GenerationRun, run_id)
+        if run is not None and run.status in {"queued", "running"}:
+            run.status = "failed"
+            run.error = "document_index_failed"
+            from datetime import datetime
+            run.finished_at = datetime.utcnow()
+            document = db.get(__import__("app.models.document", fromlist=["Document"]).Document, run.document_id)
+            if document is not None and document.status in {"queued", "processing"}:
+                document.status = "failed"
+            db.commit()
+    finally:
+        if claimed:
+            from app.services.ai_resources import finish
+            run = db.get(GenerationRun, run_id)
+            finish(db, f"document:{run_id}", failed=run is None or run.status not in {"succeeded", "completed"})
+        db.close()

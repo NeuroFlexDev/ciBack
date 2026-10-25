@@ -5,6 +5,7 @@ import json
 import re
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -216,6 +217,22 @@ def build_publication_snapshot(db, course, modules):
                            + [_assessment(db, t, 'task') for t in sorted(module.tasks, key=lambda x: x.id) if not t.is_deleted],
         })
     data['assessments'] = [_assessment(db, t, 'test') for t in sorted(course.final_tests, key=lambda x: (x.position, x.id)) if not t.is_deleted]
+    # Pin only approved images that are actually referenced by learner-visible
+    # snapshot content. Metadata lives with the immutable publication itself.
+    from app.services.protected_image_refs import image_ids_in
+    from app.models.materials import CourseImage
+    from hashlib import sha256
+    from app.services.image_service import storage as image_storage
+    image_ids = image_ids_in(data)
+    data['media'] = []
+    for image_id in sorted(image_ids):
+        image = db.get(CourseImage, image_id)
+        if not image or image.course_id != course.id or image.status != 'approved' or not image.storage_key:
+            continue
+        content = image_storage().read_bytes(image.storage_key)
+        data['media'].append({'id': image.id, 'type': 'image', 'version': 1,
+            'mime_type': image.mime_type, 'size_bytes': len(content),
+            'sha256': sha256(content).hexdigest(), 'storage_key': image.storage_key})
     return data
 
 
@@ -417,7 +434,7 @@ def can_report(db, user, assignment):
 
 def response_dict(db, row, assignment, *, include_key=False):
     assessment = assessment_for(db, assignment, row.assessment_id)
-    result = {k: getattr(row, k) for k in ['id', 'assignment_id', 'assessment_id', 'attempt', 'revision', 'answer', 'status', 'submitted_at', 'points', 'feedback', 'updated_at']}
+    result = {k: getattr(row, k) for k in ['id', 'assignment_id', 'assessment_id', 'attempt', 'revision', 'answer', 'status', 'submitted_at', 'points', 'feedback', 'updated_at', 'submission_key']}
     result['max_points'] = assessment['max_points']
     result['grading_metadata'] = {k: v for k, v in (row.grading_metadata or {}).items() if k in {'method', 'reason'}}
     if include_key and (row.grading_metadata or {}).get('ai_proposal'):
@@ -444,7 +461,9 @@ def save_answer(db, user, assignment, key, payload, submit=False):
     if row and row.status != 'draft':
         raise HTTPException(409, 'Отправленный ответ неизменяем. Начните разрешённую новую попытку.')
     if (row.revision if row else 0) != payload.expected_revision:
-        raise HTTPException(409, {'message': 'Ответ изменён на другом устройстве. Получите сохранённую версию и сравните текст.', 'current_revision': row.revision if row else 0})
+        raise HTTPException(409, {'message': 'Ответ изменён на другом устройстве. Получите сохранённую версию и сравните текст.',
+            'current_revision': row.revision if row else 0,
+            'current_response': jsonable_encoder(response_dict(db, row, assignment)) if row else None})
     maximum = assignment.rules.get('max_attempts', 3)
     if payload.attempt > maximum:
         raise HTTPException(409, 'Лимит попыток исчерпан')
@@ -481,6 +500,8 @@ def save_answer(db, user, assignment, key, payload, submit=False):
             db.flush()
             db.add(LearningGradeEvent(response_id=row.id, points=row.points, feedback=row.feedback, source='automatic'))
             event(db, assignment.organization_id, 'submission.graded', f'response:{row.id}:revision:{row.revision}', {'response_id': row.id, 'assignment_id': assignment.id, 'points': row.points, 'max_points': assessment['max_points']})
+            from app.services.mobile_push import enqueue as enqueue_push
+            enqueue_push(db, assignment, 'result', f'response:{row.id}:revision:{row.revision}')
         elif assessment['grading_mode'] == 'ai_assisted':
             # AI cannot silently decide a grade. A separate auditable proposal may
             # assist a scoped reviewer; the authoritative state stays in the queue.
@@ -502,6 +523,8 @@ def create_assignment(db, *, org_id, version_id, user_id, actor_id, rules, rules
     db.add(row)
     db.flush()
     event(db, org_id, 'assignment.created', f'assignment:{row.id}:created', {'assignment_id': row.id, 'user_id': user_id, 'course_version_id': version_id})
+    from app.services.mobile_push import enqueue as enqueue_push
+    enqueue_push(db, row, 'assignment', f'assignment:{row.id}:created')
     return row, True
 
 

@@ -1,6 +1,8 @@
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
+import re
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, PrivateAttr, model_validator, field_validator, AnyHttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -62,6 +64,15 @@ class Settings(BaseSettings):
     REGISTRATION_ENABLED: bool = True
     CONTACT_REQUESTS_ENABLED: bool = True
     PUBLIC_APP_URL: str = "http://localhost:5173"
+    # HTTPS Universal Link / Android App Link used only after an operator enables mobile OIDC.
+    MOBILE_OIDC_REDIRECT_URI: str = ""
+    MOBILE_APP_MIN_VERSION: str = "1.0.0"
+    MOBILE_APP_RECOMMENDED_VERSION: str | None = None
+    MOBILE_APP_STORE_URL_IOS: str | None = None
+    MOBILE_APP_STORE_URL_ANDROID: str | None = None
+    MOBILE_API_COMPATIBILITY: str = "1"
+    MOBILE_TENANT_DISPLAY_DOMAIN: str = ""
+    MOBILE_LOGIN_METHODS: list[str] = Field(default_factory=lambda: ["password", "oidc"])
     AUTH_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=1, le=1000)
     AUTH_RATE_LIMIT_PER_IP_MINUTE: int = Field(default=1800, ge=20, le=100000)
     AUTH_RATE_LIMIT_ENABLED: bool = True
@@ -130,7 +141,7 @@ class Settings(BaseSettings):
     AI_MODEL_WRITER: str = "openai/gpt-5.4-mini"
     AI_MODEL_CRITIC: str = "anthropic/claude-sonnet-4.6"
     AI_MODEL_FALLBACK: str = "google/gemini-2.5-flash"
-    AI_MODEL_EMBEDDING: str = "openai/text-embedding-3-small"
+    AI_MODEL_EMBEDDING: str = "text-embedding-3-small"
     AI_REQUEST_TIMEOUT_SECONDS: int = Field(default=90, ge=5, le=300)
     AI_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=5)
     AI_MAX_CALLS_PER_RUN: int = Field(default=180, ge=1, le=1000)
@@ -190,7 +201,29 @@ class Settings(BaseSettings):
         providers = [provider.id for provider in self.AI_PROVIDERS]
         if len(providers) != len(set(providers)):
             raise ValueError("AI_PROVIDERS must have unique IDs")
+        version_pattern = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+        def parse_version(value, name):
+            match = version_pattern.fullmatch(value)
+            if not match:
+                raise ValueError(f"{name} must use MAJOR.MINOR.PATCH")
+            return tuple(map(int, match.groups()))
+        minimum = parse_version(self.MOBILE_APP_MIN_VERSION, "MOBILE_APP_MIN_VERSION")
+        if self.MOBILE_APP_RECOMMENDED_VERSION:
+            recommended = parse_version(self.MOBILE_APP_RECOMMENDED_VERSION, "MOBILE_APP_RECOMMENDED_VERSION")
+            if recommended < minimum:
+                raise ValueError("MOBILE_APP_RECOMMENDED_VERSION must not be lower than MOBILE_APP_MIN_VERSION")
+        for name in ("MOBILE_APP_STORE_URL_IOS", "MOBILE_APP_STORE_URL_ANDROID"):
+            value = getattr(self, name)
+            if value:
+                parsed = urlparse(value)
+                if parsed.scheme != "https" or not parsed.netloc:
+                    raise ValueError(f"{name} must be an HTTPS URL")
         return self
+
+    @field_validator("MOBILE_APP_RECOMMENDED_VERSION", "MOBILE_APP_STORE_URL_IOS", "MOBILE_APP_STORE_URL_ANDROID", mode="before")
+    @classmethod
+    def blank_mobile_setting(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("IMAGE_PRICE_RUB", "EMBEDDING_RUB_PER_MILLION", mode="before")
     @classmethod

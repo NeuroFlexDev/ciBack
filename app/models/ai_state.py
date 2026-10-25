@@ -1,5 +1,19 @@
 """Tenant-scoped AI cache, usage ledger, conversational memory and embeddings."""
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:  # SQLite-only tooling may omit the production adapter.
+    from sqlalchemy.types import UserDefinedType
+
+    class Vector(UserDefinedType):
+        cache_ok = True
+
+        def __init__(self, dimensions):
+            self.dimensions = dimensions
+
+        def get_col_spec(self, **kw):
+            return f"VECTOR({self.dimensions})"
 from app.database.db import Base
 
 
@@ -38,12 +52,21 @@ class ChatMemory(Base):
 
 class ChunkEmbedding(Base):
     __tablename__ = "chunk_embeddings"
-    __table_args__ = (UniqueConstraint("chunk_id", "model", name="uq_chunk_embeddings_chunk_model"),)
+    __table_args__ = (
+        UniqueConstraint("chunk_id", "model", name="uq_chunk_embeddings_chunk_model"),
+        Index("ix_chunk_embeddings_embedding_hnsw", "embedding",
+              postgresql_using="hnsw",
+              postgresql_ops={"embedding": "vector_cosine_ops"},
+              postgresql_where=text("embedding IS NOT NULL")),
+    )
     id = Column(Integer, primary_key=True)
     chunk_id = Column(Integer, ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False, index=True)
     model = Column(String(255), nullable=False)
     text_hash = Column(String(64), nullable=False)
     vector = Column(JSON, nullable=False)
+    # JSON remains the portable migration/fallback representation. PostgreSQL
+    # uses a fixed-size vector column so pgvector can index and rank it.
+    vector_pg = Column("embedding", JSON().with_variant(Vector(1536), "postgresql"), nullable=True)
 
 
 class CanvasWorkspace(Base):

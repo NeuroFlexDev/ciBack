@@ -190,8 +190,13 @@ def complete_challenge(db,raw,code):
     if claimed.rowcount!=1:
         raise HTTPException(400,'Проверка входа уже использована')
     audit(db,user,'mfa.login_verified','user',user.id,method=method)
-    result=token_response(user,primary=challenge.primary_method,factor=method,
-        extra={'assignment_id':challenge.context['assignment_id']} if challenge.context.get('assignment_id') else None)
+    if challenge.context.get('mobile'):
+        from app.services.mobile_sessions import issue
+        result=issue(db,user,amr=[challenge.primary_method,method],mfa_at=int(time.time()),
+                     device_name=challenge.context.get('device_name','Mobile device'))
+    else:
+        result=token_response(user,primary=challenge.primary_method,factor=method,
+            extra={'assignment_id':challenge.context['assignment_id']} if challenge.context.get('assignment_id') else None)
     db.commit()
     return result
 

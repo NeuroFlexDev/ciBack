@@ -76,6 +76,12 @@ class AuthService:
             raise _credentials_exception("Пользователь не найден")
         if payload.get("ver", 0) != user.auth_version:
             raise _credentials_exception("Сеанс завершён. Войдите снова.")
+        if payload.get("sid"):
+            from datetime import datetime
+            from app.models.integrations import MobileSession
+            session = db.get(MobileSession, payload["sid"])
+            if not session or session.user_id != user.id or session.auth_version != user.auth_version or session.token_version != payload.get("sv") or session.revoked_at or session.expires_at <= datetime.utcnow():
+                raise _credentials_exception("Мобильная сессия отозвана или истекла")
         from app.services.mfa_service import enabled
         if enabled(db,user) and (not set(payload.get('amr',[])) & {'otp','recovery'} or not isinstance(payload.get('mfa_at'),int)):
             raise _credentials_exception('Подтвердите двухэтапный вход')

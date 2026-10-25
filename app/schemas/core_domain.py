@@ -20,14 +20,14 @@ class CompetencyCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     level: str | None = Field(default=None, max_length=64)
-    job_role: str | None = Field(default=None, max_length=255)
+    role_id: int | None = Field(default=None, gt=0)
 
 
 class CompetencyUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     level: str | None = Field(default=None, max_length=64)
-    job_role: str | None = Field(default=None, max_length=255)
+    role_id: int | None = Field(default=None, gt=0)
 
 
 class CompetencyOut(CompetencyCreate, DomainOut):
