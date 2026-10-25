@@ -1,5 +1,5 @@
 """Tenant-scoped AI cache, usage ledger, conversational memory and embeddings."""
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 try:
     from pgvector.sqlalchemy import Vector
@@ -52,7 +52,13 @@ class ChatMemory(Base):
 
 class ChunkEmbedding(Base):
     __tablename__ = "chunk_embeddings"
-    __table_args__ = (UniqueConstraint("chunk_id", "model", name="uq_chunk_embeddings_chunk_model"),)
+    __table_args__ = (
+        UniqueConstraint("chunk_id", "model", name="uq_chunk_embeddings_chunk_model"),
+        Index("ix_chunk_embeddings_embedding_hnsw", "embedding",
+              postgresql_using="hnsw",
+              postgresql_ops={"embedding": "vector_cosine_ops"},
+              postgresql_where=text("embedding IS NOT NULL")),
+    )
     id = Column(Integer, primary_key=True)
     chunk_id = Column(Integer, ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False, index=True)
     model = Column(String(255), nullable=False)
