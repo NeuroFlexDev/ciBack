@@ -1,5 +1,5 @@
 # Local MathJax + resvg SVG normalization, pinned dependencies, no browser.
-FROM node:24-bookworm-slim AS pdf_math
+FROM node:25-bookworm-slim AS pdf_math
 WORKDIR /pdf_runtime
 COPY pdf_runtime/package.json pdf_runtime/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
