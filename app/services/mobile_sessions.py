@@ -29,9 +29,12 @@ def issue(db, user, *, amr=None, mfa_at=None, device_name="Mobile device", sessi
         session.previous_refresh_token_hash = session.refresh_token_hash
         session.token_version += 1
     session.refresh_token_hash = digest(raw)
-    db.add(MobileRefreshToken(token_hash=digest(raw), session_id=session.id, issued_at=now))
     session.auth_version = user.auth_version
     session.expires_at = now + timedelta(minutes=settings.REFRESH_TOKEN_TTL_MINUTES)
+    # These mappers have no ORM relationship to order their inserts. Persist the
+    # parent first, in the same transaction, before adding its refresh history.
+    db.flush()
+    db.add(MobileRefreshToken(token_hash=digest(raw), session_id=session.id, issued_at=now))
     return {"access_token": create_access_token(user.id, user.auth_version, amr=amr, mfa_at=mfa_at, sid=session.id, sv=session.token_version),
             "refresh_token": raw, "token_type": "bearer", "expires_in": settings.ACCESS_TOKEN_TTL_MINUTES * 60,
             "user": UserResponse.model_validate(user)}
