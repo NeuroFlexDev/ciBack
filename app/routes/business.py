@@ -271,9 +271,12 @@ def archive_position(position_id: int, payload: PositionState,
 @router.get('/employees')
 def employees(q: str = Query('', max_length=100), offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
               role: Literal['manager', 'member', 'candidate'] | None = None, manager_id: int | None = Query(None, gt=0),
+              user_id: int | None = Query(None, gt=0),
               db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user)
     query = db.query(User).filter(people_filter(user), User.is_admin.is_(False))
+    if user_id is not None:
+        query = query.filter(User.id == user_id)
     if role:
         query = query.filter(User.organization_role.in_(['manager', 'admin']) if role == 'manager' else User.organization_role == role)
     if manager_id is not None:

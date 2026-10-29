@@ -508,6 +508,9 @@ def save_answer(db, user, assignment, key, payload, submit=False):
             row.grading_metadata = {'method': 'manual', 'reason': 'Требуется подтверждение проверяющего'}
         audit(db, user, 'learning.answer_submitted', 'assignment', assignment.id, organization_id=assignment.organization_id, assessment_id=key, attempt=payload.attempt)
     db.flush()
+    if submit and row.status == 'pending_review':
+        from app.services.notifications import review_requested
+        review_requested(db, assignment, row)
     update_completion(db, assignment)
     return row
 
