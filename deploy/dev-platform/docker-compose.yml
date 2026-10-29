@@ -342,5 +342,6 @@ volumes:
   caddy_data:
   caddy_config:
   db_data:
+    name: ${POSTGRES_VOLUME:-lernium_db_data}
   redis_data:
   uploads_data:
