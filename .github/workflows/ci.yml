@@ -148,6 +148,9 @@ jobs:
         with:
           context: .
           push: true
+          pull: true
+          # Re-run OS updates even when the application/dependency layers are unchanged.
+          no-cache-filters: system_packages
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=ciback

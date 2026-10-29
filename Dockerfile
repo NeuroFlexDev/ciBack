@@ -5,13 +5,15 @@ COPY pdf_runtime/package.json pdf_runtime/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # Используем легкий Python образ
-FROM python:3.11-slim
+FROM python:3.11-slim AS system_packages
 
 # Указываем рабочую директорию в контейнере
 WORKDIR /app
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng libcairo2-dev pkg-config build-essential libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
+
+FROM system_packages AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
