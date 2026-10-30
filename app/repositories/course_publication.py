@@ -34,5 +34,5 @@ class CoursePublicationRepository:
         if publication_status:
             query = query.filter(Course.publication_status == publication_status)
         total = query.count()
-        rows = query.order_by(Course.updated_at.desc(), Course.id.desc()).offset(offset).limit(limit).all()
+        rows = query.options(selectinload(Course.owner), selectinload(Course.business_position)).order_by(Course.updated_at.desc(), Course.id.desc()).offset(offset).limit(limit).all()
         return rows, total

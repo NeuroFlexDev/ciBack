@@ -58,7 +58,12 @@ def preflight_generation(course_id: int, payload: GenerationRunCreate,
     documents = PipelineRepository.selected_indexed_documents(db, course_id, current_user.id, payload.document_ids)
     from app.services.generation_preflight import generation_preflight
     from app.services.ai_entitlements import unlimited_ai
-    return generation_preflight(documents, {**payload.settings.model_dump(mode="json"), "web_search_enabled": payload.web_search_enabled}, unlimited=unlimited_ai(db, current_user.organization_id))
+    from app.services.regulation_assessment import regulation_assessment_mode
+    course = PipelineRepository.get_owned_course(db, course_id, current_user.id)
+    return generation_preflight(documents, {**payload.settings.model_dump(mode="json"),
+        "web_search_enabled": payload.web_search_enabled,
+        "regulation_assessment_mode": regulation_assessment_mode(course, payload.settings)},
+        unlimited=unlimited_ai(db, current_user.organization_id))
 
 
 @router.delete("/documents/{document_id}", status_code=204)
@@ -97,7 +102,7 @@ def launch_generation(
     if payload.request_id:
         previous = db.query(GenerationRun).filter_by(owner_id=current_user.id, request_id=payload.request_id).first()
         if previous:
-            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context", "position_context", "web_search_enabled"}}
+            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context", "position_context", "web_search_enabled", "regulation_assessment_mode"}}
             requested_search = (payload.web_search_enabled if "web_search_enabled" in payload.model_fields_set
                                 or "web_search_enabled" in previous.settings_snapshot else False)
             if (previous.course_id != course_id or previous_settings != payload.settings.model_dump(mode="json", exclude={"expected_revision"})

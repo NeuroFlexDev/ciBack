@@ -195,5 +195,8 @@ class CoursePublicationService:
             "lesson_count": lesson_count,
             "updated_at": course.updated_at,
             "published_at": course.published_at,
+            "author_name": (course.owner.full_name or course.owner.username or course.owner.email) if course.owner else None,
+            "position_id": course.position_id,
+            "position_name": course.business_position.name if course.business_position else None,
         } for course, module_count, lesson_count in rows]
         return items, total

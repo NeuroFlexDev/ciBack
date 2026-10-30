@@ -133,8 +133,9 @@ def test_source_catalog_is_round_robin_and_graph_refs_are_durable(
 
 @pytest.mark.parametrize("invented_knowledge", [False, True])
 @pytest.mark.parametrize("web_enabled", [False, True])
+@pytest.mark.parametrize("regulation_mode", [None, 'test_only', 'test_and_practice'])
 def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
-    db_session, auth_user, invented_knowledge, web_enabled, monkeypatch, tmp_path
+    db_session, auth_user, invented_knowledge, web_enabled, regulation_mode, monkeypatch, tmp_path
 ):
     course = make_course(db_session, owner_id=auth_user.id)
     run = GenerationRun(
@@ -418,6 +419,10 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
         "assessment_agent_prompt.j2": assessment,
         "critic_qa_prompt.j2": qa,
     }
+    if regulation_mode:
+        assessment['questions'] = [question(f'question:regulation_{i}', 'final', 'plan:safety') for i in range(5)]
+        if regulation_mode == 'test_only':
+            assessment.update(practices=[], cases=[], rubrics=[])
     calls = []
 
     def generate(template_name, **kwargs):
@@ -471,8 +476,9 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
             "difficulty": "basic",
             "language": "en",
             "lesson_count": 1,
-            "module_tests_enabled": True,
-            "final_test_enabled": True,
+            "module_tests_enabled": not regulation_mode,
+            "final_test_enabled": not regulation_mode,
+            "regulation_assessment_mode": regulation_mode,
             "web_search_enabled": web_enabled,
         },
         source_catalog=[source],
@@ -493,7 +499,10 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
     ]
     assert result.qa_summary["verdict"] == "pass"
     assert sum(item["type"] == "lesson" for item in result.nodes) == 1
-    assert sum(item["type"] == "test" for item in result.nodes) == 2
+    assert sum(item["type"] == "test" for item in result.nodes) == (1 if regulation_mode else 2)
+    if regulation_mode:
+        assert sum(len(item['questions']) for item in result.nodes if item['type'] == 'test') == 5
+        assert sum(len(item.get('practices', [])) + len(item.get('cases', [])) for item in result.nodes) == (0 if regulation_mode == 'test_only' else 2)
     assert db_session.query(AgentArtifact).filter(AgentArtifact.agent != "web_search").count() == 6
     assert db_session.query(AgentArtifact).filter_by(agent="web_search").one().payload["status"] == ("completed" if web_enabled else "disabled")
     if web_enabled:

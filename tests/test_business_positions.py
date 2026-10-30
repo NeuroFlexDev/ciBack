@@ -136,6 +136,7 @@ def test_generation_freezes_job_profile_and_recovers_repeated_request(client, db
     first = client.post(f'/api/courses/{course_id}/generation-runs', headers=headers(manager), json=payload)
     assert first.status_code == 202, first.text
     job = db_session.get(GenerationRun, first.json()['run_id'])
+    assert job.settings_snapshot['regulation_assessment_mode'] == 'test_only'
     db_session.get(BusinessPosition, position['id']).responsibilities = 'Другая работа'
     db_session.commit()
     repeated = client.post(f'/api/courses/{course_id}/generation-runs', headers=headers(manager), json=payload)

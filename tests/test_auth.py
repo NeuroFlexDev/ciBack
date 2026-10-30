@@ -146,3 +146,38 @@ def test_me_rejects_unknown_user(client):
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
+
+def test_web_session_renewal_preserves_login_boundary_and_mfa(client, auth_user):
+    import time
+    start = int(time.time()) - 600
+    token = create_access_token(auth_user.id, auth_user.auth_version, amr=['pwd','otp'], mfa_at=start, wsid='test-web-session', web_started_at=start)
+    response = client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token})
+    assert response.status_code == 200, response.text
+    claims = decode_access_token(response.json()['access_token'])
+    assert claims['wsid'] == 'test-web-session' and claims['wsa'] == start
+    assert claims['mfa_at'] == start and claims['amr'] == ['pwd','otp']
+    assert claims['exp'] <= start + 8 * 3600
+    assert response.json()['user']['id'] == auth_user.id
+
+
+def test_web_renewal_rejects_expired_revoked_and_legacy_tokens(client, auth_user, db_session):
+    import time
+    start = int(time.time()) - 8 * 3600
+    expired = create_access_token(auth_user.id, web_started_at=start)
+    legacy = _encode(_payload(sub=str(auth_user.id)))
+    for token in [expired, legacy]:
+        assert client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token}).status_code == 401
+    token = create_access_token(auth_user.id, auth_user.auth_version)
+    auth_user.auth_version += 1
+    db_session.commit()
+    assert client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token}).status_code == 401
+
+
+def test_web_renewal_cannot_extend_past_absolute_workday(client, auth_user):
+    import time
+    start = int(time.time()) - 8 * 3600 + 40
+    token = create_access_token(auth_user.id, wsid='bounded', web_started_at=start)
+    response = client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token})
+    assert response.status_code == 200
+    claims = decode_access_token(response.json()['access_token'])
+    assert claims['exp'] == start + 8 * 3600

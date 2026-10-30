@@ -65,7 +65,7 @@ def verify_password(password: str, encoded_password: str) -> bool:
     return hmac.compare_digest(password_hash, expected_hash)
 
 
-def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None = None, mfa_at: int | None = None, sid: str | None = None, sv: int | None = None) -> str:
+def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None = None, mfa_at: int | None = None, sid: str | None = None, sv: int | None = None, wsid: str | None = None, web_started_at: int | None = None) -> str:
     issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + timedelta(minutes=settings.ACCESS_TOKEN_TTL_MINUTES)
     payload = {
@@ -82,6 +82,12 @@ def create_access_token(user_id: int, version: int = 0, *, amr: list[str] | None
     if sid is not None:
         payload['sid'] = sid
         payload['sv'] = sv
+    else:
+        # Rotations retain the original login boundary and never refresh MFA proof.
+        started = int(issued_at.timestamp()) if web_started_at is None else web_started_at
+        payload['wsid'] = wsid or secrets.token_urlsafe(24)
+        payload['wsa'] = started
+        payload['exp'] = min(expires_at, datetime.fromtimestamp(started, timezone.utc) + timedelta(hours=8))
     return jwt.encode(
         payload,
         signing_key(),

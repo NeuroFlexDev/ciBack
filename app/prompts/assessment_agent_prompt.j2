@@ -12,9 +12,22 @@ Output rules:
 - Return existing source ID strings in source_refs and cite every item and rubric.
 - Every rubric must be referenced by a practice or case. Every practice/case
   rubric_id MUST equal an ID actually included in rubrics. You may share a rubric.
+{% if regulation_assessment_mode|default(none) %}
+- This is a short business regulation. Create 5–15 concise, non-duplicative
+  single_choice or multiple_choice questions, proportionate to the document.
+  Cover its essential procedures. Use scope=final and the exact plan ID.
+{% if regulation_assessment_mode == 'test_only' %}
+- BASIC: only automatically graded tests. practices=[], cases=[], rubrics=[].
+  Do not create short-answer questions or any manually graded work.
+{% else %}
+- ADVANCED: tests plus exactly TWO short practical scenarios in total across
+  practices and cases, each with a rubric. No extra short-answer questions.
+{% endif %}
+{% else %}
 - Keep the answer concise: one practice and one case per supplied lesson, one
   question per supplied module when enabled, and one final question when enabled.
   Do not reproduce lesson prose. Short-answer questions are appropriate for procedures.
+{% endif %}
 - Use deterministic IDs with prefixes `question:`, `option:`, `practice:`,
   `case:`, `rubric:`, `criterion:`, `level:`.
 - A single-choice question has >=2 options and exactly one correct option.
@@ -64,6 +77,8 @@ Lernium contract v2: source_refs is a list of existing src:* ID strings. The ser
 Coverage checklist before returning JSON:
 - When module_tests_enabled is true, EVERY module in the plan must have at least one question with scope="module" and target_id equal to that module ID. Lesson-scope questions do not satisfy this requirement.
 - When final_test_enabled is true, include a question with scope="final" and target_id equal to course_plan.id.
+{% if not regulation_assessment_mode|default(none) %}
 - Include at least one practice and one case with distinct rubric IDs.
-- Each question has exactly one correct option; distractors must be plausible but disproven by the supplied material.
+{% endif %}
+- Single-choice questions have exactly one correct option; multiple-choice questions may have several. Distractors must be plausible but disproven by the supplied material.
 - Do not test facts absent from the lessons and sources. Avoid clues from wording, answer length, or repeated correct positions.
