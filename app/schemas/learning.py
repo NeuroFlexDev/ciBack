@@ -48,6 +48,8 @@ class DeliveryInput(StrictInput):
     @field_validator('delivery')
     @classmethod
     def neutral_resource_profile(cls, value):
+        if 'owner_authoring_on_join' in value and type(value['owner_authoring_on_join']) is not bool:
+            raise ValueError('Owner authoring policy must be boolean')
         policy = value.get('mobile_data_policy')
         if policy is not None:
             if not isinstance(policy, dict) or set(policy) - {'material_downloads', 'offline_access', 'cache_ttl_hours', 'backups'}:
