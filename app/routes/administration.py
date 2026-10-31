@@ -352,6 +352,8 @@ def accept_invite(payload:InviteAccept,db:Session=Depends(get_db)):
         db.flush()
         from app.services.business_service import accept_position
         accept_position(db, row, user)
+        from app.services.invitation_access import apply_owner_authoring
+        apply_owner_authoring(db, row, user)
         record_receipt(db,email=user.email,user_id=user.id,slug='terms',context='invitation')
         if payload.marketing_accepted:record_receipt(db,email=user.email,user_id=user.id,slug='marketing-consent',context='invitation')
         audit(db,user,'invitation.accepted','invitation',row.id,organization_id=org.id)
@@ -399,6 +401,8 @@ def accept_existing_invite(payload:TokenInput, request:Request, db:Session=Depen
     user.auth_version+=1
     from app.services.business_service import accept_position
     accept_position(db, row, user)
+    from app.services.invitation_access import apply_owner_authoring
+    apply_owner_authoring(db, row, user)
     audit(db,user,'invitation.accepted_existing','invitation',row.id,organization_id=org.id)
     from app.services.mfa_service import preserve_token
     result=AuthResponse(access_token=preserve_token(user,request.state.auth_claims),user=UserResponse.model_validate(user))

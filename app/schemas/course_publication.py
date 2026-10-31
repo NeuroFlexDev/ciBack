@@ -22,3 +22,6 @@ class CourseListItem(BaseModel):
     lesson_count: int = Field(ge=0)
     updated_at: datetime
     published_at: datetime | None
+    author_name: str | None = None
+    position_id: int | None = None
+    position_name: str | None = None

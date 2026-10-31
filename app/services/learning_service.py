@@ -217,6 +217,10 @@ def build_publication_snapshot(db, course, modules):
                            + [_assessment(db, t, 'task') for t in sorted(module.tasks, key=lambda x: x.id) if not t.is_deleted],
         })
     data['assessments'] = [_assessment(db, t, 'test') for t in sorted(course.final_tests, key=lambda x: (x.position, x.id)) if not t.is_deleted]
+    # Only new publications opt in. Existing assigned snapshots remain immutable.
+    items = assessments(data)
+    if course.position_id and any(a['question_type'] != 'open' for a in items) and any(a['question_type'] == 'open' for a in items):
+        data['practice_requires_test_pass'] = True
     # Pin only approved images that are actually referenced by learner-visible
     # snapshot content. Metadata lives with the immutable publication itself.
     from app.services.protected_image_refs import image_ids_in
@@ -314,11 +318,19 @@ def assessment_for(db, assignment, key):
 def public_snapshot(db, assignment):
     from app.services.public_assessment_text import public_assessment_text
     data = deepcopy(snapshot_for(db, assignment.course_version_id))
+    from app.services.regulation_assessment import practice_unlocked
+    # Portable exports render a version without a learner assignment. Only a
+    # learner view can have a personal prerequisite, never an exported document.
+    unlocked = True
+    if data.get('practice_requires_test_pass') and getattr(assignment, 'id', None) is not None:
+        unlocked = practice_unlocked(data, db.query(LearningResponse).filter_by(assignment_id=assignment.id).all(), assignment.rules.get('pass_percent', 60))
     for item in assessments(data):
         # Explicit whitelist avoids leaking future private metadata fields.
         safe = {k: v for k, v in item.items() if k in {'id', 'revision', 'question', 'description', 'question_type', 'answers', 'max_points', 'criteria', 'grading_mode'}}
         item.clear()
         item.update(safe)
+        if item['question_type'] == 'open' and not unlocked:
+            item['locked_reason'] = 'Сначала пройдите тестовые вопросы. Ваш черновик практики сохранится.'
         item['description'] = public_assessment_text(item.get('description', ''))
         item['criteria'] = [{k: v for k, v in c.items() if k in {'id', 'title', 'description', 'max_points', 'levels'}} for c in item.get('criteria', []) if isinstance(c, dict)]
     return data
@@ -457,6 +469,11 @@ def save_answer(db, user, assignment, key, payload, submit=False):
             if existing.assessment_id != key or existing.attempt != payload.attempt or existing.answer != payload.answer:
                 raise HTTPException(409, 'Этот ключ отправки уже использован для другого ответа')
             return existing
+        if assessment['question_type'] == 'open':
+            from app.services.regulation_assessment import practice_unlocked
+            if not practice_unlocked(snapshot_for(db, assignment.course_version_id),
+                    db.query(LearningResponse).filter_by(assignment_id=assignment.id).all(), assignment.rules.get('pass_percent', 60)):
+                raise HTTPException(409, 'Сначала пройдите тестовые вопросы. Черновик практики можно сохранить и отправить после теста.')
     row = db.query(LearningResponse).filter_by(assignment_id=assignment.id, assessment_id=key, attempt=payload.attempt).first()
     if row and row.status != 'draft':
         raise HTTPException(409, 'Отправленный ответ неизменяем. Начните разрешённую новую попытку.')
@@ -508,6 +525,9 @@ def save_answer(db, user, assignment, key, payload, submit=False):
             row.grading_metadata = {'method': 'manual', 'reason': 'Требуется подтверждение проверяющего'}
         audit(db, user, 'learning.answer_submitted', 'assignment', assignment.id, organization_id=assignment.organization_id, assessment_id=key, attempt=payload.attempt)
     db.flush()
+    if submit and row.status == 'pending_review':
+        from app.services.notifications import review_requested
+        review_requested(db, assignment, row)
     update_completion(db, assignment)
     return row
 

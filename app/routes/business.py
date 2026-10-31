@@ -63,6 +63,19 @@ class EmployeeAccess(BaseModel):
     expected_auth_version: int = Field(ge=0)
 
 
+class EmployeeProfile(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    full_name: str = Field(min_length=1, max_length=160)
+    expected_full_name: str = Field(max_length=160)
+
+    @field_validator('full_name')
+    @classmethod
+    def nonblank(cls, value):
+        if not value.strip():
+            raise ValueError('Укажите имя участника')
+        return value.strip()
+
+
 class ReportingLine(BaseModel):
     model_config = ConfigDict(extra='forbid')
     manager_id: int | None = Field(default=None, gt=0)
@@ -271,9 +284,12 @@ def archive_position(position_id: int, payload: PositionState,
 @router.get('/employees')
 def employees(q: str = Query('', max_length=100), offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
               role: Literal['manager', 'member', 'candidate'] | None = None, manager_id: int | None = Query(None, gt=0),
+              user_id: int | None = Query(None, gt=0),
               db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user)
     query = db.query(User).filter(people_filter(user), User.is_admin.is_(False))
+    if user_id is not None:
+        query = query.filter(User.id == user_id)
     if role:
         query = query.filter(User.organization_role.in_(['manager', 'admin']) if role == 'manager' else User.organization_role == role)
     if manager_id is not None:
@@ -350,6 +366,23 @@ def learner_role(user_id: int, payload: LearnerRole, db: Session = Depends(get_d
     audit(db, actor, 'business.learner_role_changed', 'user', target.id, organization_id=org.id, role=target.organization_role)
     db.commit()
     return {'user_id': target.id, 'role': target.organization_role, 'results_preserved': True}
+
+
+@router.patch('/employees/{user_id}/profile')
+def employee_profile(user_id: int, payload: EmployeeProfile, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    identities = lock_members(db, [user.id, user_id], allow_inactive=True,
+        expected_auth_versions={user.id: user.auth_version})
+    actor, target = identities[user.id], identities[user_id]
+    org = require_business(db, actor)
+    require_person(db, actor, target)
+    if target.id == actor.id or target.organization_role not in {'member', 'candidate', 'manager', 'admin'}:
+        raise HTTPException(404, 'Участник не найден в вашей команде')
+    if target.full_name != payload.expected_full_name:
+        raise HTTPException(409, 'Имя участника уже изменено. Обновите карточку; введённое имя сохранено в форме.')
+    target.full_name = payload.full_name
+    audit(db, actor, 'business.employee_profile_updated', 'user', target.id, organization_id=org.id)
+    db.commit()
+    return {'user_id': target.id, 'full_name': target.full_name}
 
 
 @router.put('/employees/{user_id}/position')

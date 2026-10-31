@@ -43,8 +43,10 @@ def settings_response(course, settings) -> CourseGenerationSettingsResponse:
 
 def generation_settings_snapshot(course, settings) -> dict:
     from app.services.business_service import position_snapshot
+    from app.services.regulation_assessment import regulation_assessment_mode
     return {
         "position_context": position_snapshot(course),
+        "regulation_assessment_mode": regulation_assessment_mode(course, settings),
         "title": course.name,
         "goal": settings.goal,
         "target_audience": settings.target_audience,

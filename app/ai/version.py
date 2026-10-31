@@ -11,7 +11,8 @@ def implementation_digest():
     root = Path(__file__).resolve().parents[1]
     files = [*root.joinpath("prompts").glob("*.j2"), *root.joinpath("ai").glob("*.py"),
              root / "schemas/agentic_pipeline.py", root / "services/agentic_course_pipeline.py",
-             root / "services/agent_runtime.py", root / "services/generation_service.py"]
+             root / "services/agent_runtime.py", root / "services/generation_service.py",
+             root / "services/regulation_assessment.py"]
     digest = hashlib.sha256()
     for path in sorted(files):
         digest.update(str(path.relative_to(root)).encode())

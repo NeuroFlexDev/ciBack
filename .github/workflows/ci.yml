@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 35
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: pgvector/pgvector:0.8.7-pg17
         env:
           POSTGRES_USER: ciuser
           POSTGRES_PASSWORD: cipassword
@@ -148,6 +148,9 @@ jobs:
         with:
           context: .
           push: true
+          pull: true
+          # Re-run OS updates even when the application/dependency layers are unchanged.
+          no-cache-filters: system_packages
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=ciback

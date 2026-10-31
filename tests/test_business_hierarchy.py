@@ -153,3 +153,23 @@ def test_owner_handoff_keeps_four_roles_and_resolves_former_manager_team(client,
     assert db_session.get(LearningAssignment, assignments['candidate'].id).user_id == u['candidate'].id
     data = client.get('/api/business/dashboard', headers=headers(u['manager'])).json()
     assert data['unassigned'] == 3 and data['metrics']['assigned'] == 4
+
+def test_profile_edit_is_scoped_and_keeps_progress(client, db_session, hierarchy):
+    _, users, _, assignments = hierarchy
+    employee = users['employee']
+    original_version = employee.auth_version
+    endpoint = f'/api/business/employees/{employee.id}/profile'
+    payload = {'full_name': 'Новое имя сотрудника', 'expected_full_name': employee.full_name}
+    assert client.patch(endpoint, headers=headers(users['second']), json=payload).status_code == 404
+    assert client.patch(endpoint, headers=headers(users['candidate']), json=payload).status_code == 403
+    result = client.patch(endpoint, headers=headers(users['manager']), json=payload)
+    assert result.status_code == 200, result.text
+    assert result.json()['full_name'] == payload['full_name']
+    db_session.refresh(employee)
+    assert employee.auth_version == original_version
+    assert assignments['employee'].user_id == employee.id
+    assert client.patch(endpoint, headers=headers(users['manager']), json=payload).status_code == 409
+    assert client.patch(endpoint, headers=headers(users['manager']), json={**payload, 'full_name':'   '}).status_code == 422
+    manager = users['manager']
+    assert client.patch(f'/api/business/employees/{manager.id}/profile', headers=headers(users['owner']), json={'full_name':'Управляющая', 'expected_full_name':manager.full_name}).status_code == 200
+    assert client.patch(f'/api/business/employees/{users["outsider"].id}/profile', headers=headers(users['owner']), json=payload).status_code == 404
