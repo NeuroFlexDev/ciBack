@@ -141,6 +141,39 @@ def test_reindex_request_queues_run_and_keeps_indexed_document_available(
     assert document.status == "indexed"
 
 
+@pytest.mark.parametrize('initial_status', ['uploaded', 'indexed'])
+def test_queued_document_is_processed_by_worker_and_releases_capacity(
+    db_session, auth_user, monkeypatch, initial_status
+):
+    from app.models.ai_resources import AIResourceUsage
+    from app.workers.generation import execute_document_index_run
+    _, document, storage = _course_and_document(db_session, auth_user)
+    document.status = initial_status
+    db_session.commit()
+    queued = []
+    monkeypatch.setattr('app.services.job_queue.enqueue_document_index', queued.append)
+    monkeypatch.setattr('app.workers.generation.SessionLocal', lambda: db_session)
+    monkeypatch.setattr(db_session, 'close', lambda: None)
+    monkeypatch.setattr('app.services.file_storage.get_file_storage', lambda: storage)
+    monkeypatch.setattr('app.services.pipeline_service.replace_document_embeddings', _fake_embeddings)
+    run = PipelineService.reindex_document(db_session, document_id=document.id,
+        owner_id=auth_user.id, storage=storage, queue_only=True)
+    assert queued == [run.id]
+
+    execute_document_index_run(run.id)
+    db_session.refresh(run)
+    db_session.refresh(document)
+    assert run.status == 'succeeded'
+    assert document.status == 'indexed'
+    assert document.chunks and all(chunk.embedding_id for chunk in document.chunks)
+    slot = db_session.query(AIResourceUsage).filter_by(key=f'document:{run.id}').one()
+    assert slot.status == 'completed' and slot.finished_at is not None
+    chunk_ids = [chunk.id for chunk in document.chunks]
+    execute_document_index_run(run.id)
+    db_session.refresh(document)
+    assert [chunk.id for chunk in document.chunks] == chunk_ids
+
+
 def test_reindex_failure_is_persisted(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{(tmp_path / 'failure.sqlite').as_posix()}")
     Base.metadata.create_all(engine)

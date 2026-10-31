@@ -453,7 +453,7 @@ class PipelineService:
             db.flush()
             from app.services.ai_resources import reserve
             resource = reserve(db, owner_id=owner_id, course_id=document.course_id, operation="document", lane="background",
-                key=f"document:{run.id}", run_id=run.id, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
+                key=f"document:{run.id}", run_id=run.id, queued=queue_only, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
                 pages=settings.AI_OCR_MAX_PAGES if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED else 0)
             db.commit()
             db.refresh(run)
