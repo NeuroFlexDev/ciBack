@@ -18,6 +18,8 @@ class User(Base):
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     organization_role = Column(String(16), nullable=False, default="member", server_default="member")
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    # Membership tombstone: keep identity and historical learning relations intact.
+    organization_removed_at = Column(DateTime(timezone=True), nullable=True)
     organization = relationship("Organization", foreign_keys=[organization_id])
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

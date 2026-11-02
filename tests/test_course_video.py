@@ -81,6 +81,8 @@ def test_publication_pins_video_export_and_assignment_revocation(client, db_sess
     # Editing today's draft does not remove access from the pinned assignment.
     theory.content = 'Новая редакция без видео'
     db_session.commit()
+    assert client.delete(f'/api/courses/{course.id}', headers=headers(world['author'])).status_code == 200
+    # Removing the working regulation must retain media pinned by prior assignments.
     assert client.get(item['content_url'], headers=headers(world['learner'])).status_code == 200
     payload = selection(client, world, assignment['course_version_id'])
     exported = client.post(BASE + '/export', headers=headers(world['owner']), json=payload)

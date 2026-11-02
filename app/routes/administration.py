@@ -93,6 +93,7 @@ def org_dict(db, org):
 
 def user_dict(user):
     return {**UserResponse.model_validate(user).model_dump(), 'is_active':user.is_active,
+            'organization_removed_at': user.organization_removed_at,
             'manager_id': user.manager_id,
             'auth_version':user.auth_version, 'created_at':user.created_at, 'organization_name':user.organization.name if user.organization else None}
 
@@ -261,6 +262,9 @@ def change_user(db, actor, target, payload):
         db.query(LearningGroupMember).filter(LearningGroupMember.user_id==target.id, LearningGroupMember.group_id.in_(old_groups)).delete(synchronize_session=False)
         person=db.get(LearningPerson,target.id)
         if person:db.delete(person)
+    if target.organization_removed_at and (payload.is_active or payload.organization_id != old_org):
+        target.organization_removed_at = None
+        audit(db, actor, 'business.employee_restored', 'user', target.id, organization_id=old_org)
     target.is_active=payload.is_active;target.organization_id=payload.organization_id
     target.organization_role=payload.organization_role if payload.organization_id else 'member'
     if payload.full_name is not None:

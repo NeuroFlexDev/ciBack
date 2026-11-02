@@ -98,6 +98,7 @@ def test_tenant_roles_revisions_and_archive(client, db_session, company):
     token = parse_qs(urlsplit(invite.json()['url']).fragment)['token'][0]
     assert client.post('/api/auth/invitations/inspect', json={'token': token}).status_code == 410
     assert client.put(f"/api/business/positions/{position['id']}/state", headers=headers(users['manager']), json={'expected_revision': 2, 'is_archived': False}).status_code == 200
+    assert client.post('/api/auth/invitations/inspect', json={'token': token}).status_code == 410
 
 
 def test_invitation_assigns_position_and_manager_cannot_escalate(client, db_session, company):

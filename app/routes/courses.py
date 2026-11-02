@@ -257,6 +257,7 @@ def update_course(
 @router.delete("/courses/{course_id}", summary="Удаление курса")
 def delete_course(
     course_id: int,
+    expected_revision: int | None = Query(None, ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -264,19 +265,28 @@ def delete_course(
     Удаляет курс по указанному ID.
     """
     try:
+        from app.services.organization_access import lock_members, audit
+        from app.repositories.course_publication import CoursePublicationRepository
+        lock_members(db, [current_user.id], expected_auth_versions={current_user.id: current_user.auth_version})
         course = (
             db.query(Course)
             .filter(
                 Course.id == course_id,
                 course_access_filter(current_user.id),
-                Course.is_deleted.is_(False),
             )
+            .populate_existing().with_for_update()
             .first()
         )
         if not course:
             raise HTTPException(status_code=404, detail="Курс не найден")
-        
-        course.is_deleted = True
+        if not course.is_deleted:
+            if expected_revision is not None and course.content_revision != expected_revision:
+                raise HTTPException(409, 'Регламент уже изменён. Обновите список перед удалением.')
+            if course.status == 'generating' or CoursePublicationRepository.active_generation(db, course.id):
+                raise HTTPException(409, 'Дождитесь завершения или отмените генерацию перед удалением.')
+            course.is_deleted = True
+            audit(db, current_user, 'course.deleted', 'course', course.id,
+                  organization_id=course.organization_id, content_revision=course.content_revision)
         db.commit()
         logger.info("Курс удален: ID=%s", course_id)
         return {"message": f"Курс с ID {course_id} успешно удален"}
