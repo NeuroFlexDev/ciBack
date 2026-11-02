@@ -749,7 +749,7 @@ def offline_manifest(assignment_id: int, db: Session = Depends(get_db), user: Us
             'mime_type': pin.mime_type, 'size_bytes': pin.size_bytes, 'sha256': pin.content_hash,
             'url': f'/api/learning/assignments/{row.id}/sources/{pin.document_id}/content'})
     for media in snapshot.get('media', []):
-        resources.append({'id': f"image:{media['id']}", 'type': 'image', 'version': media['version'],
+        resources.append({'id': f"{media.get('type', 'image')}:{media['id']}", 'type': media.get('type', 'image'), 'version': media['version'],
             'mime_type': media['mime_type'], 'size_bytes': media['size_bytes'], 'sha256': media['sha256'],
             'url': f"/api/learning/assignments/{row.id}/media/{media['id']}/content"})
     return {'assignment_id': row.id, 'course_version_id': row.course_version_id,

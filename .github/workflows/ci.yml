@@ -63,7 +63,7 @@ jobs:
       - name: Install PDF rendering dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config ffmpeg
           npm ci --omit=dev --ignore-scripts --prefix pdf_runtime
 
       - name: Install dependencies

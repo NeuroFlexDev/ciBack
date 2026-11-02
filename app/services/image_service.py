@@ -34,8 +34,9 @@ def course_access(db, user, course_id, *, allow_reviewer=False):
 
 def image_out(item):
     return {key: getattr(item, key) for key in ("id", "course_id", "status", "mime_type", "size_bytes",
-            "width", "height", "prompt", "error_code", "review_comment", "created_at", "updated_at")} | {
-        "content_url": f"/api/images/{item.id}/content" if item.storage_key else None}
+            "width", "height", "prompt", "error_code", "review_comment", "created_at", "updated_at",
+            "original_filename", "duration_seconds")} | {
+        "content_url": f"/api/media/{item.id}/content" if item.mime_type and item.mime_type.startswith("video/") and item.storage_key else f"/api/images/{item.id}/content" if item.storage_key else None}
 
 
 def storage():
@@ -255,4 +256,4 @@ def validate_course_images(db, course_id):
     approved = {item.id for item in db.query(CourseImage).filter(CourseImage.id.in_(ids),
                  CourseImage.course_id == course_id, CourseImage.status == "approved").all()}
     if approved != ids:
-        raise HTTPException(409, {"code": "images_need_review", "message": "Проверьте и утвердите все иллюстрации перед публикацией", "image_ids": sorted(ids - approved)})
+        raise HTTPException(409, {"code": "images_need_review", "message": "Проверьте и утвердите все изображения и видео перед публикацией", "image_ids": sorted(ids - approved)})

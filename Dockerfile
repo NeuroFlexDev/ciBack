@@ -10,7 +10,7 @@ FROM python:3.11-slim
 # Указываем рабочую директорию в контейнере
 WORKDIR /app
 RUN apt-get update && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng libcairo2-dev pkg-config build-essential libstdc++6 \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng libcairo2-dev pkg-config build-essential libstdc++6 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1
