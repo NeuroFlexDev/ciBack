@@ -215,6 +215,9 @@ class ContentBuilder:
                 output.append(f'<img src="{escape(str(path), quote=True)}" width="{width*scale}" height="{height*scale}" valign="middle"/>')
             elif token.type == 'image':
                 source = token.attrGet('src') or ''
+                if source.startswith('videos/'):
+                    output.append(escape('Видео / Video: ' + token.content + ' — просмотр доступен в Лерниуме.'))
+                    continue
                 if source not in self.images:
                     raise PDFRenderError('Внешняя или недоступная иллюстрация: загрузите её в курс перед публикацией.')
                 path, width, height = self.images[source]
@@ -234,7 +237,7 @@ class ContentBuilder:
                 inline = tokens[index + 1]
                 kind = 'h3' if token.type == 'heading_open' else ('quote' if quote_depth else 'body')
                 children = inline.children or []
-                if len(children) == 1 and children[0].type == 'image':
+                if len(children) == 1 and children[0].type == 'image' and not (children[0].attrGet('src') or '').startswith('videos/'):
                     source = children[0].attrGet('src') or ''
                     if source not in self.images:
                         raise PDFRenderError('Внешняя иллюстрация не включена в курс. Загрузите её и опубликуйте новую версию.')

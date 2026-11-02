@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, JSON, func, BigInteger, Index
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, JSON, func, BigInteger, Index, Float
 from app.database.db import Base
 
 
@@ -45,6 +45,7 @@ class ScopedAIUsage(Base):
 
 
 class CourseImage(Base):
+    """Immutable course media; the legacy table name also accommodates uploaded videos."""
     __tablename__ = "course_images"
     __table_args__ = (UniqueConstraint("owner_id", "request_id", name="uq_course_images_request"),)
     id = Column(Integer, primary_key=True)
@@ -58,6 +59,8 @@ class CourseImage(Base):
     size_bytes = Column(Integer, nullable=False, default=0)
     width = Column(Integer, nullable=True)
     height = Column(Integer, nullable=True)
+    original_filename = Column(String(255), nullable=True)
+    duration_seconds = Column(Float, nullable=True)
     provider = Column(String(40), nullable=True)
     model = Column(String(255), nullable=True)
     generation_config = Column(JSON, nullable=True)

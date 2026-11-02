@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_staging:
+        description: "Deploy this branch to DEV after all checks pass"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -63,7 +68,7 @@ jobs:
       - name: Install PDF rendering dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config ffmpeg
           npm ci --omit=dev --ignore-scripts --prefix pdf_runtime
 
       - name: Install dependencies
@@ -104,7 +109,8 @@ jobs:
           python -m alembic upgrade head
           python -m alembic check
           python scripts/check_ai_persistence.py
-          python -m alembic downgrade -1
+          # The release head joins two branches; use their explicit common ancestor.
+          python -m alembic downgrade mobile_0043
           python -m alembic upgrade head
 
   image:
@@ -227,7 +233,7 @@ jobs:
 
   deploy:
     name: Deploy to staging
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') || (github.event_name == 'workflow_dispatch' && inputs.deploy_staging)
     needs: [image, image-security]
     runs-on: ubuntu-latest
     timeout-minutes: 15
