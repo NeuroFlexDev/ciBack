@@ -63,7 +63,7 @@ jobs:
       - name: Install PDF rendering dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config ffmpeg
           npm ci --omit=dev --ignore-scripts --prefix pdf_runtime
 
       - name: Install dependencies
@@ -104,7 +104,8 @@ jobs:
           python -m alembic upgrade head
           python -m alembic check
           python scripts/check_ai_persistence.py
-          python -m alembic downgrade -1
+          # The release head joins two branches; use their explicit common ancestor.
+          python -m alembic downgrade mobile_0043
           python -m alembic upgrade head
 
   image:

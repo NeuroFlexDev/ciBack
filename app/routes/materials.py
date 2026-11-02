@@ -1,6 +1,7 @@
 from typing import Literal
 from decimal import Decimal
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Response, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.database.db import get_db
@@ -85,6 +86,9 @@ def material_capabilities(db: Session = Depends(get_db), user=Depends(get_curren
             "source_characters_limit": settings.AI_MAX_SOURCE_CHARS,
             "image_formats": ["png", "jpg", "jpeg", "webp"], "image_max_bytes": settings.IMAGE_MAX_BYTES,
             "image_max_pixels": settings.IMAGE_MAX_PIXELS,
+            "video_formats": ["mp4", "webm"], "video_max_bytes": settings.VIDEO_MAX_BYTES,
+            "video_max_seconds": settings.VIDEO_MAX_SECONDS, "video_max_pixels": settings.VIDEO_MAX_PIXELS,
+            "video_library_available": feature_enabled(db, user.organization_id, "images"),
             "image_library_available": feature_enabled(db, user.organization_id, "images"),
             "image_generation_available": bool(feature_enabled(db, user.organization_id, "images") and configured and price_ready),
             "image_generation_error": None if configured and price_ready else "image_price_unconfigured" if configured else "image_provider_unavailable",
@@ -116,7 +120,8 @@ def list_images(course_id: int, limit: int = Query(20, ge=1, le=100), offset: in
     enabled = feature_enabled(db, user.organization_id, "images")
     independent = bool(course.organization_id and settings_for(db, course.organization_id).rules.get("require_independent_approval"))
     reviewer = bool(course.organization_id and can_scope(db, user, "reviewer", course_id=course.id))
-    query = db.query(CourseImage).filter_by(course_id=course_id)
+    query = db.query(CourseImage).filter_by(course_id=course_id).filter(
+        (CourseImage.mime_type.is_(None)) | (~CourseImage.mime_type.like('video/%')))
     return {"items": [images.image_out(item) | {
                 "can_approve": enabled and (not independent or reviewer and user.id not in {item.owner_id, course.owner_id}),
                 "can_reject": enabled,
@@ -130,12 +135,14 @@ def list_images(course_id: int, limit: int = Query(20, ge=1, le=100), offset: in
 @router.post("/courses/{course_id}/images", status_code=201)
 def upload_image(course_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
     require_feature(db, user.organization_id, "images")
+    require_feature(db, user.organization_id, "authoring")
     images.course_access(db, user, course_id)
     content = file.file.read(settings.IMAGE_MAX_BYTES + 1)
     content, _, _, _ = images.normalize_image(content)
     from app.services.material_quota import check_storage
     check_storage(db, user, len(content))
-    item = CourseImage(course_id=course_id, owner_id=user.id, status="pending_review")
+    from app.services.video_service import filename
+    item = CourseImage(course_id=course_id, owner_id=user.id, status="pending_review", original_filename=filename(file.filename))
     images.save_content(item, content)
     try:
         db.add(item); db.commit(); db.refresh(item)
@@ -143,6 +150,45 @@ def upload_image(course_id: int, file: UploadFile = File(...), db: Session = Dep
         images.storage().delete(item.storage_key)
         raise
     return images.image_out(item)
+
+
+@router.get("/courses/{course_id}/media")
+def list_video(course_id: int, limit: int = Query(12, ge=1, le=100), offset: int = Query(0, ge=0),
+        db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Reuse the same author/reviewer decisions as the existing image library.
+    page = list_images(course_id, limit, offset, db, user)
+    course = images.course_access(db, user, course_id, allow_reviewer=True)
+    from app.services.learning_service import can_scope
+    reviewer = bool(course.organization_id and can_scope(db, user, 'reviewer', course_id=course_id))
+    enabled = feature_enabled(db, user.organization_id, 'images')
+    query = db.query(CourseImage).filter(CourseImage.course_id == course_id, CourseImage.mime_type.like('video/%'))
+    page.update(items=[images.image_out(item) | {
+        'can_approve': enabled and (not page['independent_review_required'] or reviewer and user.id not in {item.owner_id, course.owner_id}),
+        'can_reject': enabled,
+    } for item in query.order_by(CourseImage.id.desc()).offset(offset).limit(limit)], total=query.count(), can_generate=False)
+    return page
+
+
+@router.post("/courses/{course_id}/media", status_code=201)
+def upload_video(course_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    require_feature(db, user.organization_id, 'images')
+    require_feature(db, user.organization_id, 'authoring')
+    images.course_access(db, user, course_id)
+    from app.services.video_service import upload
+    return images.image_out(upload(db, user, course_id, file))
+
+
+@router.get("/media/{media_id}/content")
+def media_content(media_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    item = images.image_access(db, user, media_id)
+    if not item.storage_key:
+        raise HTTPException(409, 'Файл ещё не готов')
+    path = images.storage()._target(item.storage_key)
+    if not path.is_file():
+        raise HTTPException(503, 'Файл временно недоступен')
+    return FileResponse(path, media_type=item.mime_type, headers={
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'"})
 
 
 @router.post("/courses/{course_id}/images/generate", status_code=202)

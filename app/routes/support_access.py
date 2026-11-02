@@ -170,6 +170,7 @@ def read_content(grant_id: int, db: Session = Depends(get_db), user=Depends(requ
     return data
 
 
+@router.get('/grants/{grant_id}/media/{image_id}/content')
 @router.get('/grants/{grant_id}/images/{image_id}/content')
 def read_image(grant_id: int, image_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
     grant, obj = permitted(db, grant_id, user)
@@ -184,6 +185,14 @@ def read_image(grant_id: int, image_id: int, db: Session = Depends(get_db), user
     course = db.get(Course, course_id)
     if not image or image.course_id != course_id or not course or course.organization_id != grant.organization_id or not image.storage_key:
         raise HTTPException(404, 'Изображение не найдено')
+    if image.mime_type and image.mime_type.startswith('video/'):
+        from fastapi.responses import FileResponse
+        path = image_service.storage()._target(image.storage_key)
+        if not path.is_file():
+            raise HTTPException(503, 'Файл временно недоступен')
+        audit(db, user, 'support.media_read', 'support_grant', grant.id, organization_id=grant.organization_id, media_id=image_id)
+        db.commit()
+        return FileResponse(path, media_type=image.mime_type, headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
     try:
         content = image_service.storage().read_bytes(image.storage_key)
     except (FileNotFoundError, OSError):

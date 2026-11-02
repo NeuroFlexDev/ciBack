@@ -17,7 +17,7 @@ def add_image(db, course, author):
     return image
 
 
-@pytest.mark.parametrize('prefix', ['/api/images', '/images'])
+@pytest.mark.parametrize('prefix', ['/api/images', '/images', '/api/media', '/media'])
 @pytest.mark.parametrize('field', ['course', 'module', 'lesson', 'theory', 'task', 'question', 'rubric'])
 def test_publication_rejects_foreign_images_in_all_snapshot_text(client, db_session, world, prefix, field):
     foreign, *_ = publish(client, db_session, world['foreign'], assessment=False, practice=False)
