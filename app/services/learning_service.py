@@ -229,10 +229,22 @@ def build_publication_snapshot(db, course, modules):
         image = db.get(CourseImage, image_id)
         if not image or image.course_id != course.id or image.status != 'approved' or not image.storage_key:
             continue
-        content = image_storage().read_bytes(image.storage_key)
-        data['media'].append({'id': image.id, 'type': 'image', 'version': 1,
-            'mime_type': image.mime_type, 'size_bytes': len(content),
-            'sha256': sha256(content).hexdigest(), 'storage_key': image.storage_key})
+        if image.mime_type.startswith('video/'):
+            try:
+                digest = sha256()
+                size = 0
+                with image_storage()._target(image.storage_key).open('rb') as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        size += len(chunk); digest.update(chunk)
+            except OSError:
+                raise HTTPException(503, 'Файл видео временно недоступен') from None
+            checksum = digest.hexdigest()
+        else:
+            content = image_storage().read_bytes(image.storage_key)
+            size, checksum = len(content), sha256(content).hexdigest()
+        data['media'].append({'id': image.id, 'type': 'video' if image.mime_type.startswith('video/') else 'image', 'version': 1,
+            'mime_type': image.mime_type, 'size_bytes': size,
+            'sha256': checksum, 'storage_key': image.storage_key})
     return data
 
 

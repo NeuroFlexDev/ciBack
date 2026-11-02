@@ -2,7 +2,7 @@
 import re
 
 
-_IMAGE_PATH = re.compile(r'''(?<![\w/])(?:/api)?/images/(\d+)/content(?=$|[\s?#)\]>"'])''')
+_IMAGE_PATH = re.compile(r'''(?<![\w/])(?:/api)?/(?:images|media)/(\d+)/content(?=$|[\s?#)\]>"'])''')
 
 
 def image_ids_in(value):

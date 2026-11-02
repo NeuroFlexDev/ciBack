@@ -22,7 +22,7 @@ from app.services.protected_image_refs import image_ids_in
 from app.services.source_release import checked_bytes
 
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
-_IMAGE_PATH = re.compile(r'''(?<![\w/])(?:/api)?/images/(\d+)/content(?=$|[\s?#)\]>"'])''')
+_IMAGE_PATH = re.compile(r'''(?<![\w/])(?:/api)?/(?:images|media)/(\d+)/content(?=$|[\s?#)\]>"'])''')
 
 
 def owner_scope(user):
@@ -97,7 +97,9 @@ def course_markdown(content, private):
     if content.get('sources'):
         lines.extend(['', '## Материалы / Materials'])
         lines.extend(f"- [{item['filename']}]({item['package_path']})" for item in content['sources'])
-    return ('\n'.join(lines) + '\n').encode('utf-8')
+    text = '\n'.join(lines) + '\n'
+    text = re.sub(r'!\[([^\]\n]*)\]\((videos/[^)]+)\)', r'[Видео / Video: \1](\2)', text)
+    return text.encode('utf-8')
 
 
 def prepare_bundle(db, user, payload, *, claims, record_export=True):
@@ -148,8 +150,9 @@ def prepare_bundle(db, user, payload, *, claims, record_export=True):
                     data = storage().read_bytes(image.storage_key)
                 except (OSError, ValueError):
                     raise HTTPException(503, 'Файл иллюстрации временно недоступен; неполный пакет не выдан') from None
-                extension = '.png' if image.mime_type == 'image/png' else '.jpg'
-                path = f'images/image-{image.id}{extension}'
+                extension = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'video/mp4': '.mp4', 'video/webm': '.webm'}.get(image.mime_type, '.bin')
+                folder = 'videos/video' if image.mime_type.startswith('video/') else 'images/image'
+                path = f'{folder}-{image.id}{extension}'
                 put(path, data, image.mime_type, image_id=image.id)
                 image_paths[image.id] = path
             content = rewrite_images(content, image_paths)

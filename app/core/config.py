@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     DOCUMENT_MAX_EXTRACTED_CHARS: int = Field(default=2_000_000, gt=0)
     IMAGE_MAX_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
     IMAGE_MAX_PIXELS: int = Field(default=20_000_000, gt=0)
+    VIDEO_MAX_BYTES: int = Field(default=100 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
+    VIDEO_MAX_SECONDS: int = Field(default=1800, gt=0)
+    VIDEO_MAX_PIXELS: int = Field(default=3840 * 2160, gt=0)
     IMAGE_PROVIDER: str = ""
     IMAGE_MODEL: str = ""
     IMAGE_API_MODE: Literal["auto", "openai", "gpt_image"] = "auto"
