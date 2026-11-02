@@ -111,6 +111,8 @@ def get_push_preferences(db: Session = Depends(get_db), user=Depends(get_current
 
 @router.put("/auth/mobile/push-preferences", response_model=MobilePushPreferences)
 def update_push_preferences(payload: MobilePushPreferences, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    from app.models.user import User
+    db.query(User).filter_by(id=user.id).with_for_update().one()
     try:
         ZoneInfo(payload.timezone)
     except (ZoneInfoNotFoundError, ValueError):
@@ -149,7 +151,7 @@ def login(payload: LoginInput, db: Session = Depends(get_db)):
     if result.get("mfa_required"):
         db.commit()
         return result
-    result = issue(db, user, amr=["pwd"])
+    result = issue(db, user, device_name=payload.device_name, amr=["pwd"])
     db.commit()
     return result
 

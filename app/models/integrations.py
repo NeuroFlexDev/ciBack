@@ -140,6 +140,12 @@ class MobilePushPreference(Base):
     assignment_enabled = Column(Boolean, nullable=False, default=True)
     deadline_enabled = Column(Boolean, nullable=False, default=True)
     result_enabled = Column(Boolean, nullable=False, default=True)
+    push_enabled = Column(Boolean, nullable=False, default=True)
+    review_enabled = Column(Boolean, nullable=False, default=True)
+    generation_enabled = Column(Boolean, nullable=False, default=True)
+    quiet_enabled = Column(Boolean, nullable=False, default=False)
+    quiet_start = Column(String(5), nullable=False, default="22:00")
+    quiet_end = Column(String(5), nullable=False, default="09:00")
     timezone = Column(String(64), nullable=False, default="UTC")
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 

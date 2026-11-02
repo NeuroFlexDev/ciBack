@@ -30,9 +30,11 @@ def can_manage_person(db, actor, target_id):
     return db.query(User.id).filter(User.id == target_id, people_filter(actor)).first() is not None
 
 
-def require_person(db, actor, target):
+def require_person(db, actor, target, *, include_removed=False):
     if target.is_admin or not can_manage_person(db, actor, target.id):
         raise HTTPException(404, 'Участник не найден в вашей команде')
+    if target.organization_removed_at and not include_removed:
+        raise HTTPException(409, 'Участник удалён из команды. Сначала восстановите его из списка удалённых.')
 
 
 def resolve_manager(db, actor, org_id, role, requested=None):

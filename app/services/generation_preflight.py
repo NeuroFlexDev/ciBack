@@ -16,6 +16,8 @@ def generation_preflight(documents, configuration, *, unlimited=False):
     # Writer per lesson; assessment and independent QA start with pairs.
     minimum_calls = batches + 2 + count + 2 * math.ceil(count / 2)
     reserved_output = batches * 6000 + 22000 + count * 6000 + math.ceil(count / 2) * 18000
+    if configuration.get('regulation_assessment_mode'):
+        reserved_output += 4000
     reasons = []
     if not catalog:
         reasons.append("Нет извлечённого текста для генерации")

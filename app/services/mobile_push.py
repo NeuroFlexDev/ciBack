@@ -41,6 +41,13 @@ def preferences(db, user_id):
 def enqueue(db, assignment, notification_type, event_key):
     if notification_type not in {"assignment", "result", "deadline"}:
         return
+    from app.services.notifications import publish
+    from app.models.course_version import CourseVersion
+    version = db.get(CourseVersion, assignment.course_version_id)
+    description = f"{version.name}. {BODY[notification_type]}" if version else BODY[notification_type]
+    notification = publish(db, user_id=assignment.user_id, organization_id=assignment.organization_id,
+        event_key=f"{notification_type}:{event_key}", category=notification_type,
+        resource_type="assignment", resource_id=assignment.id, body=description)
     if not configured():
         return
     key = f"push:{notification_type}:{event_key}"
@@ -48,11 +55,14 @@ def enqueue(db, assignment, notification_type, event_key):
         return
     db.add(OutboundMessage(id=__import__("uuid").uuid4().hex, organization_id=assignment.organization_id,
         kind="push", deduplication_key=key,
-        payload_encrypted=seal({"assignment_id": assignment.id, "type": notification_type}),
+        payload_encrypted=seal({"assignment_id": assignment.id, "type": notification_type, "notification_id": notification.id}),
         available_at=datetime.utcnow(), expires_at=datetime.utcnow() + timedelta(days=2)))
 
 
 def deliver(db, row, payload):
+    if payload.get("notification_id"):
+        from app.services.notifications import fanout
+        return fanout(db, payload["notification_id"])
     if payload.get("receipt_ids"):
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         access = integration_settings.EXPO_PUSH_ACCESS_TOKEN.get_secret_value()
@@ -144,8 +154,6 @@ def enqueue_due_reminders(db, now=None, limit=1000, after_id=0):
             if not prerequisite or not prerequisite.completed_at:
                 continue
         pref = db.get(MobilePushPreference, assignment.user_id)
-        if pref and not pref.deadline_enabled:
-            continue
         try:
             zone = ZoneInfo(pref.timezone if pref else "UTC")
         except (ZoneInfoNotFoundError, ValueError):
@@ -160,7 +168,9 @@ def enqueue_due_reminders(db, now=None, limit=1000, after_id=0):
         if enrollment:
             n = max(0, min(365, int((enrollment.snapshot or {}).get("reminder_days", 3))))
         if local_now.date() == due_local.date() - timedelta(days=n) and (local_now.hour, local_now.minute) >= (9, 0):
-            before = db.query(OutboundMessage.id).filter_by(deduplication_key=f"push:deadline:{assignment.id}:{due_local.date().isoformat()}").first()
+            from app.models.notifications import UserNotification
+            before = db.query(UserNotification.id).filter_by(user_id=assignment.user_id,
+                event_key=f"deadline:{assignment.id}:{due_local.date().isoformat()}").first()
             if not before:
                 enqueue(db, assignment, "deadline", f"{assignment.id}:{due_local.date().isoformat()}")
                 queued += 1

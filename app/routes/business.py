@@ -63,6 +63,24 @@ class EmployeeAccess(BaseModel):
     expected_auth_version: int = Field(ge=0)
 
 
+class EmployeeRemoval(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_auth_version: int = Field(ge=0)
+
+
+class EmployeeProfile(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    full_name: str = Field(min_length=1, max_length=160)
+    expected_full_name: str = Field(max_length=160)
+
+    @field_validator('full_name')
+    @classmethod
+    def nonblank(cls, value):
+        if not value.strip():
+            raise ValueError('Укажите имя участника')
+        return value.strip()
+
+
 class ReportingLine(BaseModel):
     model_config = ConfigDict(extra='forbid')
     manager_id: int | None = Field(default=None, gt=0)
@@ -271,9 +289,13 @@ def archive_position(position_id: int, payload: PositionState,
 @router.get('/employees')
 def employees(q: str = Query('', max_length=100), offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
               role: Literal['manager', 'member', 'candidate'] | None = None, manager_id: int | None = Query(None, gt=0),
+              user_id: int | None = Query(None, gt=0), removed: bool = False,
               db: Session = Depends(get_db), user=Depends(get_current_user)):
     org = require_business(db, user)
     query = db.query(User).filter(people_filter(user), User.is_admin.is_(False))
+    query = query.filter(User.organization_removed_at.is_not(None) if removed else User.organization_removed_at.is_(None))
+    if user_id is not None:
+        query = query.filter(User.id == user_id)
     if role:
         query = query.filter(User.organization_role.in_(['manager', 'admin']) if role == 'manager' else User.organization_role == role)
     if manager_id is not None:
@@ -305,7 +327,7 @@ def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
 
     managers = []
     if user.organization_role == 'owner':
-        for manager in db.query(User).filter(User.organization_id == org.id, User.organization_role.in_(['manager', 'admin']), User.is_admin.is_(False)).order_by(User.full_name, User.id):
+        for manager in db.query(User).filter(User.organization_id == org.id, User.organization_role.in_(['manager', 'admin']), User.is_admin.is_(False), User.organization_removed_at.is_(None)).order_by(User.full_name, User.id):
             reports = [p for p in learners if p.manager_id == manager.id]
             managers.append({'id': manager.id, 'full_name': manager.full_name, 'email': manager.email, 'is_active': manager.is_active,
                 'employees': sum(p.organization_role == 'member' for p in reports), 'candidates': sum(p.organization_role == 'candidate' for p in reports),
@@ -350,6 +372,23 @@ def learner_role(user_id: int, payload: LearnerRole, db: Session = Depends(get_d
     audit(db, actor, 'business.learner_role_changed', 'user', target.id, organization_id=org.id, role=target.organization_role)
     db.commit()
     return {'user_id': target.id, 'role': target.organization_role, 'results_preserved': True}
+
+
+@router.patch('/employees/{user_id}/profile')
+def employee_profile(user_id: int, payload: EmployeeProfile, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    identities = lock_members(db, [user.id, user_id], allow_inactive=True,
+        expected_auth_versions={user.id: user.auth_version})
+    actor, target = identities[user.id], identities[user_id]
+    org = require_business(db, actor)
+    require_person(db, actor, target)
+    if target.id == actor.id or target.organization_role not in {'member', 'candidate', 'manager', 'admin'}:
+        raise HTTPException(404, 'Участник не найден в вашей команде')
+    if target.full_name != payload.expected_full_name:
+        raise HTTPException(409, 'Имя участника уже изменено. Обновите карточку; введённое имя сохранено в форме.')
+    target.full_name = payload.full_name
+    audit(db, actor, 'business.employee_profile_updated', 'user', target.id, organization_id=org.id)
+    db.commit()
+    return {'user_id': target.id, 'full_name': target.full_name}
 
 
 @router.put('/employees/{user_id}/position')
@@ -417,6 +456,58 @@ def employee_access(user_id: int, payload: EmployeeAccess, db: Session = Depends
         audit(db, actor, 'business.employee_access', 'user', target.id, organization_id=org.id, is_active=target.is_active)
     db.commit()
     return {'user_id': target.id, 'is_active': target.is_active, 'auth_version': target.auth_version}
+
+
+def change_membership(db, user, user_id, payload, *, removed):
+    identities = lock_members(db, [user.id, user_id], allow_inactive=True,
+        expected_auth_versions={user.id: user.auth_version})
+    actor, target = identities[user.id], identities[user_id]
+    org = require_business(db, actor)
+    require_person(db, actor, target, include_removed=True)
+    if target.id == actor.id or target.organization_role not in {'member', 'candidate', 'manager', 'admin'}:
+        raise HTTPException(403, 'Нельзя удалить себя или владельца компании')
+    if target.organization_role in {'manager', 'admin'} and actor.organization_role != 'owner':
+        raise HTTPException(403, 'Руководителями управляет владелец компании')
+    # Retrying a successful request after a lost connection is safe. A later
+    # restore/remove cycle still conflicts through the monotonic auth version.
+    already = bool(target.organization_removed_at) == removed
+    if target.auth_version != payload.expected_auth_version:
+        if not (already and target.auth_version == payload.expected_auth_version + 1):
+            raise HTTPException(409, 'Участник уже изменён. Обновите список и повторите действие.')
+    if not already:
+        now = datetime.utcnow()
+        if removed:
+            from app.models.integrations import MobileSession, MobilePushDevice
+            from sqlalchemy import select
+            sessions = select(MobileSession.id).where(MobileSession.user_id == target.id)
+            db.query(MobilePushDevice).filter(MobilePushDevice.session_id.in_(sessions)).delete(synchronize_session=False)
+            db.query(MobileSession).filter_by(user_id=target.id, revoked_at=None).update({'revoked_at': now})
+            if target.organization_role in {'manager', 'admin'}:
+                clear_reporting_lines(db, target)
+            if target.email:
+                db.query(Invitation).filter_by(organization_id=org.id, email=target.email, accepted_at=None, revoked_at=None).update({'revoked_at': now})
+            target.organization_removed_at = now
+            target.is_active = False
+        else:
+            check_seat(db, org)
+            target.organization_removed_at = None
+            target.is_active = True
+        target.auth_version += 1
+        audit(db, actor, 'business.employee_removed' if removed else 'business.employee_restored',
+              'user', target.id, organization_id=org.id, role=target.organization_role)
+    db.commit()
+    from app.routes.administration import user_dict
+    return user_dict(target)
+
+
+@router.delete('/employees/{user_id}')
+def remove_employee(user_id: int, payload: EmployeeRemoval, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return change_membership(db, user, user_id, payload, removed=True)
+
+
+@router.post('/employees/{user_id}/restore')
+def restore_employee(user_id: int, payload: EmployeeRemoval, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return change_membership(db, user, user_id, payload, removed=False)
 
 
 @router.post('/invitations', status_code=201)

@@ -39,6 +39,67 @@ def acceptance(token,**kwargs):
     return {'token':token,'password':'new-password-123456','full_name':'Test User','terms_accepted':True,'marketing_accepted':False,'legal_version':CATALOG['version'],**kwargs}
 
 
+@pytest.mark.parametrize('existing_account', [False, True])
+def test_invited_pilot_owner_can_manage_and_author_without_operator_access(client, db_session, admin, existing_account):
+    from app.models.learning import OrganizationLearningSettings, LearningRoleGrant
+    from app.services.invitation_access import apply_owner_authoring
+    o = org(db_session, kind='government')
+    db_session.add(OrganizationLearningSettings(organization_id=o.id, profile='education',
+        delivery={'owner_authoring_on_join': True}))
+    email = 'pilot-head@example.com'
+    user = None
+    if existing_account:
+        user = User(email=email, password_hash=hash_password('existing-password-123'))
+        db_session.add(user)
+    db_session.commit()
+    row, token = invite(client, admin, o, email=email, role='owner')
+    if existing_account:
+        response = client.post('/api/auth/invitations/accept-existing', headers=headers(user), json={'token': token})
+        assert response.status_code == 200, response.text
+    else:
+        response = client.post('/api/auth/invitations/accept', json=acceptance(token))
+        assert response.status_code == 201, response.text
+    user = db_session.query(User).filter_by(email=email).one()
+    auth = {'Authorization': 'Bearer ' + response.json()['access_token']}
+    rights = client.get('/api/team/permissions', headers=auth).json()
+    assert rights['role'] == 'owner' and rights['can_manage_team'] and rights['can_manage_admins']
+    assert rights['can_author'] and not rights['is_operator']
+    assert client.post('/api/courses/drafts', headers=auth).status_code == 201
+    assert client.get('/api/admin/organizations', headers=auth).status_code == 403
+    apply_owner_authoring(db_session, db_session.get(Invitation, row['id']), user)
+    db_session.flush()
+    assert db_session.query(LearningRoleGrant).filter_by(user_id=user.id, role='author').count() == 1
+    assert db_session.query(AdminEvent).filter_by(action='role.granted', target_id=str(user.id)).count() == 1
+
+
+@pytest.mark.parametrize('policy,role,authoring', [(False,'owner',True), ('true','owner',True), (True,'member',True), (True,'owner',False)])
+def test_owner_authoring_policy_is_explicit_and_does_not_elevate_other_members(client, db_session, admin, policy, role, authoring):
+    from app.models.learning import OrganizationLearningSettings, LearningRoleGrant
+    o = org(db_session, kind='government')
+    db_session.add(OrganizationLearningSettings(organization_id=o.id,
+        delivery={'owner_authoring_on_join': policy}, features={'authoring': authoring}))
+    db_session.commit()
+    _, token = invite(client, admin, o, role=role)
+    response = client.post('/api/auth/invitations/accept', json=acceptance(token))
+    assert response.status_code == 201, response.text
+    user = db_session.query(User).filter_by(email='new@example.com').one()
+    assert user.organization_role == role and not user.is_admin
+    assert db_session.query(LearningRoleGrant).filter_by(user_id=user.id).count() == 0
+
+
+def test_only_operator_delivery_can_enable_owner_authoring(client, db_session):
+    from app.schemas.learning import DeliveryInput
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        DeliveryInput(expected_revision=1, delivery={'owner_authoring_on_join': 'true'})
+    o = org(db_session, kind='government')
+    owner = member(db_session, o, role='owner')
+    assert client.put(f'/api/admin/organizations/{o.id}/delivery', headers=headers(owner),
+        json={'expected_revision': 1, 'delivery': {'owner_authoring_on_join': True}}).status_code == 403
+    assert client.put('/api/team/settings', headers=headers(owner),
+        json={'expected_revision': 1, 'delivery': {'owner_authoring_on_join': True}}).status_code == 422
+
+
 def test_admin_endpoints_require_database_role(client,auth_headers,auth_user):
     for path in ['overview','organizations','users','invitations','courses','requests','audit']:
         assert client.get('/api/admin/'+path,headers=auth_headers).status_code==403

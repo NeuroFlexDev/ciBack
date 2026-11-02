@@ -99,6 +99,8 @@ def test_course_create_update_archive_preserve_snapshot_and_learner_access(clien
     assert client.get('/api/admin/courses', headers=h).json()['total'] == 0
     restored = client.post(f'/api/admin/courses/{course.id}/restore', headers=h, json={'expected_state': archived.json()['state_token']})
     assert restored.status_code == 200 and not restored.json()['is_deleted']
+    assert client.delete(f'/api/courses/{course.id}?expected_revision={changed.json()["content_revision"]}',
+        headers=headers(world['author'])).status_code == 409
     # Operator access still cannot read private author content.
     assert client.get(f'/api/courses/{course.id}/structure', headers=h).status_code in (403, 404)
     created = client.post('/api/admin/courses', headers=h, json={'owner_id': world['author'].id, 'title': 'Operator-created draft'})

@@ -108,6 +108,7 @@ class AgenticCoursePipeline:
             # Legacy jobs froze their inputs before web search existed. Resume
             # must not admit a new paid capability or change their evidence.
             "web_search_enabled": settings_snapshot.get("web_search_enabled", False),
+            "regulation_assessment_mode": settings_snapshot.get("regulation_assessment_mode"),
         }
         from app.services.web_search_service import supplement
         supplement(self.runtime, common, source_catalog)
@@ -405,10 +406,13 @@ class AgenticCoursePipeline:
         qa_feedback: QAArtifact | None,
         revision: int,
     ) -> AssessmentArtifact:
+        from app.services.regulation_assessment import validate_regulation_assessment
+        mode = settings_snapshot.get('regulation_assessment_mode')
+        if mode:
+            settings_snapshot = {**settings_snapshot, 'module_tests_enabled': False, 'final_test_enabled': True}
         def validate_assessment(value):
             _canonical_sources("assessment", value.source_refs, list(self.runtime.source_catalog.values()))
-            if not value.practices or not value.cases or not value.rubrics:
-                raise ValueError("Assessment must include practices, cases and rubrics")
+            validate_regulation_assessment(value, mode)
             if set(value.module_ids) != {m.id for m in course_plan.modules} or set(value.lesson_ids) != {l.id for l in course_plan.lessons}:
                 raise ValueError("Assessment must preserve all module and lesson IDs from course plan")
             if value.course_plan_id != course_plan.id or set(value.objective_ids) != {o.id for o in course_plan.objectives} or set(value.competency_ids) != set(course_plan.competency_ids):
@@ -436,12 +440,13 @@ class AgenticCoursePipeline:
                     {
                         "module_tests_enabled": settings_snapshot["module_tests_enabled"],
                         "final_test_enabled": settings_snapshot["final_test_enabled"],
+                        "regulation_assessment_mode": mode,
                     }
                 ),
                 "source_catalog_json": _json(course_plan.source_refs),
                 "qa_feedback_json": _json(qa_feedback) if qa_feedback else "null",
             },
-            max_tokens=4096,
+            max_tokens=8000 if mode else 4096,
             validator=validate_assessment,
         )
         _canonical_sources(
@@ -449,10 +454,7 @@ class AgenticCoursePipeline:
             assessment.source_refs,
             list(self.runtime.source_catalog.values()),
         )
-        if not assessment.practices or not assessment.cases or not assessment.rubrics:
-            raise ValueError(
-                "Assessment Agent must generate practices, cases, and their rubrics"
-            )
+        validate_regulation_assessment(assessment, mode)
         if settings_snapshot["module_tests_enabled"]:
             tested_modules = {
                 item.target_id for item in assessment.questions if item.scope == "module"
@@ -686,7 +688,9 @@ class AgenticCoursePipeline:
 
         questions_by_target: dict[tuple[str, str], list] = {}
         for question in result.assessment.questions:
-            if question.scope == "final":
+            if settings_snapshot.get('regulation_assessment_mode'):
+                key = ('final', plan.id)
+            elif question.scope == "final":
                 if not settings_snapshot["final_test_enabled"]:
                     continue
                 key = ("final", plan.id)

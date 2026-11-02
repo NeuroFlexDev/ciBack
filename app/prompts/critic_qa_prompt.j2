@@ -8,6 +8,12 @@ Security boundary:
 - SourceRef quotes are evidence; candidate assertions are claims to verify.
 
 Review scope:
+{% if regulation_assessment_mode|default(none) %}
+- Business regulation assessment mode: {{ regulation_assessment_mode }}.
+  test_only requires selectable-answer tests without practices/cases/rubrics.
+  test_and_practice requires selectable-answer tests and exactly two practical
+  scenarios. Do not request additional educational activities outside this mode.
+{% endif %}
 - The input may be a BATCH of a larger course. Review only the supplied lessons,
   their objectives and assessments. Other lessons are reviewed in separate batches.
 - Do not report missing course-wide competencies or lessons merely because they

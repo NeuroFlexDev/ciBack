@@ -304,7 +304,7 @@ services:
 
   db:
     logging: *logging
-    image: pgvector/pgvector:0.8.0-pg17
+    image: pgvector/pgvector:0.8.7-pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -342,5 +342,6 @@ volumes:
   caddy_data:
   caddy_config:
   db_data:
+    name: ${POSTGRES_VOLUME:-lernium_db_data}
   redis_data:
   uploads_data:

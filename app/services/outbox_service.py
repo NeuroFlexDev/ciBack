@@ -9,6 +9,7 @@ from app.core.integration_config import integration_settings
 from app.models.integrations import OutboundMessage, WebhookEndpoint
 from app.services.integration_secrets import seal, unseal
 from app.services import integration_http, mail_service
+from app.services.notifications import DeferredDelivery
 
 EVENT_TYPES = {"course.published", "assignment.created", "assignment.revoked", "submission.graded", "invoice.paid", "member.revoked"}
 
@@ -83,6 +84,9 @@ def deliver(db, row):
     elif row.kind == "push":
         from app.services.mobile_push import deliver as deliver_push
         return deliver_push(db, row, payload)
+    elif row.kind == "notice_push":
+        from app.services.notifications import deliver_device
+        return deliver_device(db, row, payload)
     else:
         raise ValueError("Unknown delivery kind")
     return "delivered"
@@ -98,6 +102,10 @@ def process_one(db):
         values = {"status":status, "lease_token":None, "lease_until":None, "last_error":None,
                   "delivered_at":datetime.utcnow() if status == "delivered" else None,
                   "payload_encrypted":"" if status in {"delivered", "expired", "cancelled"} else row.payload_encrypted}
+    except DeferredDelivery as exc:
+        db.rollback()
+        values = {"status": "pending", "lease_token": None, "lease_until": None,
+                  "last_error": None, "available_at": exc.until, "attempts": max(0, attempts - 1)}
     except Exception as exc:
         # Do not persist SMTP diagnostics, addresses, response bodies, secrets or token URLs.
         db.rollback()

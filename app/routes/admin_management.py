@@ -230,6 +230,9 @@ def course_state(db, actor, course_id, payload, archived):
             raise HTTPException(409, 'Для восстановления нужен действующий владелец в исходном пространстве курса')
         from app.services.organization_access import check_course_limit
         check_course_limit(db, owner.id)
+    if row.is_deleted != archived:
+        # A stale delete from before restoration must not hide the course again.
+        row.content_revision += 1
     row.is_deleted = archived
     audit(db, actor, 'course.archived' if archived else 'course.restored', 'course', row.id,
           organization_id=row.organization_id, published_versions_preserved=True)

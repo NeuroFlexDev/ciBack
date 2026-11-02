@@ -453,7 +453,7 @@ class PipelineService:
             db.flush()
             from app.services.ai_resources import reserve
             resource = reserve(db, owner_id=owner_id, course_id=document.course_id, operation="document", lane="background",
-                key=f"document:{run.id}", run_id=run.id, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
+                key=f"document:{run.id}", run_id=run.id, queued=queue_only, timeout=settings.AI_JOB_TIMEOUT_SECONDS, partial_ocr=True,
                 pages=settings.AI_OCR_MAX_PAGES if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED else 0)
             db.commit()
             db.refresh(run)
@@ -797,6 +797,8 @@ class PipelineService:
                 **learning_map,
                 **materialized,
             }
+            from app.services.notifications import generation_finished
+            generation_finished(db, run, locked_course)
             db.commit()
             db.refresh(run)
             return run
@@ -848,6 +850,9 @@ class PipelineService:
                 failed_run.error_message = GENERATION_PAUSED
                 if failed_course is not None:
                     failed_course.status = CourseStatus.READY.value if failed_course.current_graph else CourseStatus.CONFIGURED.value
+            if failed_run is not None:
+                from app.services.notifications import generation_finished
+                generation_finished(db, failed_run, failed_course)
             db.commit()
             raise PipelineRunFailed(run_id, error, 502) from exc
         finally:

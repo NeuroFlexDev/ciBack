@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import pytest
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -63,6 +64,7 @@ INTEGRATION_TABLES = {
 PRE_INTEGRATION_TABLES = EXPECTED_TABLES | LEARNING_TABLES | MATERIAL_TABLES
 AI_RESOURCE_TABLES = {"ai_resource_mutex", "ai_resource_usage", "ai_thread_references"}
 EXPECTED_TABLES = PRE_INTEGRATION_TABLES | INTEGRATION_TABLES | AI_RESOURCE_TABLES | {
+    "user_notifications",
     "email_bindings", "ai_control", "business_positions", "support_access_grants", "user_mfa", "mfa_recovery_codes", "mfa_challenges", "published_source_files", "mobile_sessions", "mobile_refresh_tokens", "mobile_push_devices", "mobile_push_preferences", "learning_progress_operations",
 }
 
@@ -75,6 +77,24 @@ def test_alembic_revision_graph_has_one_connected_head():
     for revision in revisions:
         down_revisions = revision._normalized_down_revisions
         assert set(down_revisions) <= revision_ids
+
+
+@pytest.mark.parametrize("starting_revision", ["mobile_0044", "materials_0044"])
+def test_media_upgrade_accepts_existing_dev_and_main_schemas(tmp_path, starting_revision):
+    env = os.environ.copy()
+    env.update(
+        DATABASE_URL=f"sqlite:///{(tmp_path / 'existing.sqlite').as_posix()}",
+        JWT_SECRET="test-only-jwt-secret-at-least-32-bytes",
+    )
+    for arguments in (
+        ("upgrade", starting_revision), ("upgrade", "head"), ("check",),
+        ("downgrade", starting_revision), ("upgrade", "head"), ("check",),
+    ):
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", *arguments],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_clean_model_import_populates_complete_metadata():

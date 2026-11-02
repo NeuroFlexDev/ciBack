@@ -137,6 +137,8 @@ def test_course_list_filters_counts_paginates_and_is_owner_isolated(client, db_s
     item = next(item for item in all_courses.json() if item["id"] == published.id)
     assert item["publication_status"] == "published"
     assert item["module_count"] == item["lesson_count"] == 1
+    assert item['author_name'] == (auth_user.full_name or auth_user.username or auth_user.email)
+    assert item['position_id'] is None and item['position_name'] is None
 
     only_published = client.get("/api/courses/?publication_status=published", headers=auth_headers)
     assert [item["id"] for item in only_published.json()] == [published.id]
