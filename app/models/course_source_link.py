@@ -61,15 +61,11 @@ class CourseSourceLink(Base, BaseModelMixin):
             "target_type",
             "node_id",
         ),
-        Index(
-            "ix_course_source_links_graph_node", "graph_id", "node_id"
-        ),
+        Index("ix_course_source_links_graph_node", "graph_id", "node_id"),
         Index("ix_course_source_links_run", "run_id"),
     )
 
-    course_id = Column(
-        Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False
-    )
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
     graph_id = Column(
         Integer,
         ForeignKey("course_graphs.id", ondelete="SET NULL"),
@@ -95,18 +91,12 @@ class CourseSourceLink(Base, BaseModelMixin):
     section = Column(String(512), nullable=True)
     excerpt = Column(Text, nullable=False)
     excerpt_hash = Column(String(128), nullable=False)
-    ref_id = Column(
-        String(128), nullable=False, default=lambda: uuid4().hex
-    )
-    relation = Column(
-        String(64), nullable=False, default="supports", server_default="supports"
-    )
+    ref_id = Column(String(128), nullable=False, default=lambda: uuid4().hex)
+    relation = Column(String(64), nullable=False, default="supports", server_default="supports")
     confidence = Column(Numeric(5, 4), nullable=True)
 
     course = relationship("Course")
     graph = relationship("CourseGraph")
     run = relationship("GenerationRun")
-    document = relationship(
-        "Document", foreign_keys=[document_id, document_version]
-    )
+    document = relationship("Document", foreign_keys=[document_id, document_version])
     chunk = relationship("DocumentChunk", foreign_keys=[chunk_id])

@@ -1,0 +1,32 @@
+rules:
+  - id: python-no-unsafe-yaml
+    languages: [python]
+    message: Use yaml.safe_load for untrusted YAML.
+    severity: ERROR
+    pattern-either:
+      - pattern: yaml.load($DATA)
+      - pattern: yaml.unsafe_load(...)
+      - pattern: yaml.load(..., Loader=yaml.Loader, ...)
+      - pattern: yaml.load(..., Loader=yaml.UnsafeLoader, ...)
+      - pattern: yaml.load($DATA, yaml.Loader)
+      - pattern: yaml.load($DATA, yaml.UnsafeLoader)
+  - id: python-no-shell-command
+    languages: [python]
+    message: Pass an argument list with shell=False to subprocess.
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FUNC(..., shell=True, ...)
+          - pattern: os.system(...)
+  - id: python-no-disabled-tls
+    languages: [python]
+    message: TLS certificate verification must stay enabled.
+    severity: ERROR
+    pattern: $CLIENT.$METHOD(..., verify=False, ...)
+  - id: python-no-eval
+    languages: [python]
+    message: Do not evaluate Python code from a string.
+    severity: ERROR
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)

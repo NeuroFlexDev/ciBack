@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 
 # Pydantic-модель для создания структуры курса
 class CourseStructureCreate(BaseModel):
@@ -16,11 +18,14 @@ class CourseStructureCreate(BaseModel):
             raise ValueError("Элементы content_types не должны быть пустыми")
         return v.strip()
 
+
 # Pydantic-модель для обновления структуры курса (все поля опциональны)
 class CourseStructureUpdate(BaseModel):
     sections: Optional[int] = Field(None, gt=0, description="Количество секций курса")
     tests_per_section: Optional[int] = Field(None, ge=0, description="Количество тестов на секцию")
-    lessons_per_section: Optional[int] = Field(None, gt=0, description="Количество уроков на секцию")
+    lessons_per_section: Optional[int] = Field(
+        None, gt=0, description="Количество уроков на секцию"
+    )
     questions_per_test: Optional[int] = Field(None, ge=0, description="Количество вопросов в тесте")
     final_test: Optional[bool] = Field(None, description="Наличие финального теста")
     content_types: Optional[List[str]] = Field(None, description="Список типов контента")
@@ -30,6 +35,7 @@ class CourseStructureUpdate(BaseModel):
         if v is not None and not v.strip():
             raise ValueError("Элементы content_types не должны быть пустыми")
         return v.strip() if v else v
+
 
 # Pydantic-модель для ответа
 class CourseStructureResponse(BaseModel):

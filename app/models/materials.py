@@ -1,11 +1,28 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, JSON, func, BigInteger, Index, Float
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+
 from app.database.db import Base
 
 
 class PublishedSourceFile(Base):
     """Pins immutable originals; normal source removal must never delete these files."""
+
     __tablename__ = "published_source_files"
-    course_version_id = Column(Integer, ForeignKey("course_versions.id", ondelete="CASCADE"), primary_key=True)
+    course_version_id = Column(
+        Integer, ForeignKey("course_versions.id", ondelete="CASCADE"), primary_key=True
+    )
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="RESTRICT"), primary_key=True)
     document_version = Column(Integer, nullable=False)
     content_hash = Column(String(128), nullable=False)
@@ -31,8 +48,14 @@ class ScopedAIUsage(Base):
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     # Frozen at admission. Unknown legacy ownership must never be inferred from
     # the employee's current organization after a transfer.
-    organization_id = Column(Integer, ForeignKey("organizations.id", name="fk_scoped_ai_usage_organization"), nullable=True)
-    scope_status = Column(String(24), nullable=False, default="legacy_unknown", server_default="legacy_unknown")
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", name="fk_scoped_ai_usage_organization"),
+        nullable=True,
+    )
+    scope_status = Column(
+        String(24), nullable=False, default="legacy_unknown", server_default="legacy_unknown"
+    )
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)
     operation = Column(String(32), nullable=False)
     status = Column(String(24), nullable=False)
@@ -46,6 +69,7 @@ class ScopedAIUsage(Base):
 
 class CourseImage(Base):
     """Immutable course media; the legacy table name also accommodates uploaded videos."""
+
     __tablename__ = "course_images"
     __table_args__ = (UniqueConstraint("owner_id", "request_id", name="uq_course_images_request"),)
     id = Column(Integer, primary_key=True)
@@ -73,12 +97,20 @@ class CourseImage(Base):
 
 class LearnerAssistantMessage(Base):
     __tablename__ = "learner_assistant_messages"
-    __table_args__ = (UniqueConstraint("owner_id", "request_id", name="uq_learner_assistant_request"),
-                     Index("ix_learner_assistant_tenant_month", "organization_id", "created_at"))
+    __table_args__ = (
+        UniqueConstraint("owner_id", "request_id", name="uq_learner_assistant_request"),
+        Index("ix_learner_assistant_tenant_month", "organization_id", "created_at"),
+    )
     id = Column(Integer, primary_key=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", name="fk_learner_assistant_messages_organization"), nullable=True)
-    scope_status = Column(String(24), nullable=False, default="legacy_unknown", server_default="legacy_unknown")
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", name="fk_learner_assistant_messages_organization"),
+        nullable=True,
+    )
+    scope_status = Column(
+        String(24), nullable=False, default="legacy_unknown", server_default="legacy_unknown"
+    )
     assignment_id = Column(Integer, nullable=False, index=True)
     course_version_id = Column(Integer, ForeignKey("course_versions.id"), nullable=False)
     lesson_id = Column(Integer, nullable=False)

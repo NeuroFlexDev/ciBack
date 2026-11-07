@@ -1,5 +1,6 @@
 import re
-from pydantic import BaseModel, Field, StrictBool, field_validator, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 
 class AuthCredentials(BaseModel):
@@ -31,8 +32,8 @@ class RegistrationCredentials(AuthCredentials):
 
 def valid_username(value: str) -> str:
     value = value.strip().lower()
-    if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{2,63}', value):
-        raise ValueError('Логин: от 3 до 64 латинских букв, цифр, точек, дефисов или подчёркиваний')
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,63}", value):
+        raise ValueError("Логин: от 3 до 64 латинских букв, цифр, точек, дефисов или подчёркиваний")
     return value
 
 
@@ -41,10 +42,10 @@ class LoginCredentials(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=8, max_length=128)
 
-    @field_validator('email')
+    @field_validator("email")
     @classmethod
     def identity(cls, value):
-        return AuthCredentials.valid_email(value) if '@' in value else valid_username(value)
+        return AuthCredentials.valid_email(value) if "@" in value else valid_username(value)
 
 
 class UserResponse(BaseModel):

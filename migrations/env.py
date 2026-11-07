@@ -7,9 +7,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import app.models  # noqa: F401
 from app.core.config import settings
 from app.database.db import Base
-import app.models  # noqa: F401
 
 config = context.config
 
@@ -62,8 +62,9 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata,
-                          include_object=include_object)
+        context.configure(
+            connection=connection, target_metadata=target_metadata, include_object=include_object
+        )
 
         with context.begin_transaction():
             context.run_migrations()

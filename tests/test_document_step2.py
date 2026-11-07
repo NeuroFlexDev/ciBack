@@ -1,12 +1,11 @@
 from io import BytesIO
 from zipfile import ZipFile
 
+from app.api_catalog import app
 from app.core.config import Settings
 from app.models.document import Document
 from app.services.file_storage import LocalFileStorage, get_file_storage
-from app.api_catalog import app
 from tests.factories import make_course
-
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -19,9 +18,7 @@ def _docx_bytes() -> bytes:
     return output.getvalue()
 
 
-def test_supported_document_signatures(
-    client, db_session, auth_user, auth_headers, tmp_path
-):
+def test_supported_document_signatures(client, db_session, auth_user, auth_headers, tmp_path):
     app.dependency_overrides[get_file_storage] = lambda: LocalFileStorage(
         tmp_path, 25 * 1024 * 1024
     )
@@ -43,9 +40,7 @@ def test_supported_document_signatures(
         assert response.json()["content_type"] == content_type
 
 
-def test_document_content_validation(
-    client, db_session, auth_user, auth_headers, tmp_path
-):
+def test_document_content_validation(client, db_session, auth_user, auth_headers, tmp_path):
     app.dependency_overrides[get_file_storage] = lambda: LocalFileStorage(
         tmp_path, 25 * 1024 * 1024
     )
@@ -66,14 +61,12 @@ def test_document_content_validation(
         )
         assert response.status_code == expected
 
-    assert client.post(
-        f"/api/courses/{course.id}/documents", headers=auth_headers
-    ).status_code == 400
+    assert (
+        client.post(f"/api/courses/{course.id}/documents", headers=auth_headers).status_code == 400
+    )
 
 
-def test_public_status_mapping_filter_and_detail(
-    client, db_session, auth_user, auth_headers
-):
+def test_public_status_mapping_filter_and_detail(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id)
     internal_statuses = ["uploaded", "queued", "processing", "indexed", "failed"]
     for index, internal_status in enumerate(internal_statuses):
@@ -109,14 +102,22 @@ def test_public_status_mapping_filter_and_detail(
         headers=auth_headers,
     ).json()
     assert ready["total"] == 1
-    detail = client.get(
-        f"/api/documents/{ready['items'][0]['id']}", headers=auth_headers
-    )
+    detail = client.get(f"/api/documents/{ready['items'][0]['id']}", headers=auth_headers)
     assert detail.json()["status"] == "ready"
     assert set(detail.json()) == {
-        "id", "course_id", "original_filename", "content_type", "size_bytes",
-        "source_type", "version", "status", "error_message", "created_at",
-        "updated_at", "extracted_characters", "chunk_count",
+        "id",
+        "course_id",
+        "original_filename",
+        "content_type",
+        "size_bytes",
+        "source_type",
+        "version",
+        "status",
+        "error_message",
+        "created_at",
+        "updated_at",
+        "extracted_characters",
+        "chunk_count",
     }
 
     failed = client.get(

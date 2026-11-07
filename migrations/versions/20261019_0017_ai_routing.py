@@ -1,6 +1,7 @@
 """Persist adaptive routing decisions without prompt or source content."""
-from alembic import op
+
 import sqlalchemy as sa
+from alembic import op
 
 revision = "20261019_0017"
 down_revision = "20261015_0016"

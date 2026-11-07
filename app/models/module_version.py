@@ -1,14 +1,17 @@
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModelMixin
+
 from app.database.db import Base
+from app.models.base import BaseModelMixin
 
 
 class ModuleVersion(Base, BaseModelMixin):
     __tablename__ = "module_versions"
 
     course_version_id = Column(Integer, ForeignKey("course_versions.id"), nullable=True)
-    module_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"), nullable=True, index=True)
+    module_id = Column(
+        Integer, ForeignKey("modules.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     revision = Column(Integer, nullable=True)
     title = Column(String, nullable=False)
     description = Column(Text, nullable=False, default="")

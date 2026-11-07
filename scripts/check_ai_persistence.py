@@ -1,9 +1,12 @@
 """Recovery smoke test for the configured test DB; never calls an AI provider."""
+
 import sys
 import uuid
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
+
 from app.ai.checkpoints import checkpoint_store
 from app.core.config import settings
 
@@ -12,15 +15,18 @@ if settings.ENV != "test":
 calls = []
 fail = True
 
+
 def first(state):
     calls.append("first")
     return {"value": 41}
+
 
 def second(state):
     if fail:
         raise RuntimeError("simulated worker restart")
     calls.append("second")
     return {"value": state["value"] + 1}
+
 
 builder = StateGraph(dict)
 builder.add_node("first", first)

@@ -1,19 +1,16 @@
-from sqlalchemy import Column, ForeignKey, Index, Integer, JSON
+from sqlalchemy import JSON, Column, ForeignKey, Index, Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.database.db import Base
 from app.models.base import BaseModelMixin
 
-
 JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 
 
 class AssessmentRubric(Base, BaseModelMixin):
     __tablename__ = "assessment_rubrics"
-    __table_args__ = (
-        Index("ix_assessment_rubrics_course_deleted", "course_id", "is_deleted"),
-    )
+    __table_args__ = (Index("ix_assessment_rubrics_course_deleted", "course_id", "is_deleted"),)
 
     course_id = Column(
         Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True

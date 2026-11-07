@@ -3,7 +3,14 @@ from __future__ import annotations
 from collections import Counter
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 class AgenticContract(BaseModel):
@@ -16,72 +23,34 @@ class AgenticContract(BaseModel):
     )
 
 
-SourceRefId = Annotated[
-    str, Field(pattern=r"^src:[a-z0-9][a-z0-9._:-]{2,127}$", max_length=128)
-]
-KnowledgeItemId = Annotated[
-    str, Field(pattern=r"^kn:[a-z0-9][a-z0-9._:-]{1,125}$", max_length=128)
-]
-RoleId = Annotated[
-    str, Field(pattern=r"^role:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)
-]
-CompetencyId = Annotated[
-    str, Field(pattern=r"^cmp:[a-z0-9][a-z0-9._:-]{1,124}$", max_length=128)
-]
-SkillId = Annotated[
-    str, Field(pattern=r"^skill:[a-z0-9][a-z0-9._:-]{1,122}$", max_length=128)
-]
-KnowledgeId = Annotated[
-    str, Field(pattern=r"^know:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)
-]
-ProcedureId = Annotated[
-    str, Field(pattern=r"^proc:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)
-]
-PlanId = Annotated[
-    str, Field(pattern=r"^plan:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)
-]
-ModuleId = Annotated[
-    str, Field(pattern=r"^mod:[a-z0-9][a-z0-9._:-]{1,124}$", max_length=128)
-]
-LessonId = Annotated[
-    str, Field(pattern=r"^lesson:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)
-]
-ObjectiveId = Annotated[
-    str, Field(pattern=r"^obj:[a-z0-9][a-z0-9._:-]{1,124}$", max_length=128)
-]
-SectionId = Annotated[
-    str, Field(pattern=r"^section:[a-z0-9][a-z0-9._:-]{1,120}$", max_length=128)
-]
+SourceRefId = Annotated[str, Field(pattern=r"^src:[a-z0-9][a-z0-9._:-]{2,127}$", max_length=128)]
+KnowledgeItemId = Annotated[str, Field(pattern=r"^kn:[a-z0-9][a-z0-9._:-]{1,125}$", max_length=128)]
+RoleId = Annotated[str, Field(pattern=r"^role:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)]
+CompetencyId = Annotated[str, Field(pattern=r"^cmp:[a-z0-9][a-z0-9._:-]{1,124}$", max_length=128)]
+SkillId = Annotated[str, Field(pattern=r"^skill:[a-z0-9][a-z0-9._:-]{1,122}$", max_length=128)]
+KnowledgeId = Annotated[str, Field(pattern=r"^know:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)]
+ProcedureId = Annotated[str, Field(pattern=r"^proc:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)]
+PlanId = Annotated[str, Field(pattern=r"^plan:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)]
+ModuleId = Annotated[str, Field(pattern=r"^mod:[a-z0-9][a-z0-9._:-]{1,124}$", max_length=128)]
+LessonId = Annotated[str, Field(pattern=r"^lesson:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)]
+ObjectiveId = Annotated[str, Field(pattern=r"^obj:[a-z0-9][a-z0-9._:-]{1,124}$", max_length=128)]
+SectionId = Annotated[str, Field(pattern=r"^section:[a-z0-9][a-z0-9._:-]{1,120}$", max_length=128)]
 QuestionId = Annotated[
     str, Field(pattern=r"^question:[a-z0-9][a-z0-9._:-]{1,119}$", max_length=128)
 ]
-OptionId = Annotated[
-    str, Field(pattern=r"^option:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)
-]
+OptionId = Annotated[str, Field(pattern=r"^option:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)]
 PracticeId = Annotated[
     str, Field(pattern=r"^practice:[a-z0-9][a-z0-9._:-]{1,119}$", max_length=128)
 ]
-CaseId = Annotated[
-    str, Field(pattern=r"^case:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)
-]
-RubricId = Annotated[
-    str, Field(pattern=r"^rubric:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)
-]
+CaseId = Annotated[str, Field(pattern=r"^case:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)]
+RubricId = Annotated[str, Field(pattern=r"^rubric:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)]
 CriterionId = Annotated[
     str, Field(pattern=r"^criterion:[a-z0-9][a-z0-9._:-]{1,118}$", max_length=128)
 ]
-LevelId = Annotated[
-    str, Field(pattern=r"^level:[a-z0-9][a-z0-9._:-]{1,122}$", max_length=128)
-]
-IssueId = Annotated[
-    str, Field(pattern=r"^issue:[a-z0-9][a-z0-9._:-]{1,122}$", max_length=128)
-]
-ImpactId = Annotated[
-    str, Field(pattern=r"^impact:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)
-]
-DiffId = Annotated[
-    str, Field(pattern=r"^diff:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)
-]
+LevelId = Annotated[str, Field(pattern=r"^level:[a-z0-9][a-z0-9._:-]{1,122}$", max_length=128)]
+IssueId = Annotated[str, Field(pattern=r"^issue:[a-z0-9][a-z0-9._:-]{1,122}$", max_length=128)]
+ImpactId = Annotated[str, Field(pattern=r"^impact:[a-z0-9][a-z0-9._:-]{1,121}$", max_length=128)]
+DiffId = Annotated[str, Field(pattern=r"^diff:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)]
 GenericLogicalId = Annotated[
     str,
     Field(
@@ -115,9 +84,7 @@ def _require_exact(label: str, actual: list[str], expected: set[str]) -> None:
     missing = sorted(expected - actual_set)
     unexpected = sorted(actual_set - expected)
     if missing or unexpected:
-        raise ValueError(
-            f"{label} must match exactly; missing={missing}, unexpected={unexpected}"
-        )
+        raise ValueError(f"{label} must match exactly; missing={missing}, unexpected={unexpected}")
 
 
 def _validate_dag(label: str, node_ids: set[str], dependencies: dict[str, list[str]]) -> None:
@@ -132,9 +99,7 @@ def _validate_dag(label: str, node_ids: set[str], dependencies: dict[str, list[s
         state[node_id] = 1
         for dependency_id in dependencies.get(node_id, []):
             if dependency_id not in node_ids:
-                raise ValueError(
-                    f"{label} reference unknown prerequisite id: {dependency_id}"
-                )
+                raise ValueError(f"{label} reference unknown prerequisite id: {dependency_id}")
             if dependency_id == node_id:
                 raise ValueError(f"{label} cannot contain a self dependency: {node_id}")
             visit(dependency_id)
@@ -178,8 +143,16 @@ class SourceRef(AgenticContract):
     def web_provenance(self):
         if self.source_type == "web_search":
             from app.ai.web_search import public_url
-            if not self.source_url or not public_url(self.source_url) or not self.retrieved_at or self.evidence_kind != "provider_summary":
-                raise ValueError("Web sources require public URL, retrieval date and explicit summary provenance")
+
+            if (
+                not self.source_url
+                or not public_url(self.source_url)
+                or not self.retrieved_at
+                or self.evidence_kind != "provider_summary"
+            ):
+                raise ValueError(
+                    "Web sources require public URL, retrieval date and explicit summary provenance"
+                )
         elif self.source_url is not None or self.evidence_kind != "document_excerpt":
             raise ValueError("Uploaded evidence cannot impersonate a web source")
         return self
@@ -188,14 +161,18 @@ class SourceRef(AgenticContract):
     def serialize_provenance(self, handler):
         result = handler(self)
         if self.source_type == "uploaded":
-            for key in ("source_type", "source_url", "source_title", "retrieved_at", "evidence_kind"):
+            for key in (
+                "source_type",
+                "source_url",
+                "source_title",
+                "retrieved_at",
+                "evidence_kind",
+            ):
                 result.pop(key, None)
         return result
 
 
-KnowledgeKind = Literal[
-    "regulation", "process", "role", "term", "requirement", "procedure"
-]
+KnowledgeKind = Literal["regulation", "process", "role", "term", "requirement", "procedure"]
 
 
 class KnowledgeItem(AgenticContract):
@@ -237,8 +214,7 @@ class IngestionArtifact(AgenticContract):
         )
 
         citation_groups = [
-            (f"knowledge item {item.id}", item.source_ref_ids)
-            for item in self.knowledge_items
+            (f"knowledge item {item.id}", item.source_ref_ids) for item in self.knowledge_items
         ]
         citation_groups.extend(
             (f"document {item.document_id}:v{item.document_version}", item.source_ref_ids)
@@ -401,9 +377,7 @@ class CompetencyMapArtifact(AgenticContract):
                 raise ValueError(f"{label} must be connected to the competency chain: {unassigned}")
 
         for item in [*self.knowledge, *self.procedures]:
-            _require_unique(
-                f"{item.id} source knowledge item ids", item.source_knowledge_item_ids
-            )
+            _require_unique(f"{item.id} source knowledge item ids", item.source_knowledge_item_ids)
             _require_known(
                 f"{item.id} source knowledge item ids",
                 item.source_knowledge_item_ids,
@@ -428,9 +402,7 @@ class CompetencyMapArtifact(AgenticContract):
 class CourseObjective(AgenticContract):
     id: ObjectiveId
     text: str = Field(min_length=1, max_length=2000)
-    bloom_level: Literal[
-        "remember", "understand", "apply", "analyze", "evaluate", "create"
-    ]
+    bloom_level: Literal["remember", "understand", "apply", "analyze", "evaluate", "create"]
     measurable_verb: str = Field(min_length=1, max_length=128)
     competency_ids: list[CompetencyId] = Field(min_length=1)
     source_ref_ids: list[SourceRefId] = Field(min_length=1)
@@ -486,9 +458,7 @@ class CoursePlan(AgenticContract):
         competency_assignments: Counter[str] = Counter()
 
         for objective in self.objectives:
-            _require_unique(
-                f"objective {objective.id} competency ids", objective.competency_ids
-            )
+            _require_unique(f"objective {objective.id} competency ids", objective.competency_ids)
             _require_known(
                 f"objective {objective.id} competency ids",
                 objective.competency_ids,
@@ -508,13 +478,9 @@ class CoursePlan(AgenticContract):
             _require_unique(f"module {module.id} lesson ids", module.lesson_ids)
             _require_unique(f"module {module.id} objective ids", module.objective_ids)
             _require_unique(f"module {module.id} competency ids", module.competency_ids)
-            _require_unique(
-                f"module {module.id} prerequisite ids", module.prerequisite_module_ids
-            )
+            _require_unique(f"module {module.id} prerequisite ids", module.prerequisite_module_ids)
             _require_known(f"module {module.id} lesson ids", module.lesson_ids, lesson_ids)
-            _require_known(
-                f"module {module.id} objective ids", module.objective_ids, objective_ids
-            )
+            _require_known(f"module {module.id} objective ids", module.objective_ids, objective_ids)
             _require_known(
                 f"module {module.id} competency ids",
                 module.competency_ids,
@@ -535,12 +501,8 @@ class CoursePlan(AgenticContract):
         for lesson in self.lessons:
             _require_unique(f"lesson {lesson.id} objective ids", lesson.objective_ids)
             _require_unique(f"lesson {lesson.id} competency ids", lesson.competency_ids)
-            _require_unique(
-                f"lesson {lesson.id} prerequisite ids", lesson.prerequisite_lesson_ids
-            )
-            _require_known(
-                f"lesson {lesson.id} objective ids", lesson.objective_ids, objective_ids
-            )
+            _require_unique(f"lesson {lesson.id} prerequisite ids", lesson.prerequisite_lesson_ids)
+            _require_known(f"lesson {lesson.id} objective ids", lesson.objective_ids, objective_ids)
             _require_known(
                 f"lesson {lesson.id} competency ids",
                 lesson.competency_ids,
@@ -573,9 +535,7 @@ class CoursePlan(AgenticContract):
 
         missing_objectives = sorted(objective_ids - set(objective_assignments))
         if missing_objectives:
-            raise ValueError(
-                f"every objective must be taught by a lesson: {missing_objectives}"
-            )
+            raise ValueError(f"every objective must be taught by a lesson: {missing_objectives}")
         _validate_dag(
             "module prerequisites",
             module_ids,
@@ -589,9 +549,7 @@ class CoursePlan(AgenticContract):
 
         expected_minutes = sum(item.estimated_minutes for item in self.lessons)
         if self.estimated_minutes != expected_minutes:
-            raise ValueError(
-                f"estimated_minutes must equal lesson total {expected_minutes}"
-            )
+            raise ValueError(f"estimated_minutes must equal lesson total {expected_minutes}")
 
         cited = [
             *((item.id, item.source_ref_ids) for item in self.objectives),
@@ -612,6 +570,7 @@ class LessonSection(AgenticContract):
     @classmethod
     def diagrams(cls, value):
         from app.services.diagram_policy import validate_generated_diagrams
+
         return validate_generated_diagrams(value)
 
 
@@ -770,11 +729,11 @@ class AssessmentRubric(AgenticContract):
         total_weight = sum(item.weight for item in self.criteria)
         if abs(total_weight - 1.0) > 0.001:
             raise ValueError(f"rubric {self.id} criterion weights must sum to 1.0")
-        maximum_score = sum(item.weight * max(level.score for level in item.levels) for item in self.criteria)
+        maximum_score = sum(
+            item.weight * max(level.score for level in item.levels) for item in self.criteria
+        )
         if self.passing_score > maximum_score:
-            raise ValueError(
-                f"rubric {self.id} passing_score exceeds maximum {maximum_score}"
-            )
+            raise ValueError(f"rubric {self.id} passing_score exceeds maximum {maximum_score}")
         return self
 
 
@@ -850,9 +809,7 @@ class AssessmentArtifact(AgenticContract):
                 if question.scope == "module"
                 else {self.course_plan_id}
             )
-            _require_known(
-                f"question {question.id} target", [question.target_id], expected_targets
-            )
+            _require_known(f"question {question.id} target", [question.target_id], expected_targets)
         for practice in self.practices:
             _require_known(f"practice {practice.id} lesson", [practice.lesson_id], lesson_ids)
             _require_known(f"practice {practice.id} rubric", [practice.rubric_id], rubric_ids)
@@ -932,14 +889,9 @@ class QAArtifact(AgenticContract):
         _require_known("revision issue ids", self.revision_required_for, issue_ids)
         _validate_citations(
             self.source_refs,
-            [
-                (f"QA issue {item.id}", item.evidence_source_ref_ids)
-                for item in self.issues
-            ],
+            [(f"QA issue {item.id}", item.evidence_source_ref_ids) for item in self.issues],
         )
-        severe_ids = {
-            item.id for item in self.issues if item.severity in {"blocker", "error"}
-        }
+        severe_ids = {item.id for item in self.issues if item.severity in {"blocker", "error"}}
         if self.verdict == "pass" and severe_ids:
             raise ValueError("pass verdict cannot contain blocker or error issues")
         if self.verdict == "fail" and not severe_ids:
@@ -949,8 +901,17 @@ class QAArtifact(AgenticContract):
         if self.verdict == "pass" and self.revision_required_for:
             raise ValueError("pass verdict cannot require revisions")
         from app.core.config import settings
-        if self.verdict == "pass" and min(self.coverage_score, self.grounding_score,
-                                           self.difficulty_score, self.assessment_quality_score) < settings.AI_QA_MIN_SCORE:
+
+        if (
+            self.verdict == "pass"
+            and min(
+                self.coverage_score,
+                self.grounding_score,
+                self.difficulty_score,
+                self.assessment_quality_score,
+            )
+            < settings.AI_QA_MIN_SCORE
+        ):
             raise ValueError("pass requires every QA score to meet the configured minimum")
         return self
 
@@ -1095,9 +1056,7 @@ class UpdateArtifact(AgenticContract):
                     raise ValueError(
                         f"diff {operation.id} target does not match impact {impact_id}"
                     )
-        actionable = {
-            item.id for item in self.impacts if item.proposed_action != "no_change"
-        }
+        actionable = {item.id for item in self.impacts if item.proposed_action != "no_change"}
         covered = {
             impact_id for operation in self.proposed_diff for impact_id in operation.impact_ids
         }
@@ -1134,9 +1093,7 @@ class AgenticPipelineResult(AgenticContract):
                 if canonical is None:
                     raise ValueError(f"{stage_name} cites unknown ingestion source {source.id}")
                 if canonical != source:
-                    raise ValueError(
-                        f"{stage_name} changed canonical source ref {source.id}"
-                    )
+                    raise ValueError(f"{stage_name} changed canonical source ref {source.id}")
 
         ingestion_item_ids = {item.id for item in self.ingestion.knowledge_items}
         _require_known(

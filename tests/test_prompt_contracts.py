@@ -6,7 +6,6 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, meta
 from app.schemas.canvas_generation import CanvasGenerationPayload
 from app.schemas.pipeline import GeneratedGraphPayload
 
-
 PROMPTS = Path(__file__).resolve().parents[1] / "app" / "prompts"
 ENV = Environment(
     loader=FileSystemLoader(PROMPTS),
@@ -93,9 +92,9 @@ def test_course_graph_to_canvas_declares_stable_inputs_and_json_contract():
     assert '<UNTRUSTED_COURSE_PLAN>\n{"id":"plan:example_course"}' in rendered
     assert '<UNTRUSTED_SOURCE_CATALOG>\n[{"id":"src:doc:1:v1:chunk:1"}]' in rendered
 
-    example = rendered.split(
-        "Required JSON shape (all keys shown are contract keys):", 1
-    )[1].split("Authoritative application settings:", 1)[0]
+    example = rendered.split("Required JSON shape (all keys shown are contract keys):", 1)[1].split(
+        "Authoritative application settings:", 1
+    )[0]
     payload = json.loads(example)
 
     assert payload["schema_version"] == "1.0"

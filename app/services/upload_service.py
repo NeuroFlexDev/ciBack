@@ -1,7 +1,10 @@
 """Deprecated import surface; parsing uses the bounded production pipeline."""
+
 from fastapi import HTTPException
+
 from app.core.config import settings
 from app.services.document_safety import bounded_extract_blocks
+
 
 class UploadService:
     @staticmethod

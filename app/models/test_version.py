@@ -9,7 +9,9 @@ class TestVersion(Base, BaseModelMixin):
     __test__ = False
     __tablename__ = "test_versions"
 
-    test_id = Column(Integer, ForeignKey("tests.id", ondelete="CASCADE"), nullable=False, index=True)
+    test_id = Column(
+        Integer, ForeignKey("tests.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     revision = Column(Integer, nullable=False)
     assessment_scope = Column(String(16), nullable=False)
     module_id = Column(Integer, nullable=True)
@@ -20,7 +22,11 @@ class TestVersion(Base, BaseModelMixin):
     position = Column(Integer, nullable=False, default=0)
     deleted = Column(Boolean, nullable=False, default=False)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    course_version_id = Column(Integer, ForeignKey("course_versions.id", ondelete="CASCADE"), nullable=True, index=True)
-    module_version_id = Column(Integer, ForeignKey("module_versions.id", ondelete="CASCADE"), nullable=True, index=True)
+    course_version_id = Column(
+        Integer, ForeignKey("course_versions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    module_version_id = Column(
+        Integer, ForeignKey("module_versions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     course_version = relationship("CourseVersion", back_populates="tests")

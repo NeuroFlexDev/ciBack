@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import (
     TokenValidationError,
     create_access_token,
@@ -10,12 +11,10 @@ from app.core.security import (
     normalize_email,
     verify_password,
 )
+from app.core.surface import surface
 from app.database.db import get_db
 from app.models.user import User
 from app.repositories.user import UserRepository
-from app.core.config import settings
-from app.core.surface import surface
-
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -51,8 +50,10 @@ class AuthService:
     def authenticate(db: Session, email: str, password: str) -> tuple[User, str]:
         # Hold the user version stable from password proof through session/challenge issuance.
         identity = normalize_email(email)
-        column = User.email if '@' in identity else User.username
-        user = db.query(User).filter(column == identity).with_for_update().populate_existing().first()
+        column = User.email if "@" in identity else User.username
+        user = (
+            db.query(User).filter(column == identity).with_for_update().populate_existing().first()
+        )
         if not user or not user.is_active or not verify_password(password, user.password_hash):
             raise _credentials_exception("Неверный логин, почта или пароль")
         if surface.get() == "admin" and not user.is_admin:
@@ -78,13 +79,26 @@ class AuthService:
             raise _credentials_exception("Сеанс завершён. Войдите снова.")
         if payload.get("sid"):
             from datetime import datetime
+
             from app.models.integrations import MobileSession
+
             session = db.get(MobileSession, payload["sid"])
-            if not session or session.user_id != user.id or session.auth_version != user.auth_version or session.token_version != payload.get("sv") or session.revoked_at or session.expires_at <= datetime.utcnow():
+            if (
+                not session
+                or session.user_id != user.id
+                or session.auth_version != user.auth_version
+                or session.token_version != payload.get("sv")
+                or session.revoked_at
+                or session.expires_at <= datetime.utcnow()
+            ):
                 raise _credentials_exception("Мобильная сессия отозвана или истекла")
         from app.services.mfa_service import enabled
-        if enabled(db,user) and (not set(payload.get('amr',[])) & {'otp','recovery'} or not isinstance(payload.get('mfa_at'),int)):
-            raise _credentials_exception('Подтвердите двухэтапный вход')
+
+        if enabled(db, user) and (
+            not set(payload.get("amr", [])) & {"otp", "recovery"}
+            or not isinstance(payload.get("mfa_at"), int)
+        ):
+            raise _credentials_exception("Подтвердите двухэтапный вход")
         if surface.get() == "admin" and not user.is_admin:
             raise _credentials_exception("Вход доступен только оператору Лерниума")
         ensure_organization_active(user)
@@ -111,31 +125,68 @@ def get_current_user(
     if credentials is None:
         raise _credentials_exception("Требуется аутентификация")
     user = AuthService.get_user_from_token(db, credentials.credentials)
-    if getattr(request.app.state, "surface", None) == "platform" and user.is_admin and request.url.path.startswith("/api/support/"):
+    if (
+        getattr(request.app.state, "surface", None) == "platform"
+        and user.is_admin
+        and request.url.path.startswith("/api/support/")
+    ):
         raise HTTPException(403, "Откройте сервис управления Лерниумом")
     request.state.auth_claims = decode_access_token(credentials.credentials)
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         path = request.url.path
-        author_paths = ("/api/courses/", "/api/modules/", "/api/lessons/", "/api/tests/", "/api/tasks/", "/api/documents/", "/api/generation-runs/")
-        if path.startswith(author_paths) and not path.endswith(("/assignments", "/cancel", "/export", "/export.csv", "/export.xlsx")):
+        author_paths = (
+            "/api/courses/",
+            "/api/modules/",
+            "/api/lessons/",
+            "/api/tests/",
+            "/api/tasks/",
+            "/api/documents/",
+            "/api/generation-runs/",
+        )
+        if path.startswith(author_paths) and not path.endswith(
+            ("/assignments", "/cancel", "/export", "/export.csv", "/export.xlsx")
+        ):
             from app.services.feature_access import require_feature
-            require_feature(db, user.organization_id, 'authoring')
+
+            require_feature(db, user.organization_id, "authoring")
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not user.is_admin:
-        recovery_paths = ("/api/auth/", "/api/admin/", "/api/billing", "/api/integrations/", "/api/legal/", "/api/support/", "/api/me", "/api/change-password")
-        if not request.url.path.startswith(recovery_paths) and not request.url.path.endswith(("/export", "/export.xlsx", "/export.csv", "/export.pdf", "/pdf-plan")):
+        recovery_paths = (
+            "/api/auth/",
+            "/api/admin/",
+            "/api/billing",
+            "/api/integrations/",
+            "/api/legal/",
+            "/api/support/",
+            "/api/me",
+            "/api/change-password",
+        )
+        if not request.url.path.startswith(recovery_paths) and not request.url.path.endswith(
+            ("/export", "/export.xlsx", "/export.csv", "/export.pdf", "/pdf-plan")
+        ):
             from app.services.billing_service import ensure_write_access
+
             ensure_write_access(db, user.organization_id)
     return user
 
 
 def ensure_organization_active(user: User) -> None:
-    if user.organization_id and user.organization and not user.organization.is_active and not user.is_admin:
-        raise HTTPException(403, "Доступ организации приостановлен. Обратитесь к её администратору.")
+    if (
+        user.organization_id
+        and user.organization
+        and not user.organization.is_active
+        and not user.is_admin
+    ):
+        raise HTTPException(
+            403, "Доступ организации приостановлен. Обратитесь к её администратору."
+        )
 
 
-def require_admin(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+def require_admin(
+    request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> User:
     if not user.is_admin:
         raise HTTPException(403, "Доступ только для администратора Лерниума")
     from app.services.mfa_service import require_operator_factor
-    require_operator_factor(db,user,getattr(request.state,'auth_claims',{}))
+
+    require_operator_factor(db, user, getattr(request.state, "auth_claims", {}))
     return user

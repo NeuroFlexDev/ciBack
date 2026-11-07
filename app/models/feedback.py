@@ -1,8 +1,9 @@
 # app/models/feedback.py
 from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModelMixin
+
 from app.database.db import Base
+from app.models.base import BaseModelMixin
 
 
 class Feedback(Base, BaseModelMixin):

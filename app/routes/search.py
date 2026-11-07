@@ -4,14 +4,13 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.course import Course
-from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.user import User
-from app.services.auth_service import get_current_user
-from app.services.embedding_service import search
 from app.schemas.retrieval import RetrievalResponse
-from app.services.embedding_service import get_vector_store
+from app.services.auth_service import get_current_user
+from app.services.course_access import course_access_filter
+from app.services.embedding_service import get_vector_store, search
 from app.services.retrieval_service import RetrievalService
 from app.services.vector_store import VectorStore
 

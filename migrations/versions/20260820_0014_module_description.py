@@ -3,11 +3,11 @@
 Revision ID: 20260820_0014
 Revises: 20260819_0013
 """
+
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260820_0014"
 down_revision: str | None = "20260819_0013"
@@ -17,13 +17,9 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     with op.batch_alter_table("modules") as batch:
-        batch.add_column(
-            sa.Column("description", sa.Text(), nullable=False, server_default="")
-        )
+        batch.add_column(sa.Column("description", sa.Text(), nullable=False, server_default=""))
     with op.batch_alter_table("module_versions") as batch:
-        batch.add_column(
-            sa.Column("description", sa.Text(), nullable=False, server_default="")
-        )
+        batch.add_column(sa.Column("description", sa.Text(), nullable=False, server_default=""))
 
 
 def downgrade() -> None:

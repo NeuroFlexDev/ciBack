@@ -1,8 +1,8 @@
 """Bounded tenant configuration for AI; values are context, never new authority."""
+
 import json
 
 from app.models.learning import OrganizationLearningSettings
-
 
 FIELDS = ("audience", "terminology", "goals", "constraints", "specialist_role", "industry")
 
@@ -12,8 +12,11 @@ def organization_ai_context(db, organization_id):
     if config is None:
         return {}
     # Never pass arbitrary settings, integrations, secrets or another tenant's data.
-    context = {key: value.strip()[:2000] for key in FIELDS
-               if isinstance(value := (config.ai_context or {}).get(key), str) and value.strip()}
+    context = {
+        key: value.strip()[:2000]
+        for key in FIELDS
+        if isinstance(value := (config.ai_context or {}).get(key), str) and value.strip()
+    }
     return {"profile": config.profile, **context}
 
 

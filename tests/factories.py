@@ -1,9 +1,11 @@
 # tests/factories.py
+import json
+
 from app.models.course import Course
 from app.models.course_structure import CourseStructure
 from app.models.lesson import Lesson
 from app.models.module import Module
-import json
+
 
 def make_course(db, **kwargs):
     c = Course(

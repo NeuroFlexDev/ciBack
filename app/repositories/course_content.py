@@ -1,14 +1,14 @@
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.course import Course
-from app.services.course_access import course_access_filter, related_course_access
 from app.models.course_graph import CourseGraph
 from app.models.document import Document
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.task import Task
 from app.models.test import Test
-from sqlalchemy import and_, or_
+from app.services.course_access import course_access_filter, related_course_access
 
 
 class CourseContentRepository:
@@ -19,29 +19,47 @@ class CourseContentRepository:
         result: set[str] = set()
         if requested.get("module"):
             ids = db.query(Module.id).filter(
-                Module.id.in_(requested["module"]), Module.course_id == course_id,
+                Module.id.in_(requested["module"]),
+                Module.course_id == course_id,
                 Module.is_deleted.is_(False),
             )
             result.update(f"module:{item.id}" for item in ids)
         if requested.get("lesson"):
-            ids = db.query(Lesson.id).join(Module).filter(
-                Lesson.id.in_(requested["lesson"]), Module.course_id == course_id,
-                Lesson.is_deleted.is_(False), Module.is_deleted.is_(False),
+            ids = (
+                db.query(Lesson.id)
+                .join(Module)
+                .filter(
+                    Lesson.id.in_(requested["lesson"]),
+                    Module.course_id == course_id,
+                    Lesson.is_deleted.is_(False),
+                    Module.is_deleted.is_(False),
+                )
             )
             result.update(f"lesson:{item.id}" for item in ids)
         if requested.get("test"):
-            ids = db.query(Test.id).outerjoin(Module, Test.module_id == Module.id).filter(
-                Test.id.in_(requested["test"]), Test.is_deleted.is_(False),
-                or_(
-                    and_(Module.course_id == course_id, Module.is_deleted.is_(False)),
-                    Test.course_id == course_id,
-                ),
+            ids = (
+                db.query(Test.id)
+                .outerjoin(Module, Test.module_id == Module.id)
+                .filter(
+                    Test.id.in_(requested["test"]),
+                    Test.is_deleted.is_(False),
+                    or_(
+                        and_(Module.course_id == course_id, Module.is_deleted.is_(False)),
+                        Test.course_id == course_id,
+                    ),
+                )
             )
             result.update(f"test:{item.id}" for item in ids)
         if requested.get("task"):
-            ids = db.query(Task.id).join(Module).filter(
-                Task.id.in_(requested["task"]), Module.course_id == course_id,
-                Task.is_deleted.is_(False), Module.is_deleted.is_(False),
+            ids = (
+                db.query(Task.id)
+                .join(Module)
+                .filter(
+                    Task.id.in_(requested["task"]),
+                    Module.course_id == course_id,
+                    Task.is_deleted.is_(False),
+                    Module.is_deleted.is_(False),
+                )
             )
             result.update(f"task:{item.id}" for item in ids)
         return result
@@ -72,18 +90,11 @@ class CourseContentRepository:
             CourseGraph.is_deleted.is_(False),
         )
         total = query.count()
-        items = (
-            query.order_by(CourseGraph.version.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        items = query.order_by(CourseGraph.version.desc()).offset(offset).limit(limit).all()
         return items, total
 
     @staticmethod
-    def get_graph_version(
-        db: Session, *, course_id: int, version: int
-    ) -> CourseGraph | None:
+    def get_graph_version(db: Session, *, course_id: int, version: int) -> CourseGraph | None:
         return (
             db.query(CourseGraph)
             .filter(

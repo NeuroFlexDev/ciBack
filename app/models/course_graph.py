@@ -1,10 +1,10 @@
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     Column,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     UniqueConstraint,
 )
@@ -14,7 +14,6 @@ from sqlalchemy.orm import relationship
 from app.database.db import Base
 from app.models.base import BaseModelMixin
 from app.models.domain_enums import CourseGraphStatus
-
 
 JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 
@@ -38,13 +37,9 @@ class CourseGraph(Base, BaseModelMixin):
     nodes = Column(JSON_PAYLOAD, nullable=False, default=list)
     edges = Column(JSON_PAYLOAD, nullable=False, default=list)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    status = Column(
-        String(32), nullable=False, default=CourseGraphStatus.DRAFT.value
-    )
+    status = Column(String(32), nullable=False, default=CourseGraphStatus.DRAFT.value)
 
-    course = relationship(
-        "Course", back_populates="graphs", foreign_keys=[course_id]
-    )
+    course = relationship("Course", back_populates="graphs", foreign_keys=[course_id])
     creator = relationship("User", back_populates="created_graphs")
     approvals = relationship(
         "Approval", back_populates="course_graph", cascade="all, delete-orphan"

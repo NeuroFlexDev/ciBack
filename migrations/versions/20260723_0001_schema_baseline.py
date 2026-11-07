@@ -7,9 +7,8 @@ Create Date: 2026-07-23
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260723_0001"
 down_revision: str | None = None
@@ -70,9 +69,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_course_structure_id", "course_structure", ["id"], unique=False
-    )
+    op.create_index("ix_course_structure_id", "course_structure", ["id"], unique=False)
     op.create_index(
         "ix_course_structure_owner_id",
         "course_structure",
@@ -92,9 +89,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_course_modules_id", "course_modules", ["id"], unique=False)
-    op.create_index(
-        "ix_course_modules_title", "course_modules", ["title"], unique=False
-    )
+    op.create_index("ix_course_modules_title", "course_modules", ["title"], unique=False)
 
     op.create_table(
         "course_versions",
@@ -117,9 +112,7 @@ def upgrade() -> None:
         *_base_mixin_columns(),
         sa.Column("title", sa.String(), nullable=False),
         sa.Column("course_id", sa.Integer(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["course_id"], ["courses.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_modules_id", "modules", ["id"], unique=False)
@@ -143,9 +136,7 @@ def upgrade() -> None:
         sa.Column("module_id", sa.Integer(), nullable=True),
         sa.Column("title", sa.String(), nullable=False),
         sa.Column("description", sa.String(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["module_id"], ["modules.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["module_id"], ["modules.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_lessons_id", "lessons", ["id"], unique=False)
@@ -170,9 +161,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("module_id", sa.Integer(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["module_id"], ["modules.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["module_id"], ["modules.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_tasks_id", "tasks", ["id"], unique=False)
@@ -184,9 +173,7 @@ def upgrade() -> None:
         sa.Column("answers", sa.Text(), nullable=True),
         sa.Column("correct_answer", sa.String(), nullable=False),
         sa.Column("module_id", sa.Integer(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["module_id"], ["modules.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["module_id"], ["modules.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_tests_id", "tests", ["id"], unique=False)
@@ -196,9 +183,7 @@ def upgrade() -> None:
         *_base_mixin_columns(),
         sa.Column("lesson_id", sa.Integer(), nullable=True),
         sa.Column("content", sa.Text(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["lesson_id"], ["lessons.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["lesson_id"], ["lessons.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_theories_id", "theories", ["id"], unique=False)

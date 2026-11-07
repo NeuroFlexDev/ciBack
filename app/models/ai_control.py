@@ -1,5 +1,7 @@
 """Operator configuration shared by the API services and background workers."""
-from sqlalchemy import Column, Integer, JSON
+
+from sqlalchemy import JSON, Column, Integer
+
 from app.database.db import Base
 
 

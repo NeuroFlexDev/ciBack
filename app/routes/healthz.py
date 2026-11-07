@@ -1,14 +1,19 @@
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.orm import Session
+
 from app.database.db import get_db
 
 router = APIRouter()
 
+
 @router.get("/healthz")
 def healthz():
-    return {"ok": True,}
+    return {
+        "ok": True,
+    }
+
 
 @router.get("/readiness")
 def readiness(db: Session = Depends(get_db)):

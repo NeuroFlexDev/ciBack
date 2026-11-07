@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.domain_enums import CourseStatus
+
 
 # Pydantic-модель для создания курса
 class CourseCreate(BaseModel):
@@ -12,12 +13,16 @@ class CourseCreate(BaseModel):
     level: int = Field(..., gt=0, description="ID уровня курса (целое число > 0)")
     language: int = Field(..., gt=0, description="ID языка курса (целое число > 0)")
 
+
 # Pydantic-модель для обновления курса
 class CourseUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, description="Новое название курса")
     description: Optional[str] = Field(None, min_length=1, description="Новое описание курса")
     level: Optional[int] = Field(None, gt=0, description="Новый ID уровня курса (целое число > 0)")
-    language: Optional[int] = Field(None, gt=0, description="Новый ID языка курса (целое число > 0)")
+    language: Optional[int] = Field(
+        None, gt=0, description="Новый ID языка курса (целое число > 0)"
+    )
+
 
 # Pydantic-модель для ответа
 class CourseResponse(BaseModel):

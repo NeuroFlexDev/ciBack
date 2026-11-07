@@ -1,7 +1,7 @@
+from app.api_catalog import app
 from app.models.document import Document
 from app.services.file_storage import LocalFileStorage, get_file_storage
 from app.services.pipeline_service import PipelineService
-from app.api_catalog import app
 from tests.factories import make_course
 
 
@@ -62,7 +62,5 @@ def test_replacement_upload_switches_current_version_only_after_indexing(
     db_session.refresh(second)
     assert (first.is_current, second.is_current) == (False, True)
 
-    listed = client.get(
-        f"/api/courses/{course.id}/documents", headers=auth_headers
-    ).json()
+    listed = client.get(f"/api/courses/{course.id}/documents", headers=auth_headers).json()
     assert [item["id"] for item in listed["items"]] == [second_id]

@@ -1,10 +1,9 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.database.db import Base
 from app.models.base import BaseModelMixin
-
 
 JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 

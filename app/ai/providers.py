@@ -1,4 +1,5 @@
 """Credential isolation and shared provider circuits for OpenAI-compatible text APIs."""
+
 from __future__ import annotations
 
 import hashlib
@@ -9,8 +10,8 @@ import time
 from fastapi import HTTPException
 from redis import Redis, RedisError
 
-from app.core.config import AIProvider, settings
 from app.ai import control
+from app.core.config import AIProvider, settings
 
 
 class AIUnavailable(HTTPException):
@@ -20,8 +21,14 @@ class AIUnavailable(HTTPException):
 
 
 def environment_registry() -> dict[str, AIProvider]:
-    providers = {"vsellm": AIProvider(id="vsellm", base_url=settings.VSELLM_BASE_URL,
-                 api_key_env="VSELLM_API_KEY", timeout_seconds=settings.AI_REQUEST_TIMEOUT_SECONDS)}
+    providers = {
+        "vsellm": AIProvider(
+            id="vsellm",
+            base_url=settings.VSELLM_BASE_URL,
+            api_key_env="VSELLM_API_KEY",
+            timeout_seconds=settings.AI_REQUEST_TIMEOUT_SECONDS,
+        )
+    }
     providers.update({item.id: item for item in settings.AI_PROVIDERS})
     return providers
 
@@ -43,6 +50,7 @@ def credential(provider: AIProvider) -> str:
     if provider._managed:
         if provider._sealed_key:
             from app.services.integration_secrets import unseal
+
             try:
                 sealed = unseal(provider._sealed_key)
                 if sealed["id"] == provider.id and sealed["endpoint"] == str(provider.base_url):
@@ -52,7 +60,11 @@ def credential(provider: AIProvider) -> str:
             return ""
         if provider.api_key_env:
             baseline = environment_registry().get(provider.id)
-            if not baseline or baseline.base_url != provider.base_url or baseline.api_key_env != provider.api_key_env:
+            if (
+                not baseline
+                or baseline.base_url != provider.base_url
+                or baseline.api_key_env != provider.api_key_env
+            ):
                 return ""
     if not provider.api_key_env:
         return "local-no-key" if provider.local else ""
@@ -63,13 +75,18 @@ def credential(provider: AIProvider) -> str:
 
 
 def configured(provider: AIProvider) -> bool:
-    return provider.enabled and (not control.policy()["local_only"] or provider.local) and bool(credential(provider))
+    return (
+        provider.enabled
+        and (not control.policy()["local_only"] or provider.local)
+        and bool(credential(provider))
+    )
 
 
 def client_options(provider: AIProvider) -> dict:
     options = {"default_headers": {"OpenAI-Project": provider.project}} if provider.project else {}
     if provider._managed:
         from app.ai.managed_http import client
+
         options["http_client"] = client(provider)
     return options
 

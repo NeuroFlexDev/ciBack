@@ -52,8 +52,15 @@ class LangChainEngine:
         expect_json: bool = False,
     ) -> dict[str, Any]:
         from langchain_core.prompt_values import ChatPromptValue
-        text = (self.llm | StrOutputParser()).invoke(ChatPromptValue(messages=[
-            SystemMessage(content="Ты помощник Лерниум. Учитывай всю историю диалога. Не выдумывай факты."),
-            *_lc_messages(history),
-        ]))
+
+        text = (self.llm | StrOutputParser()).invoke(
+            ChatPromptValue(
+                messages=[
+                    SystemMessage(
+                        content="Ты помощник Лерниум. Учитывай всю историю диалога. Не выдумывай факты."
+                    ),
+                    *_lc_messages(history),
+                ]
+            )
+        )
         return {"text": text}

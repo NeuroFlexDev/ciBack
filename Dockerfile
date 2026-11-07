@@ -24,9 +24,11 @@ COPY requirements.txt .
 # The default deployment uses VSELLM embeddings; no CUDA/PyTorch download is needed.
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --upgrade --force-reinstall \
-        "setuptools==84.0.0" "wheel>=0.46.2" "jaraco.context>=6.1.0"
+        "setuptools==84.1.0" "wheel>=0.46.2" "jaraco.context>=6.1.0"
 
 # Bundle tokenizer ranks once; runtime prompt accounting never downloads data.
+# This is a tokenizer data cache directory, not a credential.
+# hadolint ignore=DL3064
 ENV TIKTOKEN_CACHE_DIR=/app/tokenizer_cache
 RUN python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
 
@@ -41,6 +43,6 @@ RUN node -e "const {Resvg}=require('./pdf_runtime/node_modules/@resvg/resvg-js')
 
 # Запускаем uvicorn (FastAPI), который слушает порт 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/healthz', timeout=5)" || exit 1
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/healthz', timeout=5)"]
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

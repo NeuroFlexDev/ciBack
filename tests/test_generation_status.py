@@ -56,7 +56,11 @@ def test_generation_status_contract(
 ):
     course = make_course(db_session, owner_id=auth_user.id)
     run = _run(
-        db_session, auth_user, course, status=status, current_stage=stage,
+        db_session,
+        auth_user,
+        course,
+        status=status,
+        current_stage=stage,
         progress_percent=progress,
     )
 
@@ -82,10 +86,16 @@ def test_generation_status_contract(
 def test_failed_status_exposes_only_safe_error(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id)
     run = _run(
-        db_session, auth_user, course, status="failed",
-        current_stage="structure_building", progress_percent=40,
-        error="internal traceback text", error_code="llm_timeout",
-        error_message="Не удалось завершить генерацию курса.", retryable=True,
+        db_session,
+        auth_user,
+        course,
+        status="failed",
+        current_stage="structure_building",
+        progress_percent=40,
+        error="internal traceback text",
+        error_code="llm_timeout",
+        error_message="Не удалось завершить генерацию курса.",
+        retryable=True,
         finished_at=datetime.utcnow(),
     )
 
@@ -102,7 +112,14 @@ def test_failed_status_exposes_only_safe_error(client, db_session, auth_user, au
 
 def test_polling_is_persisted_and_does_not_create_run(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id)
-    run = _run(db_session, auth_user, course, status="running", current_stage="lesson_writing", progress_percent=80)
+    run = _run(
+        db_session,
+        auth_user,
+        course,
+        status="running",
+        current_stage="lesson_writing",
+        progress_percent=80,
+    )
     count = db_session.query(GenerationRun).count()
     db_session.expire_all()
 
@@ -113,7 +130,8 @@ def test_polling_is_persisted_and_does_not_create_run(client, db_session, auth_u
 
 def test_foreign_and_unknown_status_are_404(client, db_session, auth_user, auth_headers):
     foreign = User(email="status-foreign@example.com", password_hash=hash_password("password123"))
-    db_session.add(foreign); db_session.commit()
+    db_session.add(foreign)
+    db_session.commit()
     course = make_course(db_session, owner_id=foreign.id)
     run = _run(db_session, foreign, course)
 
@@ -121,20 +139,39 @@ def test_foreign_and_unknown_status_are_404(client, db_session, auth_user, auth_
     assert client.get("/api/generation-runs/999999", headers=auth_headers).status_code == 404
 
 
-def test_retry_creates_new_run_from_immutable_snapshot(client, db_session, auth_user, auth_headers, monkeypatch):
+def test_retry_creates_new_run_from_immutable_snapshot(
+    client, db_session, auth_user, auth_headers, monkeypatch
+):
     course = make_course(db_session, owner_id=auth_user.id)
     document = Document(
-        storage_key="retry.txt", owner_id=auth_user.id, course_id=course.id,
-        version=2, status="indexed", content_hash="retry-hash", source_type="upload",
-        original_filename="retry.txt", mime_type="text/plain", size_bytes=5,
+        storage_key="retry.txt",
+        owner_id=auth_user.id,
+        course_id=course.id,
+        version=2,
+        status="indexed",
+        content_hash="retry-hash",
+        source_type="upload",
+        original_filename="retry.txt",
+        mime_type="text/plain",
+        size_bytes=5,
     )
-    db_session.add(document); db_session.commit(); db_session.refresh(document)
+    db_session.add(document)
+    db_session.commit()
+    db_session.refresh(document)
     snapshot = [{"document_id": document.id, "version": 2, "content_hash": "retry-hash"}]
     original = _run(
-        db_session, auth_user, course, status="failed", current_stage="structure_building",
-        progress_percent=40, retryable=True, error_code="llm_timeout",
-        error_message="Safe error", input_docs=snapshot,
-        input_documents_snapshot=snapshot, settings_snapshot={"lesson_count": 3},
+        db_session,
+        auth_user,
+        course,
+        status="failed",
+        current_stage="structure_building",
+        progress_percent=40,
+        retryable=True,
+        error_code="llm_timeout",
+        error_message="Safe error",
+        input_docs=snapshot,
+        input_documents_snapshot=snapshot,
+        settings_snapshot={"lesson_count": 3},
     )
     queued = []
     monkeypatch.setattr("app.routes.pipeline.enqueue_generation", queued.append)
@@ -152,7 +189,9 @@ def test_retry_creates_new_run_from_immutable_snapshot(client, db_session, auth_
     assert original.status == "queued"
 
 
-def test_retry_rejects_nonretryable_and_changed_document(client, db_session, auth_user, auth_headers):
+def test_retry_rejects_nonretryable_and_changed_document(
+    client, db_session, auth_user, auth_headers
+):
     course = make_course(db_session, owner_id=auth_user.id)
     run = _run(db_session, auth_user, course, status="failed", retryable=False)
     response = client.post(f"/api/generation-runs/{run.id}/retry", headers=auth_headers)
@@ -178,18 +217,34 @@ def test_retry_rejects_when_course_has_active_run(client, db_session, auth_user,
     assert response.json()["detail"]["code"] == "generation_run_active"
 
 
-def test_retry_queue_failure_preserves_paused_attempt(client, db_session, auth_user, auth_headers, monkeypatch):
+def test_retry_queue_failure_preserves_paused_attempt(
+    client, db_session, auth_user, auth_headers, monkeypatch
+):
     course = make_course(db_session, owner_id=auth_user.id)
     document = Document(
-        storage_key="queue.txt", owner_id=auth_user.id, course_id=course.id,
-        version=1, status="indexed", content_hash="queue-hash", source_type="upload",
-        original_filename="queue.txt", mime_type="text/plain", size_bytes=5,
+        storage_key="queue.txt",
+        owner_id=auth_user.id,
+        course_id=course.id,
+        version=1,
+        status="indexed",
+        content_hash="queue-hash",
+        source_type="upload",
+        original_filename="queue.txt",
+        mime_type="text/plain",
+        size_bytes=5,
     )
-    db_session.add(document); db_session.commit(); db_session.refresh(document)
+    db_session.add(document)
+    db_session.commit()
+    db_session.refresh(document)
     snapshot = [{"document_id": document.id, "version": 1, "content_hash": "queue-hash"}]
     original = _run(
-        db_session, auth_user, course, status="failed", retryable=True,
-        input_docs=snapshot, input_documents_snapshot=snapshot,
+        db_session,
+        auth_user,
+        course,
+        status="failed",
+        retryable=True,
+        input_docs=snapshot,
+        input_documents_snapshot=snapshot,
     )
     monkeypatch.setattr(
         "app.routes.pipeline.enqueue_generation",
@@ -201,5 +256,7 @@ def test_retry_queue_failure_preserves_paused_attempt(client, db_session, auth_u
     assert response.status_code == 202
     retry = db_session.get(GenerationRun, original.id)
     assert (retry.status, retry.error_code, retry.retryable) == (
-        "paused", "queue_unavailable", True
+        "paused",
+        "queue_unavailable",
+        True,
     )

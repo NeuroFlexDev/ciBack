@@ -1,7 +1,10 @@
+from typing import List, Optional
+
 from sqlalchemy.orm import Session
+
 from app.models.lesson import Lesson
 from app.models.module import Module
-from typing import Optional, List
+
 
 class LessonRepository:
     @staticmethod
@@ -10,7 +13,13 @@ class LessonRepository:
         Добавляет новый урок к модулю конкретного курса.
         Проверяет, что модуль существует и принадлежит указанному курсу.
         """
-        module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id, Module.is_deleted == False).first()
+        module = (
+            db.query(Module)
+            .filter(
+                Module.id == module_id, Module.course_id == course_id, Module.is_deleted.is_(False)
+            )
+            .first()
+        )
         if not module:
             raise ValueError("Module not found for given course")
 
@@ -29,7 +38,13 @@ class LessonRepository:
         """
         Возвращает список всех уроков для модуля конкретного курса.
         """
-        module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id, Module.is_deleted == False).first()
+        module = (
+            db.query(Module)
+            .filter(
+                Module.id == module_id, Module.course_id == course_id, Module.is_deleted.is_(False)
+            )
+            .first()
+        )
         if not module:
             raise ValueError("Module not found for given course")
         return module.lessons
@@ -39,7 +54,7 @@ class LessonRepository:
         """
         Возвращает данные урока по его ID.
         """
-        return db.query(Lesson).filter(Lesson.id == lesson_id, Lesson.is_deleted == False).first()
+        return db.query(Lesson).filter(Lesson.id == lesson_id, Lesson.is_deleted.is_(False)).first()
 
     @staticmethod
     def update_lesson(db: Session, lesson: Lesson, update_data: dict) -> Lesson:

@@ -1,4 +1,5 @@
 """Bounded provider image responses; URL downloads never follow redirects or carry credentials."""
+
 from __future__ import annotations
 
 import base64
@@ -18,7 +19,12 @@ class ImageResultError(ValueError):
 def generation_options(model: str) -> dict:
     mode = settings.IMAGE_API_MODE
     if mode == "auto":
-        mode = "gpt_image" if settings.IMAGE_PROVIDER == "vsellm" or model.rsplit("/", 1)[-1].startswith("gpt-image-") else "openai"
+        mode = (
+            "gpt_image"
+            if settings.IMAGE_PROVIDER == "vsellm"
+            or model.rsplit("/", 1)[-1].startswith("gpt-image-")
+            else "openai"
+        )
     common = {"model": model, "n": 1, "size": "1024x1024"}
     # GPT Image always returns base64 and rejects response_format. Keep the
     # priced quality explicit; never silently upgrade to a more expensive tier.
@@ -28,7 +34,9 @@ def generation_options(model: str) -> dict:
 
 
 def public_addresses(host: str) -> list[str]:
-    addresses = list(dict.fromkeys(item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)))
+    addresses = list(
+        dict.fromkeys(item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM))
+    )
     if not addresses or any(not ipaddress.ip_address(ip).is_global for ip in addresses):
         raise ImageResultError("image_url_blocked")
     return addresses
@@ -60,7 +68,14 @@ def download_image(url: str, *, timeout: int, allowed_hosts: list[str] | None = 
         allowed = {entry.lower() for entry in settings.IMAGE_DOWNLOAD_HOSTS}
         if allowed_hosts is not None:
             allowed &= {entry.lower() for entry in allowed_hosts}
-        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment or parsed.port not in {None, 443} or host not in allowed:
+        if (
+            parsed.scheme != "https"
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+            or parsed.port not in {None, 443}
+            or host not in allowed
+        ):
             raise ImageResultError("image_url_blocked")
         addresses = public_addresses(host)
     except (ValueError, OSError) as exc:
@@ -69,10 +84,16 @@ def download_image(url: str, *, timeout: int, allowed_hosts: list[str] | None = 
     try:
         # No Authorization/Cookie, proxy environment, redirects, decompression,
         # user-provided headers, file:// or external URL from lesson content.
-        connection.request("GET", (parsed.path or "/") + ("?" + parsed.query if parsed.query else ""),
-                           headers={"Accept": "image/png,image/jpeg,image/webp", "Accept-Encoding": "identity"})
+        connection.request(
+            "GET",
+            (parsed.path or "/") + ("?" + parsed.query if parsed.query else ""),
+            headers={"Accept": "image/png,image/jpeg,image/webp", "Accept-Encoding": "identity"},
+        )
         response = connection.getresponse()
-        if response.status != 200 or response.getheader("Content-Encoding", "identity") != "identity":
+        if (
+            response.status != 200
+            or response.getheader("Content-Encoding", "identity") != "identity"
+        ):
             raise ImageResultError("image_download_failed")
         length = response.getheader("Content-Length")
         if length and (not length.isdigit() or int(length) > settings.IMAGE_MAX_BYTES):

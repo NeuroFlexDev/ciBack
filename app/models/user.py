@@ -16,7 +16,9 @@ class User(Base):
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
     is_admin = Column(Boolean, nullable=False, default=False, server_default="false")
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
-    organization_role = Column(String(16), nullable=False, default="member", server_default="member")
+    organization_role = Column(
+        String(16), nullable=False, default="member", server_default="member"
+    )
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     # Membership tombstone: keep identity and historical learning relations intact.
     organization_removed_at = Column(DateTime(timezone=True), nullable=True)

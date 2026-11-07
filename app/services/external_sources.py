@@ -11,9 +11,12 @@ def search_arxiv(query: str, lang: str = "en", limit: int = 5) -> list[str]:
         return [f"{entry.title.strip()}\n{entry.summary.strip()}" for entry in feed.entries]
     except Exception as e:
         raise RuntimeError(f"Ошибка поиска в arXiv: {e}")
+
+
 # вызов функции под тест
 def arxiv_search(*args, **kwargs):
     return search_arxiv(*args, **kwargs)
+
 
 # === CrossRef ===
 def search_crossref(query: str, lang: str = "en", limit: int = 5) -> list[str]:
@@ -65,9 +68,11 @@ def search_openalex(query: str, limit: int = 5) -> list[str]:
 def openalex_search(*args, **kwargs):
     return search_openalex(*args, **kwargs)
 
+
 # вызов функции под тест
 def crossref_search(*args, **kwargs):
     return search_crossref(*args, **kwargs)
+
 
 # === Aggregator ===
 def aggregated_search(query: str, source: str = "all", lang: str = "en") -> list[str]:

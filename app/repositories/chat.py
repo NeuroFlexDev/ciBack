@@ -8,22 +8,30 @@ from app.services.course_access import course_access_filter, related_course_acce
 class ChatRepository:
     @staticmethod
     def _active_chat(db: Session, chat_id: int, user_id: int) -> Chat:
-        chat = db.query(Chat).filter(
-            Chat.id == chat_id,
-            Chat.owner_id == user_id,
-            (Chat.course_id.is_(None) | related_course_access(Chat.course_id, user_id)),
-            Chat.status == "active",
-            Chat.is_deleted.is_(False),
-        ).first()
+        chat = (
+            db.query(Chat)
+            .filter(
+                Chat.id == chat_id,
+                Chat.owner_id == user_id,
+                (Chat.course_id.is_(None) | related_course_access(Chat.course_id, user_id)),
+                Chat.status == "active",
+                Chat.is_deleted.is_(False),
+            )
+            .first()
+        )
         if chat is None:
             raise KeyError("chat_not_found")
         return chat
 
     @staticmethod
     def create_chat(db: Session, user_id: int, name: str, course_id: int | None = None) -> Chat:
-        if course_id is not None and db.query(Course.id).filter(
-            Course.id == course_id, course_access_filter(user_id)
-        ).first() is None:
+        if (
+            course_id is not None
+            and db.query(Course.id)
+            .filter(Course.id == course_id, course_access_filter(user_id))
+            .first()
+            is None
+        ):
             raise KeyError("course_not_found")
         chat = Chat(owner_id=user_id, course_id=course_id, title=name, status="active")
         db.add(chat)
@@ -41,11 +49,19 @@ class ChatRepository:
         )
         if course_id is not None:
             query = query.filter(Chat.course_id == course_id)
-        return query.order_by(Chat.created_at.desc(), Chat.id.desc()).offset(offset).limit(limit).all()
+        return (
+            query.order_by(Chat.created_at.desc(), Chat.id.desc()).offset(offset).limit(limit).all()
+        )
 
     @staticmethod
     def get_history(
-        db: Session, chat_id: int, user_id: int, *, limit: int | None = None, offset: int = 0, newest: bool = False
+        db: Session,
+        chat_id: int,
+        user_id: int,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        newest: bool = False,
     ) -> list[ChatMessage]:
         ChatRepository._active_chat(db, chat_id, user_id)
         query = db.query(ChatMessage).filter(
@@ -64,22 +80,37 @@ class ChatRepository:
         db: Session, chat_id: int, user_id: int, limit: int
     ) -> list[ChatMessage]:
         ChatRepository._active_chat(db, chat_id, user_id)
-        messages = db.query(ChatMessage).filter(
-            ChatMessage.chat_id == chat_id, ChatMessage.is_deleted.is_(False)
-        ).order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(limit).all()
+        messages = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.chat_id == chat_id, ChatMessage.is_deleted.is_(False))
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .limit(limit)
+            .all()
+        )
         return list(reversed(messages))
 
     @staticmethod
     def add_message(
-        db: Session, chat_id: int, role: str, content: str, *,
-        model: str | None = None, metadata: dict | None = None,
-        prompt_tokens: int | None = None, completion_tokens: int | None = None,
+        db: Session,
+        chat_id: int,
+        role: str,
+        content: str,
+        *,
+        model: str | None = None,
+        metadata: dict | None = None,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
         total_tokens: int | None = None,
     ) -> ChatMessage:
         message = ChatMessage(
-            chat_id=chat_id, role=role, content=content, model=model,
-            message_metadata=metadata or {}, prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens, total_tokens=total_tokens,
+            chat_id=chat_id,
+            role=role,
+            content=content,
+            model=model,
+            message_metadata=metadata or {},
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
         )
         db.add(message)
         db.commit()

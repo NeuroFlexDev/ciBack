@@ -1,4 +1,5 @@
 """Request-local trust boundary shared by HTTP authentication and MFA."""
+
 from contextvars import ContextVar
 
 surface = ContextVar("lernium_surface", default="platform")

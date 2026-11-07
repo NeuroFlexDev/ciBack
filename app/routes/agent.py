@@ -1,15 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.agents.course_agent import get_course_agent
 from app.database.db import get_db
 from app.models.course import Course
-from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.theory import Theory
 from app.models.user import User
-from app.agents.course_agent import get_course_agent
 from app.services.auth_service import get_current_user
+from app.services.course_access import course_access_filter
 
 router = APIRouter()
 

@@ -4,15 +4,15 @@ from pathlib import Path
 import pytest
 from fastapi import UploadFile
 
+from app.api_catalog import app
 from app.core.security import create_access_token, hash_password
 from app.models.course_graph import CourseGraph
 from app.models.document import Document
-from app.models.user import User
 from app.models.module import Module
+from app.models.user import User
 from app.repositories.course_content import CourseContentRepository
 from app.services.course_content_service import CourseContentService
 from app.services.file_storage import LocalFileStorage, get_file_storage
-from app.api_catalog import app
 from tests.factories import make_course
 
 
@@ -32,18 +32,14 @@ def _other_headers(db_session):
     return user, {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
-def test_canvas_empty_versioned_and_conflict(
-    client, db_session, auth_user, auth_headers
-):
+def test_canvas_empty_versioned_and_conflict(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id)
     first_module = Module(course_id=course.id, title="First")
     second_module = Module(course_id=course.id, title="Second")
     db_session.add_all([first_module, second_module])
     db_session.commit()
 
-    response = client.get(
-        f"/api/courses/{course.id}/canvas", headers=auth_headers
-    )
+    response = client.get(f"/api/courses/{course.id}/canvas", headers=auth_headers)
     assert response.status_code == 200
     assert response.json() == {
         "course_id": course.id,
@@ -63,7 +59,13 @@ def test_canvas_empty_versioned_and_conflict(
             {"id": f"module:{first_module.id}", "type": "module", "position": {"x": 10, "y": 20}},
             {"id": f"module:{second_module.id}", "type": "module", "data": {"label": "B"}},
         ],
-        "edges": [{"id": "a-b", "source": f"module:{first_module.id}", "target": f"module:{second_module.id}"}],
+        "edges": [
+            {
+                "id": "a-b",
+                "source": f"module:{first_module.id}",
+                "target": f"module:{second_module.id}",
+            }
+        ],
     }
     response = client.put(
         f"/api/courses/{course.id}/canvas",
@@ -85,7 +87,11 @@ def test_canvas_empty_versioned_and_conflict(
 
     second = client.put(
         f"/api/courses/{course.id}/canvas",
-        json={"version": 1, "nodes": [{"id": f"module:{first_module.id}", "type": "module"}], "edges": []},
+        json={
+            "version": 1,
+            "nodes": [{"id": f"module:{first_module.id}", "type": "module"}],
+            "edges": [],
+        },
         headers=auth_headers,
     )
     assert second.status_code == 200
@@ -102,12 +108,11 @@ def test_canvas_empty_versioned_and_conflict(
     assert graphs[1].status == "published"
 
 
-def test_canvas_validation_access_and_auth(
-    client, db_session, auth_user, auth_headers
-):
+def test_canvas_validation_access_and_auth(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id)
     module = Module(course_id=course.id, title="M")
-    db_session.add(module); db_session.commit()
+    db_session.add(module)
+    db_session.commit()
     other, other_headers = _other_headers(db_session)
 
     invalid = client.put(
@@ -121,12 +126,7 @@ def test_canvas_validation_access_and_auth(
     )
     assert invalid.status_code == 422
     assert client.get(f"/api/courses/{course.id}/canvas").status_code == 401
-    assert (
-        client.get(
-            f"/api/courses/{course.id}/canvas", headers=other_headers
-        ).status_code
-        == 404
-    )
+    assert client.get(f"/api/courses/{course.id}/canvas", headers=other_headers).status_code == 404
 
 
 def test_canvas_rejects_wrong_prefix_foreign_and_deleted_entities(
@@ -137,7 +137,8 @@ def test_canvas_rejects_wrong_prefix_foreign_and_deleted_entities(
     owned = Module(course_id=course.id, title="Owned")
     foreign = Module(course_id=other_course.id, title="Foreign")
     deleted = Module(course_id=course.id, title="Deleted", is_deleted=True)
-    db_session.add_all([owned, foreign, deleted]); db_session.commit()
+    db_session.add_all([owned, foreign, deleted])
+    db_session.commit()
 
     wrong_prefix = client.put(
         f"/api/courses/{course.id}/canvas",
@@ -148,21 +149,22 @@ def test_canvas_rejects_wrong_prefix_foreign_and_deleted_entities(
     for item in (foreign, deleted):
         response = client.put(
             f"/api/courses/{course.id}/canvas",
-            json={"version": 0, "nodes": [{"id": f"module:{item.id}", "type": "module"}], "edges": []},
+            json={
+                "version": 0,
+                "nodes": [{"id": f"module:{item.id}", "type": "module"}],
+                "edges": [],
+            },
             headers=auth_headers,
         )
         assert response.status_code == 422
 
 
-def test_canvas_version_history_and_detail(
-    client, db_session, auth_user, auth_headers
-):
+def test_canvas_version_history_and_detail(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id)
     module = Module(course_id=course.id, title="M")
-    db_session.add(module); db_session.commit()
-    empty = client.get(
-        f"/api/courses/{course.id}/canvas/versions", headers=auth_headers
-    )
+    db_session.add(module)
+    db_session.commit()
+    empty = client.get(f"/api/courses/{course.id}/canvas/versions", headers=auth_headers)
     assert empty.status_code == 200
     assert empty.json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
 
@@ -178,7 +180,13 @@ def test_canvas_version_history_and_detail(
     assert (
         client.put(
             f"/api/courses/{course.id}/canvas",
-            json={"version": 1, "nodes": [{"id": f"module:{module.id}", "type": "module", "data": {"label": "Second"}}], "edges": []},
+            json={
+                "version": 1,
+                "nodes": [
+                    {"id": f"module:{module.id}", "type": "module", "data": {"label": "Second"}}
+                ],
+                "edges": [],
+            },
             headers=auth_headers,
         ).status_code
         == 200
@@ -197,16 +205,12 @@ def test_canvas_version_history_and_detail(
     assert "nodes" not in body["items"][0]
     assert "edges" not in body["items"][0]
 
-    previous = client.get(
-        f"/api/courses/{course.id}/canvas/versions/1", headers=auth_headers
-    )
+    previous = client.get(f"/api/courses/{course.id}/canvas/versions/1", headers=auth_headers)
     assert previous.status_code == 200
     assert previous.json()["nodes"] == first_nodes
     assert previous.json()["is_current"] is False
 
-    current = client.get(
-        f"/api/courses/{course.id}/canvas/versions/2", headers=auth_headers
-    )
+    current = client.get(f"/api/courses/{course.id}/canvas/versions/2", headers=auth_headers)
     assert current.json()["is_current"] is True
     assert (
         client.get(
@@ -222,10 +226,15 @@ def test_canvas_history_hides_deleted_and_foreign_versions(
 ):
     course = make_course(db_session, owner_id=auth_user.id)
     module = Module(course_id=course.id, title="M")
-    db_session.add(module); db_session.commit()
+    db_session.add(module)
+    db_session.commit()
     client.put(
         f"/api/courses/{course.id}/canvas",
-        json={"version": 0, "nodes": [{"id": f"module:{module.id}", "type": "module"}], "edges": []},
+        json={
+            "version": 0,
+            "nodes": [{"id": f"module:{module.id}", "type": "module"}],
+            "edges": [],
+        },
         headers=auth_headers,
     )
     graph = (
@@ -237,9 +246,7 @@ def test_canvas_history_hides_deleted_and_foreign_versions(
     db_session.commit()
     _, other_headers = _other_headers(db_session)
 
-    history = client.get(
-        f"/api/courses/{course.id}/canvas/versions", headers=auth_headers
-    )
+    history = client.get(f"/api/courses/{course.id}/canvas/versions", headers=auth_headers)
     assert history.json()["total"] == 0
     assert (
         client.get(
@@ -336,10 +343,7 @@ def test_document_upload_rejections_and_isolation(
     assert empty.status_code == 400
 
     assert (
-        client.get(
-            f"/api/courses/{course.id}/documents", headers=other_headers
-        ).status_code
-        == 404
+        client.get(f"/api/courses/{course.id}/documents", headers=other_headers).status_code == 404
     )
     assert (
         client.post(

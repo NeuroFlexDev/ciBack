@@ -1,5 +1,7 @@
 import json
+
 from cryptography.fernet import Fernet
+
 from app.core.integration_config import integration_settings
 
 

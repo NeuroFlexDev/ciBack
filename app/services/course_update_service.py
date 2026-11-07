@@ -42,9 +42,7 @@ class CourseUpdateService:
         if document.supersedes_document_id is None:
             return None
         previous = db.get(Document, document.supersedes_document_id)
-        course = PipelineRepository.get_owned_course(
-            db, document.course_id, document.owner_id
-        )
+        course = PipelineRepository.get_owned_course(db, document.course_id, document.owner_id)
         if previous is None or course is None or course.current_graph is None:
             return None
         if previous.content_hash == document.content_hash:
@@ -81,26 +79,18 @@ class CourseUpdateService:
                     quote=link.excerpt,
                 ),
             )
-        current_catalog = build_source_catalog(
-            [document], max_chars=60_000
-        )
+        current_catalog = build_source_catalog([document], max_chars=60_000)
         if not current_catalog:
             return None
 
         affected_node_ids = sorted({item.node_id for item in links})
-        graph_nodes = {
-            str(item["id"]): item for item in course.current_graph.nodes
-        }
+        graph_nodes = {str(item["id"]): item for item in course.current_graph.nodes}
         logical_graph_nodes: dict[str, list[str]] = {}
         for persisted_id, node in graph_nodes.items():
             logical_id = node.get("logical_id")
             if isinstance(logical_id, str):
                 logical_graph_nodes.setdefault(logical_id, []).append(persisted_id)
-        affected_nodes = [
-            graph_nodes[item]
-            for item in affected_node_ids
-            if item in graph_nodes
-        ]
+        affected_nodes = [graph_nodes[item] for item in affected_node_ids if item in graph_nodes]
         pipeline_artifacts = []
         artifact_logical_ids: set[str] = set()
         cited_artifact_ids: set[str] = set()
@@ -121,9 +111,12 @@ class CourseUpdateService:
 
         source_run_id = next((item.run_id for item in links if item.run_id), None)
         if source_run_id is not None:
-            stored_artifacts = PipelineRepository.list_agent_artifacts(
-                db, run_id=source_run_id, owner_id=document.owner_id
-            ) or []
+            stored_artifacts = (
+                PipelineRepository.list_agent_artifacts(
+                    db, run_id=source_run_id, owner_id=document.owner_id
+                )
+                or []
+            )
             pipeline_artifacts = [
                 {
                     "agent": item.agent,
@@ -135,16 +128,19 @@ class CourseUpdateService:
                 if item.status == "completed"
             ]
             collect(pipeline_artifacts)
-        affected_artifact_ids = sorted(
-            set(affected_node_ids) | cited_artifact_ids
-        )
+        affected_artifact_ids = sorted(set(affected_node_ids) | cited_artifact_ids)
         runtime = AgentRuntime(
             db=db,
             run_id=run.id,
             course_id=course.id,
             generate=generate,
         )
-        runtime.register_sources([*[item.model_dump(mode="json") for item in previous_sources.values()], *current_catalog])
+        runtime.register_sources(
+            [
+                *[item.model_dump(mode="json") for item in previous_sources.values()],
+                *current_catalog,
+            ]
+        )
         artifact = runtime.execute(
             agent="update",
             artifact="update_proposal",
@@ -196,9 +192,7 @@ class CourseUpdateService:
             if item.affected_artifact_id not in known_node_ids
         }
         if invented:
-            raise ValueError(
-                f"Update Agent referenced unknown course nodes: {sorted(invented)}"
-            )
+            raise ValueError(f"Update Agent referenced unknown course nodes: {sorted(invented)}")
         proposed_ids: set[str] = set()
         for item in artifact.impacts:
             if item.proposed_action == "no_change":
@@ -221,9 +215,7 @@ class CourseUpdateService:
             source_hashes=[previous.content_hash, document.content_hash],
             affected_node_ids=proposed_ids,
             proposed_diff={
-                "operations": [
-                    item.model_dump(mode="json") for item in artifact.proposed_diff
-                ],
+                "operations": [item.model_dump(mode="json") for item in artifact.proposed_diff],
                 "impacts": [item.model_dump(mode="json") for item in artifact.impacts],
                 "requires_human_review": artifact.requires_human_review,
             },

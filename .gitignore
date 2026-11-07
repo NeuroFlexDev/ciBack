@@ -4,11 +4,15 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.lint-tools/
+lint-reports/
+.sqlfluff/
 .coverage
 htmlcov/
 
 # Local virtual environments
 .venv/
+.venv-security/
 node_modules/
 venv/
 env/

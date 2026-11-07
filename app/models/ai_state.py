@@ -1,6 +1,19 @@
 """Tenant-scoped AI cache, usage ledger, conversational memory and embeddings."""
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
+
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
+
 try:
     from pgvector.sqlalchemy import Vector
 except ImportError:  # SQLite-only tooling may omit the production adapter.
@@ -14,14 +27,20 @@ except ImportError:  # SQLite-only tooling may omit the production adapter.
 
         def get_col_spec(self, **kw):
             return f"VECTOR({self.dimensions})"
+
+
 from app.database.db import Base
 
 
 class AIResponseCache(Base):
     __tablename__ = "ai_response_cache"
     key = Column(String(64), primary_key=True)
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    course_id = Column(
+        Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     payload = Column(JSON, nullable=False)
     model = Column(String(255), nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
@@ -30,7 +49,9 @@ class AIResponseCache(Base):
 class AICall(Base):
     __tablename__ = "ai_calls"
     id = Column(Integer, primary_key=True)
-    run_id = Column(Integer, ForeignKey("generation_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    run_id = Column(
+        Integer, ForeignKey("generation_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     agent = Column(String(64), nullable=False)
     model = Column(String(255), nullable=False)
     status = Column(String(32), nullable=False)
@@ -45,7 +66,9 @@ class AICall(Base):
 class ChatMemory(Base):
     __tablename__ = "chat_memory"
     chat_id = Column(Integer, ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True)
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     summary = Column(Text, nullable=False)
     through_message_id = Column(Integer, nullable=False)
 
@@ -54,13 +77,18 @@ class ChunkEmbedding(Base):
     __tablename__ = "chunk_embeddings"
     __table_args__ = (
         UniqueConstraint("chunk_id", "model", name="uq_chunk_embeddings_chunk_model"),
-        Index("ix_chunk_embeddings_embedding_hnsw", "embedding",
-              postgresql_using="hnsw",
-              postgresql_ops={"embedding": "vector_cosine_ops"},
-              postgresql_where=text("embedding IS NOT NULL")),
+        Index(
+            "ix_chunk_embeddings_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_where=text("embedding IS NOT NULL"),
+        ),
     )
     id = Column(Integer, primary_key=True)
-    chunk_id = Column(Integer, ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_id = Column(
+        Integer, ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     model = Column(String(255), nullable=False)
     text_hash = Column(String(64), nullable=False)
     vector = Column(JSON, nullable=False)

@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import JSON, CheckConstraint, Column, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -9,9 +9,7 @@ from app.models.base import BaseModelMixin
 class Chat(Base, BaseModelMixin):
     __tablename__ = "chats"
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('active', 'archived')", name="ck_chats_status"
-        ),
+        CheckConstraint("status IN ('active', 'archived')", name="ck_chats_status"),
         Index("ix_chats_owner_status", "owner_id", "status"),
     )
 

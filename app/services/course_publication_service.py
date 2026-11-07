@@ -58,7 +58,9 @@ class CoursePublicationService:
         return modules, lessons
 
     @staticmethod
-    def _snapshot(db: Session, course: Course, owner_id: int, published_at: datetime, modules: list) -> CourseVersion:
+    def _snapshot(
+        db: Session, course: Course, owner_id: int, published_at: datetime, modules: list
+    ) -> CourseVersion:
         version = CourseVersion(
             course_id=course.id,
             revision=course.content_revision,
@@ -85,50 +87,66 @@ class CoursePublicationService:
             )
             db.add(module_version)
             db.flush()
-            for lesson in sorted((item for item in module.lessons if not item.is_deleted), key=lambda item: (item.position, item.id)):
-                db.add(LessonVersion(
-                    module_version_id=module_version.id,
-                    lesson_id=lesson.id,
-                    revision=lesson.revision,
-                    title=lesson.title,
-                    description=lesson.description,
-                    content=lesson.theory.content,
-                    position=lesson.position,
-                    deleted=False,
-                    created_by=owner_id,
-                ))
-            for test in sorted((item for item in module.tests if not item.is_deleted), key=lambda item: (item.position, item.id)):
-                db.add(TestVersion(
+            for lesson in sorted(
+                (item for item in module.lessons if not item.is_deleted),
+                key=lambda item: (item.position, item.id),
+            ):
+                db.add(
+                    LessonVersion(
+                        module_version_id=module_version.id,
+                        lesson_id=lesson.id,
+                        revision=lesson.revision,
+                        title=lesson.title,
+                        description=lesson.description,
+                        content=lesson.theory.content,
+                        position=lesson.position,
+                        deleted=False,
+                        created_by=owner_id,
+                    )
+                )
+            for test in sorted(
+                (item for item in module.tests if not item.is_deleted),
+                key=lambda item: (item.position, item.id),
+            ):
+                db.add(
+                    TestVersion(
+                        course_version_id=version.id,
+                        module_version_id=module_version.id,
+                        test_id=test.id,
+                        revision=test.revision,
+                        assessment_scope=test.assessment_scope,
+                        module_id=test.module_id,
+                        course_id=test.course_id,
+                        question=test.question,
+                        answers=test.answers or "[]",
+                        correct_answer=test.correct_answer,
+                        position=test.position,
+                        deleted=False,
+                        created_by=owner_id,
+                    )
+                )
+        for test in sorted(
+            (item for item in course.final_tests if not item.is_deleted),
+            key=lambda item: (item.position, item.id),
+        ):
+            db.add(
+                TestVersion(
                     course_version_id=version.id,
-                    module_version_id=module_version.id,
                     test_id=test.id,
                     revision=test.revision,
                     assessment_scope=test.assessment_scope,
-                    module_id=test.module_id,
-                    course_id=test.course_id,
+                    module_id=None,
+                    course_id=course.id,
                     question=test.question,
                     answers=test.answers or "[]",
                     correct_answer=test.correct_answer,
                     position=test.position,
                     deleted=False,
                     created_by=owner_id,
-                ))
-        for test in sorted((item for item in course.final_tests if not item.is_deleted), key=lambda item: (item.position, item.id)):
-            db.add(TestVersion(
-                course_version_id=version.id,
-                test_id=test.id,
-                revision=test.revision,
-                assessment_scope=test.assessment_scope,
-                module_id=None,
-                course_id=course.id,
-                question=test.question,
-                answers=test.answers or "[]",
-                correct_answer=test.correct_answer,
-                position=test.position,
-                deleted=False,
-                created_by=owner_id,
-            ))
+                )
+            )
         from app.services.learning_service import create_publication_snapshot
+
         create_publication_snapshot(db, course, version, modules)
         return version
 
@@ -139,14 +157,25 @@ class CoursePublicationService:
             if course is None:
                 raise HTTPException(status_code=404, detail="Course not found")
             from app.services.feature_access import require_feature
-            require_feature(db, course.organization_id, 'authoring')
+
+            require_feature(db, course.organization_id, "authoring")
             if course.publication_status == "published":
                 from app.models.learning import PublishedLearningContent
-                if db.get(PublishedLearningContent, db.query(CourseVersion.id).filter_by(course_id=course.id, revision=course.content_revision).scalar() or 0) is None:
+
+                if (
+                    db.get(
+                        PublishedLearningContent,
+                        db.query(CourseVersion.id)
+                        .filter_by(course_id=course.id, revision=course.content_revision)
+                        .scalar()
+                        or 0,
+                    )
+                    is None
+                ):
                     # Republish legacy content as a new immutable complete revision;
                     # keep every old version and historical result intact.
                     course.content_revision += 1
-                    course.publication_status = 'draft'
+                    course.publication_status = "draft"
                 else:
                     return {
                         "id": course.id,
@@ -155,12 +184,18 @@ class CoursePublicationService:
                         "revision": course.content_revision,
                     }
             modules, _ = CoursePublicationService._validate(course, db)
-            from app.services.learning_service import validate_publication_approval, validate_assessment_publication
+            from app.services.learning_service import (
+                validate_assessment_publication,
+                validate_publication_approval,
+            )
+
             validate_assessment_publication(db, course, modules)
             validate_publication_approval(db, course, modules)
             import importlib.util
-            if importlib.util.find_spec('app.services.image_service'):
+
+            if importlib.util.find_spec("app.services.image_service"):
                 from app.services.image_service import validate_course_images
+
                 validate_course_images(db, course)
             published_at = datetime.utcnow()
             CoursePublicationService._snapshot(db, course, owner_id, published_at, modules)
@@ -182,21 +217,34 @@ class CoursePublicationService:
             raise
 
     @staticmethod
-    def list_courses(db: Session, owner_id: int, publication_status: str | None, limit: int, offset: int):
-        rows, total = CoursePublicationRepository.list_owned(db, owner_id, publication_status, limit, offset)
-        items = [{
-            "id": course.id,
-            "title": course.name,
-            "description": course.description,
-            "level": int(course.level) if str(course.level).isdigit() else 1,
-            "language": int(course.language) if str(course.language).isdigit() else 1,
-            "publication_status": course.publication_status,
-            "module_count": module_count,
-            "lesson_count": lesson_count,
-            "updated_at": course.updated_at,
-            "published_at": course.published_at,
-            "author_name": (course.owner.full_name or course.owner.username or course.owner.email) if course.owner else None,
-            "position_id": course.position_id,
-            "position_name": course.business_position.name if course.business_position else None,
-        } for course, module_count, lesson_count in rows]
+    def list_courses(
+        db: Session, owner_id: int, publication_status: str | None, limit: int, offset: int
+    ):
+        rows, total = CoursePublicationRepository.list_owned(
+            db, owner_id, publication_status, limit, offset
+        )
+        items = [
+            {
+                "id": course.id,
+                "title": course.name,
+                "description": course.description,
+                "level": int(course.level) if str(course.level).isdigit() else 1,
+                "language": int(course.language) if str(course.language).isdigit() else 1,
+                "publication_status": course.publication_status,
+                "module_count": module_count,
+                "lesson_count": lesson_count,
+                "updated_at": course.updated_at,
+                "published_at": course.published_at,
+                "author_name": (
+                    course.owner.full_name or course.owner.username or course.owner.email
+                )
+                if course.owner
+                else None,
+                "position_id": course.position_id,
+                "position_name": course.business_position.name
+                if course.business_position
+                else None,
+            }
+            for course, module_count, lesson_count in rows
+        ]
         return items, total

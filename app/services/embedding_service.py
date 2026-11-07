@@ -1,10 +1,10 @@
-from app.ai import control as ai_control
 import logging
 from threading import RLock
 
 import faiss
 import numpy as np
 
+from app.ai import control as ai_control
 from app.core.config import settings
 from app.services.vector_store import FaissVectorStore, VectorRecord, VectorStore
 
@@ -25,7 +25,9 @@ def get_model():
     try:
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer(settings.EMBEDDING_MODEL, local_files_only=ai_control.policy()["local_only"])
+        model = SentenceTransformer(
+            settings.EMBEDDING_MODEL, local_files_only=ai_control.policy()["local_only"]
+        )
     except Exception as exc:
         logger.warning("SentenceTransformer недоступен, семантический поиск отключён: %s", exc)
         model = False
@@ -37,13 +39,16 @@ document_vector_store = FaissVectorStore(get_model)
 
 
 from fastapi import Depends
-from app.database.db import get_db
 from sqlalchemy.orm import Session
+
+from app.database.db import get_db
 
 
 def get_vector_store(db: Session = Depends(get_db)) -> VectorStore:
     from app.ai.retrieval import PersistentVectorStore
+
     return PersistentVectorStore(db)
+
 
 def embed_and_add(lesson_id: int, obj_type: str, text: str):
     active_model = get_model()
@@ -52,12 +57,7 @@ def embed_and_add(lesson_id: int, obj_type: str, text: str):
     embedding = active_model.encode([text])[0]
     with _index_lock:
         index.add(np.array([embedding], dtype=np.float32))
-        metadata.append({
-            "kind": "lesson",
-            "lesson_id": lesson_id,
-            "type": obj_type,
-            "text": text
-        })
+        metadata.append({"kind": "lesson", "lesson_id": lesson_id, "type": obj_type, "text": text})
 
 
 def replace_document_embeddings(
@@ -68,9 +68,7 @@ def replace_document_embeddings(
     """Replace a document and deactivate all older in-memory versions."""
     records = []
     for chunk in chunks:
-        embedding_id = (
-            f"document:{document_id}:v{document_version}:chunk:{chunk['chunk_index']}"
-        )
+        embedding_id = f"document:{document_id}:v{document_version}:chunk:{chunk['chunk_index']}"
         records.append(
             VectorRecord(
                 embedding_id=embedding_id,
@@ -91,13 +89,12 @@ def replace_document_embeddings(
                 },
             )
         )
-    return document_vector_store.replace_document(
-        document_id, document_version, records
-    )
+    return document_vector_store.replace_document(document_id, document_version, records)
 
 
 def remove_document_embeddings(document_id: int) -> None:
     document_vector_store.delete_document(document_id)
+
 
 def search(query: str, k: int = 5, allowed_lesson_ids: set[int] | None = None):
     active_model = get_model()
@@ -124,10 +121,7 @@ def search(query: str, k: int = 5, allowed_lesson_ids: set[int] | None = None):
                 continue
             if item.get("kind", "lesson") != "lesson":
                 continue
-            if (
-                allowed_lesson_ids is not None
-                and item.get("lesson_id") not in allowed_lesson_ids
-            ):
+            if allowed_lesson_ids is not None and item.get("lesson_id") not in allowed_lesson_ids:
                 continue
             results.append(item)
             if len(results) == k:

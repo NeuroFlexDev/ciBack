@@ -1,25 +1,28 @@
-import logging
 import json
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, ConfigDict
+
 from app.database.db import get_db
 from app.models.course import Course
-from app.services.course_access import course_access_filter
-from app.models.module import Module
-from app.models.lesson import Lesson
-from app.models.test import Test
-from app.models.task import Task
-from app.models.user import User
-from app.services.auth_service import get_current_user
 from app.models.domain_enums import CourseStatus
+from app.models.lesson import Lesson
+from app.models.module import Module
+from app.models.task import Task
+from app.models.test import Test
+from app.models.user import User
 from app.schemas.course import CourseDraftResponse
-from app.services.course_draft_service import CourseDraftService
 from app.schemas.course_publication import CourseListItem, CoursePublishResponse
+from app.services.auth_service import get_current_user
+from app.services.course_access import course_access_filter
+from app.services.course_draft_service import CourseDraftService
 from app.services.course_publication_service import CoursePublicationService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
 
 # Pydantic-модель для создания курса
 class CourseCreate(BaseModel):
@@ -28,6 +31,7 @@ class CourseCreate(BaseModel):
     level: int = Field(..., gt=0, description="ID уровня курса (целое число > 0)")
     language: int = Field(..., gt=0, description="ID языка курса (целое число > 0)")
 
+
 # Pydantic-модель для обновления курса
 class CourseUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, description="Новое название курса")
@@ -35,6 +39,7 @@ class CourseUpdate(BaseModel):
     level: int | None = Field(None, gt=0, description="Новый ID уровня курса (целое число > 0)")
     language: int | None = Field(None, gt=0, description="Новый ID языка курса (целое число > 0)")
     expected_revision: int | None = Field(default=None, gt=0)
+
 
 # Pydantic-модель для ответа
 class CourseResponse(BaseModel):
@@ -115,9 +120,9 @@ def list_course_drafts(
     current_user: User = Depends(get_current_user),
 ):
     return [
-        draft_response(course)
-        for course in CourseDraftService.list_for_owner(db, current_user.id)
+        draft_response(course) for course in CourseDraftService.list_for_owner(db, current_user.id)
     ]
+
 
 @router.post("/courses/", summary="Создание курса", response_model=CourseResponse)
 def create_course(
@@ -129,6 +134,7 @@ def create_course(
     Создает курс в базе данных.
     """
     from app.services.organization_access import check_course_limit
+
     check_course_limit(db, current_user.id)
     try:
         logger.info("Course creation requested")
@@ -157,6 +163,7 @@ def create_course(
         logger.error("Ошибка при создании курса: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка при создании курса")
 
+
 @router.get("/courses/", summary="Получение всех курсов", response_model=list[CourseListItem])
 def get_all_courses(
     response: Response,
@@ -170,7 +177,9 @@ def get_all_courses(
     Возвращает список всех курсов, сохраненных в базе данных.
     """
     try:
-        items, total = CoursePublicationService.list_courses(db, current_user.id, publication_status, limit, offset)
+        items, total = CoursePublicationService.list_courses(
+            db, current_user.id, publication_status, limit, offset
+        )
         response.headers["X-Total-Count"] = str(total)
         response.headers["X-Limit"] = str(limit)
         response.headers["X-Offset"] = str(offset)
@@ -179,8 +188,16 @@ def get_all_courses(
         logger.error("Ошибка при получении курсов: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка при получении курсов")
 
-@router.post("/courses/{course_id}/publish", response_model=CoursePublishResponse, status_code=200, summary="Publish a ready course")
-def publish_course(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+
+@router.post(
+    "/courses/{course_id}/publish",
+    response_model=CoursePublishResponse,
+    status_code=200,
+    summary="Publish a ready course",
+)
+def publish_course(
+    course_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     return CoursePublicationService.publish(db, course_id, current_user.id)
 
 
@@ -209,22 +226,35 @@ def update_course(
             raise HTTPException(status_code=404, detail="Курс не найден")
         if course.status == "generating":
             raise HTTPException(409, "Дождитесь завершения генерации перед редактированием курса")
-        if course_update.expected_revision is not None and course_update.expected_revision != course.content_revision:
-            raise HTTPException(409, {"code": "revision_conflict", "message": "Параметры курса изменены в другой вкладке",
-                "expected_revision": course_update.expected_revision, "current_revision": course.content_revision})
-        
-        update_data = course_update.model_dump(exclude_unset=True, exclude_none=True, exclude={"expected_revision"})
+        if (
+            course_update.expected_revision is not None
+            and course_update.expected_revision != course.content_revision
+        ):
+            raise HTTPException(
+                409,
+                {
+                    "code": "revision_conflict",
+                    "message": "Параметры курса изменены в другой вкладке",
+                    "expected_revision": course_update.expected_revision,
+                    "current_revision": course.content_revision,
+                },
+            )
+
+        update_data = course_update.model_dump(
+            exclude_unset=True, exclude_none=True, exclude={"expected_revision"}
+        )
         if not update_data:
             raise HTTPException(status_code=400, detail="Нет данных для обновления")
 
-        if course.position_id and 'title' in update_data and update_data['title'] != course.name:
+        if course.position_id and "title" in update_data and update_data["title"] != course.name:
             # A wizard opened before this rename must not silently restore its
             # stale title when saving its generation settings.
             from app.models.course_generation_settings import CourseGenerationSettings
+
             generation = db.query(CourseGenerationSettings).filter_by(course_id=course.id).first()
             if generation:
                 generation.revision += 1
-        
+
         for field, value in update_data.items():
             # Если поле 'title' передается, оно маппится на поле 'name' в модели Course
             if field == "title":
@@ -235,7 +265,7 @@ def update_course(
         CoursePublicationService.prepare_for_edit(course)
         if course.content_revision == previous_revision:
             course.content_revision += 1
-        
+
         db.commit()
         db.refresh(course)
         logger.info("Курс обновлен: ID=%s, поля=%s", course.id, sorted(update_data))
@@ -254,6 +284,7 @@ def update_course(
         logger.error("Ошибка при обновлении курса: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка при обновлении курса")
 
+
 @router.delete("/courses/{course_id}", summary="Удаление курса")
 def delete_course(
     course_id: int,
@@ -265,28 +296,45 @@ def delete_course(
     Удаляет курс по указанному ID.
     """
     try:
-        from app.services.organization_access import lock_members, audit
         from app.repositories.course_publication import CoursePublicationRepository
-        lock_members(db, [current_user.id], expected_auth_versions={current_user.id: current_user.auth_version})
+        from app.services.organization_access import audit, lock_members
+
+        lock_members(
+            db,
+            [current_user.id],
+            expected_auth_versions={current_user.id: current_user.auth_version},
+        )
         course = (
             db.query(Course)
             .filter(
                 Course.id == course_id,
                 course_access_filter(current_user.id),
             )
-            .populate_existing().with_for_update()
+            .populate_existing()
+            .with_for_update()
             .first()
         )
         if not course:
             raise HTTPException(status_code=404, detail="Курс не найден")
         if not course.is_deleted:
             if expected_revision is not None and course.content_revision != expected_revision:
-                raise HTTPException(409, 'Регламент уже изменён. Обновите список перед удалением.')
-            if course.status == 'generating' or CoursePublicationRepository.active_generation(db, course.id):
-                raise HTTPException(409, 'Дождитесь завершения или отмените генерацию перед удалением.')
+                raise HTTPException(409, "Регламент уже изменён. Обновите список перед удалением.")
+            if course.status == "generating" or CoursePublicationRepository.active_generation(
+                db, course.id
+            ):
+                raise HTTPException(
+                    409, "Дождитесь завершения или отмените генерацию перед удалением."
+                )
             course.is_deleted = True
-            audit(db, current_user, 'course.deleted', 'course', course.id,
-                  organization_id=course.organization_id, content_revision=course.content_revision)
+            audit(
+                db,
+                current_user,
+                "course.deleted",
+                "course",
+                course.id,
+                organization_id=course.organization_id,
+                content_revision=course.content_revision,
+            )
         db.commit()
         logger.info("Курс удален: ID=%s", course_id)
         return {"message": f"Курс с ID {course_id} успешно удален"}
@@ -324,8 +372,7 @@ def load_modules(
             description = ""
             if answers or test.correct_answer:
                 description = (
-                    f"Варианты: {', '.join(answers)} "
-                    f"(Правильный: {test.correct_answer})"
+                    f"Варианты: {', '.join(answers)} (Правильный: {test.correct_answer})"
                 ).strip()
 
             tests_payload.append(
@@ -359,7 +406,11 @@ def load_modules(
     return {"modules": modules_payload}
 
 
-@router.post("/courses/{course_id}/save_modules", deprecated=True, summary="Сохранение полной структуры курса")
+@router.post(
+    "/courses/{course_id}/save_modules",
+    deprecated=True,
+    summary="Сохранение полной структуры курса",
+)
 def save_modules(
     course_id: int,
     payload: ModulesSaveRequest,
@@ -378,4 +429,7 @@ def save_modules(
     if not course:
         raise HTTPException(status_code=404, detail="Курс не найден")
 
-    raise HTTPException(status_code=410, detail="Bulk replacement is retired to protect lesson content. Use versioned module and lesson endpoints.")
+    raise HTTPException(
+        status_code=410,
+        detail="Bulk replacement is retired to protect lesson content. Use versioned module and lesson endpoints.",
+    )

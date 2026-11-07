@@ -1,8 +1,20 @@
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String, event, select
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    event,
+    select,
+)
 from sqlalchemy.orm import relationship
+
 from app.database.db import Base
 from app.models.base import BaseModelMixin
 from app.models.domain_enums import CourseStatus, PublicationStatus
+
 
 class Course(Base, BaseModelMixin):
     __tablename__ = "courses"
@@ -15,7 +27,9 @@ class Course(Base, BaseModelMixin):
             "status = 'draft' OR name IS NOT NULL",
             name="ck_courses_non_draft_name",
         ),
-        CheckConstraint("publication_status IN ('draft', 'published')", name="ck_courses_publication_status"),
+        CheckConstraint(
+            "publication_status IN ('draft', 'published')", name="ck_courses_publication_status"
+        ),
         CheckConstraint("content_revision > 0", name="ck_courses_content_revision_positive"),
         Index("ix_courses_owner_status", "owner_id", "status"),
         Index("ix_courses_owner_publication_status", "owner_id", "publication_status"),
@@ -29,10 +43,10 @@ class Course(Base, BaseModelMixin):
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     position_id = Column(Integer, ForeignKey("business_positions.id"), nullable=True, index=True)
     business_position = relationship("BusinessPosition", foreign_keys=[position_id])
-    status = Column(
-        String(32), nullable=False, default=CourseStatus.READY.value, index=True
+    status = Column(String(32), nullable=False, default=CourseStatus.READY.value, index=True)
+    publication_status = Column(
+        String(16), nullable=False, default=PublicationStatus.DRAFT.value, index=True
     )
-    publication_status = Column(String(16), nullable=False, default=PublicationStatus.DRAFT.value, index=True)
     published_at = Column(DateTime, nullable=True)
     content_revision = Column(Integer, nullable=False, default=1)
     current_graph_id = Column(
@@ -54,18 +68,14 @@ class Course(Base, BaseModelMixin):
     course_modules = relationship(
         "CourseModule", back_populates="course", cascade="all, delete-orphan"
     )
-    documents = relationship(
-        "Document", back_populates="course", cascade="all, delete-orphan"
-    )
+    documents = relationship("Document", back_populates="course", cascade="all, delete-orphan")
     graphs = relationship(
         "CourseGraph",
         back_populates="course",
         foreign_keys="CourseGraph.course_id",
         cascade="all, delete-orphan",
     )
-    current_graph = relationship(
-        "CourseGraph", foreign_keys=[current_graph_id], post_update=True
-    )
+    current_graph = relationship("CourseGraph", foreign_keys=[current_graph_id], post_update=True)
     chats = relationship("Chat", back_populates="course")
     generation_runs = relationship(
         "GenerationRun", back_populates="course", cascade="all, delete-orphan"
@@ -77,9 +87,7 @@ class Course(Base, BaseModelMixin):
         cascade="all, delete-orphan",
     )
     versions = relationship("CourseVersion", back_populates="course")
-    competencies = relationship(
-        "Competency", back_populates="course", cascade="all, delete-orphan"
-    )
+    competencies = relationship("Competency", back_populates="course", cascade="all, delete-orphan")
     learning_objectives = relationship(
         "LearningObjective", back_populates="course", cascade="all, delete-orphan"
     )
@@ -89,8 +97,11 @@ class Course(Base, BaseModelMixin):
     learning_events = relationship("LearningEvent", back_populates="course")
 
 
-@event.listens_for(Course, 'before_insert')
+@event.listens_for(Course, "before_insert")
 def bind_course_organization(mapper, connection, target):
     if target.organization_id is None and target.owner_id:
         from app.models.user import User
-        target.organization_id = connection.execute(select(User.organization_id).where(User.id == target.owner_id)).scalar()
+
+        target.organization_id = connection.execute(
+            select(User.organization_id).where(User.id == target.owner_id)
+        ).scalar()

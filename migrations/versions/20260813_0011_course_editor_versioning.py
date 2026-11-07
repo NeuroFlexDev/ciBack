@@ -3,9 +3,11 @@
 Revision ID: 20260813_0011
 Revises: 20260813_0010
 """
+
 from collections.abc import Sequence
-from alembic import op
+
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "20260813_0011"
 down_revision: str | None = "20260813_0010"
@@ -30,9 +32,13 @@ def upgrade() -> None:
         batch.add_column(sa.Column("module_id", sa.Integer(), nullable=True))
         batch.add_column(sa.Column("revision", sa.Integer(), nullable=True))
         batch.add_column(sa.Column("position", sa.Integer(), nullable=False, server_default="0"))
-        batch.add_column(sa.Column("deleted", sa.Boolean(), nullable=False, server_default=sa.false()))
+        batch.add_column(
+            sa.Column("deleted", sa.Boolean(), nullable=False, server_default=sa.false())
+        )
         batch.add_column(sa.Column("created_by", sa.Integer(), nullable=True))
-        batch.create_foreign_key("fk_module_versions_module_id", "modules", ["module_id"], ["id"], ondelete="CASCADE")
+        batch.create_foreign_key(
+            "fk_module_versions_module_id", "modules", ["module_id"], ["id"], ondelete="CASCADE"
+        )
         batch.create_foreign_key("fk_module_versions_created_by", "users", ["created_by"], ["id"])
         batch.create_index("ix_module_versions_module_id", ["module_id"])
     with op.batch_alter_table("lesson_versions") as batch:
@@ -41,9 +47,13 @@ def upgrade() -> None:
         batch.add_column(sa.Column("revision", sa.Integer(), nullable=True))
         batch.add_column(sa.Column("content", sa.Text(), nullable=False, server_default=""))
         batch.add_column(sa.Column("position", sa.Integer(), nullable=False, server_default="0"))
-        batch.add_column(sa.Column("deleted", sa.Boolean(), nullable=False, server_default=sa.false()))
+        batch.add_column(
+            sa.Column("deleted", sa.Boolean(), nullable=False, server_default=sa.false())
+        )
         batch.add_column(sa.Column("created_by", sa.Integer(), nullable=True))
-        batch.create_foreign_key("fk_lesson_versions_lesson_id", "lessons", ["lesson_id"], ["id"], ondelete="CASCADE")
+        batch.create_foreign_key(
+            "fk_lesson_versions_lesson_id", "lessons", ["lesson_id"], ["id"], ondelete="CASCADE"
+        )
         batch.create_foreign_key("fk_lesson_versions_created_by", "users", ["created_by"], ["id"])
         batch.create_index("ix_lesson_versions_lesson_id", ["lesson_id"])
     op.create_table(

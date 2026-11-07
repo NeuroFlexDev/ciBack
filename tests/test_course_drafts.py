@@ -1,12 +1,13 @@
-from app.models.course import Course
-from app.models.domain_enums import CourseStatus
-from app.models.user import User
-from app.core.security import create_access_token, hash_password
-from app.models.document import Document
-from app.services.file_storage import LocalFileStorage, get_file_storage
-from app.api_catalog import app
 import pytest
 from sqlalchemy.exc import IntegrityError
+
+from app.api_catalog import app
+from app.core.security import create_access_token, hash_password
+from app.models.course import Course
+from app.models.document import Document
+from app.models.domain_enums import CourseStatus
+from app.models.user import User
+from app.services.file_storage import LocalFileStorage, get_file_storage
 
 
 def test_create_and_list_course_draft(client, db_session, auth_user, auth_headers):
@@ -45,28 +46,34 @@ def test_drafts_are_owner_isolated_and_visible_in_my_courses(
     db_session.add(foreign_user)
     db_session.commit()
     db_session.refresh(foreign_user)
-    foreign_headers = {
-        "Authorization": f"Bearer {create_access_token(foreign_user.id)}"
-    }
+    foreign_headers = {"Authorization": f"Bearer {create_access_token(foreign_user.id)}"}
 
     owned = client.post("/api/courses/drafts", headers=auth_headers).json()
     foreign = client.post("/api/courses/drafts", headers=foreign_headers).json()
 
-    assert [item["id"] for item in client.get(
-        "/api/courses/drafts", headers=auth_headers
-    ).json()] == [owned["id"]]
-    assert client.put(
-        f"/api/courses/{foreign['id']}",
-        json={"title": "No access"},
-        headers=auth_headers,
-    ).status_code == 404
-    assert [item["id"] for item in client.get("/api/courses/", headers=auth_headers).json()] == [owned["id"]]
-    assert [item["id"] for item in client.get("/api/courses/?publication_status=draft", headers=auth_headers).json()] == [owned["id"]]
+    assert [
+        item["id"] for item in client.get("/api/courses/drafts", headers=auth_headers).json()
+    ] == [owned["id"]]
+    assert (
+        client.put(
+            f"/api/courses/{foreign['id']}",
+            json={"title": "No access"},
+            headers=auth_headers,
+        ).status_code
+        == 404
+    )
+    assert [item["id"] for item in client.get("/api/courses/", headers=auth_headers).json()] == [
+        owned["id"]
+    ]
+    assert [
+        item["id"]
+        for item in client.get(
+            "/api/courses/?publication_status=draft", headers=auth_headers
+        ).json()
+    ] == [owned["id"]]
 
 
-def test_regular_course_is_ready_and_soft_deleted(
-    client, db_session, auth_headers
-):
+def test_regular_course_is_ready_and_soft_deleted(client, db_session, auth_headers):
     response = client.post(
         "/api/courses/",
         json={"title": "Ready", "description": "desc", "level": 1, "language": 1},

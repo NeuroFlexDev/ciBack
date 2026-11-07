@@ -7,10 +7,9 @@ Create Date: 2026-07-27
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "20260723_0004"
 down_revision: str | None = "20260723_0003"
@@ -61,15 +60,11 @@ def upgrade() -> None:
             name="ck_generation_runs_cost_nonnegative",
         ),
         sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["document_id"], ["documents.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["document_id"], ["documents.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_generation_runs_id", "generation_runs", ["id"], unique=False
-    )
+    op.create_index("ix_generation_runs_id", "generation_runs", ["id"], unique=False)
     op.create_index(
         "ix_generation_runs_owner_id",
         "generation_runs",

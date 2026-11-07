@@ -7,10 +7,9 @@ Create Date: 2026-07-29
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "20260729_0005"
 down_revision: str | None = "20260723_0004"
@@ -46,9 +45,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_competencies_id", "competencies", ["id"], unique=False)
-    op.create_index(
-        "ix_competencies_course_id", "competencies", ["course_id"], unique=False
-    )
+    op.create_index("ix_competencies_course_id", "competencies", ["course_id"], unique=False)
     op.create_index(
         "ix_competencies_course_deleted",
         "competencies",
@@ -75,9 +72,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["module_id"], ["modules.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_learning_objectives_id", "learning_objectives", ["id"], unique=False
-    )
+    op.create_index("ix_learning_objectives_id", "learning_objectives", ["id"], unique=False)
     op.create_index(
         "ix_learning_objectives_course_id",
         "learning_objectives",
@@ -111,16 +106,12 @@ def upgrade() -> None:
         sa.Column("competency_id", sa.Integer(), nullable=True),
         sa.Column("criteria", _json_type(), nullable=False),
         sa.Column("levels", _json_type(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["competency_id"], ["competencies.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["competency_id"], ["competencies.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["task_id"], ["tasks.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_assessment_rubrics_id", "assessment_rubrics", ["id"], unique=False
-    )
+    op.create_index("ix_assessment_rubrics_id", "assessment_rubrics", ["id"], unique=False)
     op.create_index(
         "ix_assessment_rubrics_course_id",
         "assessment_rubrics",
@@ -158,9 +149,7 @@ def upgrade() -> None:
             "decision IN ('pending', 'approved', 'rejected', 'changes_requested')",
             name="ck_approvals_decision",
         ),
-        sa.ForeignKeyConstraint(
-            ["course_graph_id"], ["course_graphs.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["course_graph_id"], ["course_graphs.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["reviewer_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -171,9 +160,7 @@ def upgrade() -> None:
         ["course_graph_id"],
         unique=False,
     )
-    op.create_index(
-        "ix_approvals_reviewer_id", "approvals", ["reviewer_id"], unique=False
-    )
+    op.create_index("ix_approvals_reviewer_id", "approvals", ["reviewer_id"], unique=False)
     op.create_index(
         "ix_approvals_graph_decision",
         "approvals",
@@ -192,16 +179,12 @@ def upgrade() -> None:
         sa.Column("result", _json_type(), nullable=False),
         sa.Column("context", _json_type(), nullable=False),
         sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["course_id"], ["courses.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_learning_events_id", "learning_events", ["id"], unique=False)
-    op.create_index(
-        "ix_learning_events_user_id", "learning_events", ["user_id"], unique=False
-    )
+    op.create_index("ix_learning_events_user_id", "learning_events", ["user_id"], unique=False)
     op.create_index(
         "ix_learning_events_course_id",
         "learning_events",
@@ -243,29 +226,17 @@ def downgrade() -> None:
     op.drop_index("ix_approvals_id", table_name="approvals")
     op.drop_table("approvals")
 
-    op.drop_index(
-        "ix_assessment_rubrics_course_deleted", table_name="assessment_rubrics"
-    )
-    op.drop_index(
-        "ix_assessment_rubrics_competency_id", table_name="assessment_rubrics"
-    )
+    op.drop_index("ix_assessment_rubrics_course_deleted", table_name="assessment_rubrics")
+    op.drop_index("ix_assessment_rubrics_competency_id", table_name="assessment_rubrics")
     op.drop_index("ix_assessment_rubrics_task_id", table_name="assessment_rubrics")
     op.drop_index("ix_assessment_rubrics_course_id", table_name="assessment_rubrics")
     op.drop_index("ix_assessment_rubrics_id", table_name="assessment_rubrics")
     op.drop_table("assessment_rubrics")
 
-    op.drop_index(
-        "ix_learning_objectives_course_deleted", table_name="learning_objectives"
-    )
-    op.drop_index(
-        "ix_learning_objectives_lesson_id", table_name="learning_objectives"
-    )
-    op.drop_index(
-        "ix_learning_objectives_module_id", table_name="learning_objectives"
-    )
-    op.drop_index(
-        "ix_learning_objectives_course_id", table_name="learning_objectives"
-    )
+    op.drop_index("ix_learning_objectives_course_deleted", table_name="learning_objectives")
+    op.drop_index("ix_learning_objectives_lesson_id", table_name="learning_objectives")
+    op.drop_index("ix_learning_objectives_module_id", table_name="learning_objectives")
+    op.drop_index("ix_learning_objectives_course_id", table_name="learning_objectives")
     op.drop_index("ix_learning_objectives_id", table_name="learning_objectives")
     op.drop_table("learning_objectives")
 

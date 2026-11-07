@@ -1,0 +1,4 @@
+title = "Lernium secret scanning"
+
+[extend]
+useDefault = true

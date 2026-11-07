@@ -1,8 +1,11 @@
 """Bound multipart bodies before Starlette spools them to disk."""
-from app.core.config import settings
-from starlette.responses import JSONResponse
-from starlette.concurrency import run_in_threadpool
+
 from tempfile import SpooledTemporaryFile
+
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
+
+from app.core.config import settings
 
 
 class UploadBodyLimitMiddleware:
@@ -11,18 +14,35 @@ class UploadBodyLimitMiddleware:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "")
-        if scope["type"] != "http" or scope.get("method") != "POST" or not (
-            path.endswith("/documents") or path.endswith("/images") or path.endswith("/media") or path.endswith("/upload-description")
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or not (
+                path.endswith("/documents")
+                or path.endswith("/images")
+                or path.endswith("/media")
+                or path.endswith("/upload-description")
+            )
         ):
             return await self.app(scope, receive, send)
-        limit = (settings.VIDEO_MAX_BYTES if path.endswith("/media") else settings.IMAGE_MAX_BYTES if path.endswith("/images") else settings.max_document_bytes) + 1024 * 1024
+        limit = (
+            settings.VIDEO_MAX_BYTES
+            if path.endswith("/media")
+            else settings.IMAGE_MAX_BYTES
+            if path.endswith("/images")
+            else settings.max_document_bytes
+        ) + 1024 * 1024
         headers = dict(scope.get("headers", []))
         try:
             declared = int(headers.get(b"content-length", b"0"))
         except ValueError:
             declared = limit + 1
+
         async def too_large():
-            await JSONResponse({"detail": "Файл превышает допустимый размер"}, status_code=413)(scope, receive, send)
+            await JSONResponse({"detail": "Файл превышает допустимый размер"}, status_code=413)(
+                scope, receive, send
+            )
+
         if declared > limit:
             return await too_large()
         # Spool large requests instead of retaining and joining the full video
@@ -43,6 +63,7 @@ class UploadBodyLimitMiddleware:
             await run_in_threadpool(body.seek, 0)
             remaining = size
             supplied = False
+
             async def bounded_receive():
                 nonlocal remaining, supplied
                 if remaining or not supplied:
@@ -51,4 +72,5 @@ class UploadBodyLimitMiddleware:
                     remaining -= len(chunk)
                     return {"type": "http.request", "body": chunk, "more_body": remaining > 0}
                 return await receive()
+
             await self.app(scope, bounded_receive, send)

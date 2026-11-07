@@ -1,4 +1,3 @@
-from tests.generated_graph_fixture import concrete_graph
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -7,12 +6,13 @@ from app.core.security import hash_password
 from app.database.db import Base
 from app.models.course import Course
 from app.models.course_generation_settings import CourseGenerationSettings
-from app.models.domain_enums import CourseStatus
 from app.models.course_graph import CourseGraph
 from app.models.document import Document, DocumentChunk
+from app.models.domain_enums import CourseStatus
 from app.models.generation_run import GenerationRun
 from app.models.user import User
 from app.services.pipeline_service import PipelineRunFailed, PipelineService
+from tests.generated_graph_fixture import concrete_graph
 
 
 class MemoryStorage:
@@ -63,15 +63,10 @@ def _course_and_document(db_session, auth_user, content=b"# Topic\nSome useful t
 
 
 def _fake_embeddings(document_id, version, chunks):
-    return [
-        f"document:{document_id}:v{version}:chunk:{chunk['chunk_index']}"
-        for chunk in chunks
-    ]
+    return [f"document:{document_id}:v{version}:chunk:{chunk['chunk_index']}" for chunk in chunks]
 
 
-def test_reindex_is_idempotent_and_persists_run(
-    db_session, auth_user, monkeypatch
-):
+def test_reindex_is_idempotent_and_persists_run(db_session, auth_user, monkeypatch):
     course, document, storage = _course_and_document(db_session, auth_user)
     monkeypatch.setattr(
         "app.services.pipeline_service.replace_document_embeddings",
@@ -85,9 +80,7 @@ def test_reindex_is_idempotent_and_persists_run(
         storage=storage,
     )
     first_count = (
-        db_session.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document.id)
-        .count()
+        db_session.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).count()
     )
     second = PipelineService.reindex_document(
         db_session,
@@ -100,9 +93,7 @@ def test_reindex_is_idempotent_and_persists_run(
     assert second.status == "succeeded"
     assert first_count > 0
     assert (
-        db_session.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document.id)
-        .count()
+        db_session.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).count()
         == first_count
     )
     assert all(chunk.embedding_id for chunk in document.chunks)
@@ -129,10 +120,12 @@ def test_reindex_request_queues_run_and_keeps_indexed_document_available(
     queued = []
     monkeypatch.setattr("app.services.job_queue.enqueue_document_index", queued.append)
 
-    first = PipelineService.reindex_document(db_session, document_id=document.id,
-        owner_id=auth_user.id, storage=storage, queue_only=True)
-    again = PipelineService.reindex_document(db_session, document_id=document.id,
-        owner_id=auth_user.id, storage=storage, queue_only=True)
+    first = PipelineService.reindex_document(
+        db_session, document_id=document.id, owner_id=auth_user.id, storage=storage, queue_only=True
+    )
+    again = PipelineService.reindex_document(
+        db_session, document_id=document.id, owner_id=auth_user.id, storage=storage, queue_only=True
+    )
 
     assert first.status == "queued"
     assert again.id == first.id
@@ -141,33 +134,37 @@ def test_reindex_request_queues_run_and_keeps_indexed_document_available(
     assert document.status == "indexed"
 
 
-@pytest.mark.parametrize('initial_status', ['uploaded', 'indexed'])
+@pytest.mark.parametrize("initial_status", ["uploaded", "indexed"])
 def test_queued_document_is_processed_by_worker_and_releases_capacity(
     db_session, auth_user, monkeypatch, initial_status
 ):
     from app.models.ai_resources import AIResourceUsage
     from app.workers.generation import execute_document_index_run
+
     _, document, storage = _course_and_document(db_session, auth_user)
     document.status = initial_status
     db_session.commit()
     queued = []
-    monkeypatch.setattr('app.services.job_queue.enqueue_document_index', queued.append)
-    monkeypatch.setattr('app.workers.generation.SessionLocal', lambda: db_session)
-    monkeypatch.setattr(db_session, 'close', lambda: None)
-    monkeypatch.setattr('app.services.file_storage.get_file_storage', lambda: storage)
-    monkeypatch.setattr('app.services.pipeline_service.replace_document_embeddings', _fake_embeddings)
-    run = PipelineService.reindex_document(db_session, document_id=document.id,
-        owner_id=auth_user.id, storage=storage, queue_only=True)
+    monkeypatch.setattr("app.services.job_queue.enqueue_document_index", queued.append)
+    monkeypatch.setattr("app.workers.generation.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr("app.services.file_storage.get_file_storage", lambda: storage)
+    monkeypatch.setattr(
+        "app.services.pipeline_service.replace_document_embeddings", _fake_embeddings
+    )
+    run = PipelineService.reindex_document(
+        db_session, document_id=document.id, owner_id=auth_user.id, storage=storage, queue_only=True
+    )
     assert queued == [run.id]
 
     execute_document_index_run(run.id)
     db_session.refresh(run)
     db_session.refresh(document)
-    assert run.status == 'succeeded'
-    assert document.status == 'indexed'
+    assert run.status == "succeeded"
+    assert document.status == "indexed"
     assert document.chunks and all(chunk.embedding_id for chunk in document.chunks)
-    slot = db_session.query(AIResourceUsage).filter_by(key=f'document:{run.id}').one()
-    assert slot.status == 'completed' and slot.finished_at is not None
+    slot = db_session.query(AIResourceUsage).filter_by(key=f"document:{run.id}").one()
+    assert slot.status == "completed" and slot.finished_at is not None
     chunk_ids = [chunk.id for chunk in document.chunks]
     execute_document_index_run(run.id)
     db_session.refresh(document)
@@ -178,9 +175,7 @@ def test_reindex_failure_is_persisted(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{(tmp_path / 'failure.sqlite').as_posix()}")
     Base.metadata.create_all(engine)
     db_session = sessionmaker(bind=engine)()
-    auth_user = User(
-        email="failure@example.com", password_hash=hash_password("password123")
-    )
+    auth_user = User(email="failure@example.com", password_hash=hash_password("password123"))
     db_session.add(auth_user)
     db_session.commit()
     _, document, storage = _course_and_document(db_session, auth_user, b"\n\n")
@@ -254,15 +249,11 @@ def test_graph_generation_reuses_fingerprint_and_force_creates_version(
     assert forced.output["node_count"] == 4
     assert forced.settings_snapshot["lesson_count"] == 1
     assert course.status == "ready"
-    test_nodes = [
-        node for node in graphs[1].nodes if node.get("type") == "test"
-    ]
+    test_nodes = [node for node in graphs[1].nodes if node.get("type") == "test"]
     assert {node["assessment_scope"] for node in test_nodes} == {"module", "final"}
 
 
-def test_invalid_generated_graph_persists_failed_run_without_partial_graph(
-    tmp_path, monkeypatch
-):
+def test_invalid_generated_graph_persists_failed_run_without_partial_graph(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{(tmp_path / 'graph-failure.sqlite').as_posix()}")
     Base.metadata.create_all(engine)
     db_session = sessionmaker(bind=engine)()
@@ -307,9 +298,7 @@ def test_invalid_generated_graph_persists_failed_run_without_partial_graph(
     db_session.close()
 
 
-def test_pipeline_api_hides_foreign_resources(
-    client, db_session, auth_headers
-):
+def test_pipeline_api_hides_foreign_resources(client, db_session, auth_headers):
     foreign = User(
         email="foreign-pipeline@example.com",
         password_hash=hash_password("password123"),
@@ -342,17 +331,9 @@ def test_pipeline_api_hides_foreign_resources(
     db_session.add_all([document, run])
     db_session.commit()
 
+    assert client.get(f"/api/documents/{document.id}", headers=auth_headers).status_code == 404
+    assert client.get(f"/api/generation-runs/{run.id}", headers=auth_headers).status_code == 404
     assert (
-        client.get(f"/api/documents/{document.id}", headers=auth_headers).status_code
-        == 404
-    )
-    assert (
-        client.get(f"/api/generation-runs/{run.id}", headers=auth_headers).status_code
-        == 404
-    )
-    assert (
-        client.post(
-            f"/api/documents/{document.id}/reindex", headers=auth_headers
-        ).status_code
+        client.post(f"/api/documents/{document.id}/reindex", headers=auth_headers).status_code
         == 404
     )

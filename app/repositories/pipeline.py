@@ -3,20 +3,18 @@ from sqlalchemy.orm import Session
 
 from app.models.agent_artifact import AgentArtifact
 from app.models.course import Course
-from app.services.course_access import course_access_filter, related_course_access
-from app.models.course_graph import CourseGraph
 from app.models.course_generation_settings import CourseGenerationSettings
+from app.models.course_graph import CourseGraph
 from app.models.course_source_link import CourseSourceLink
 from app.models.course_update_proposal import CourseUpdateProposal
 from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
+from app.services.course_access import course_access_filter, related_course_access
 
 
 class PipelineRepository:
     @staticmethod
-    def get_generation_settings(
-        db: Session, course_id: int
-    ) -> CourseGenerationSettings | None:
+    def get_generation_settings(db: Session, course_id: int) -> CourseGenerationSettings | None:
         return (
             db.query(CourseGenerationSettings)
             .filter(
@@ -27,9 +25,7 @@ class PipelineRepository:
         )
 
     @staticmethod
-    def get_owned_document(
-        db: Session, document_id: int, owner_id: int
-    ) -> Document | None:
+    def get_owned_document(db: Session, document_id: int, owner_id: int) -> Document | None:
         return (
             db.query(Document)
             .join(Course, Course.id == Document.course_id)
@@ -56,9 +52,7 @@ class PipelineRepository:
         return query.first()
 
     @staticmethod
-    def get_owned_run(
-        db: Session, run_id: int, owner_id: int
-    ) -> GenerationRun | None:
+    def get_owned_run(db: Session, run_id: int, owner_id: int) -> GenerationRun | None:
         return (
             db.query(GenerationRun)
             .filter(
@@ -70,9 +64,7 @@ class PipelineRepository:
         )
 
     @staticmethod
-    def indexed_documents(
-        db: Session, course_id: int, owner_id: int
-    ) -> list[Document]:
+    def indexed_documents(db: Session, course_id: int, owner_id: int) -> list[Document]:
         return (
             db.query(Document)
             .filter(
@@ -123,19 +115,14 @@ class PipelineRepository:
             .all()
         )
         expected = {
-            (item["document_id"], item["version"], item["content_hash"])
-            for item in snapshot
+            (item["document_id"], item["version"], item["content_hash"]) for item in snapshot
         }
         return [
-            item
-            for item in candidates
-            if (item.id, item.version, item.content_hash) in expected
+            item for item in candidates if (item.id, item.version, item.content_hash) in expected
         ]
 
     @staticmethod
-    def active_graph_run(
-        db: Session, course_id: int, owner_id: int
-    ) -> GenerationRun | None:
+    def active_graph_run(db: Session, course_id: int, owner_id: int) -> GenerationRun | None:
         return (
             db.query(GenerationRun)
             .filter(
@@ -150,9 +137,7 @@ class PipelineRepository:
         )
 
     @staticmethod
-    def replace_chunks(
-        db: Session, document: Document, chunks: list[dict]
-    ) -> list[DocumentChunk]:
+    def replace_chunks(db: Session, document: Document, chunks: list[dict]) -> list[DocumentChunk]:
         (
             db.query(DocumentChunk)
             .filter(
@@ -283,15 +268,11 @@ class PipelineRepository:
         )
 
     @staticmethod
-    def add_source_links(
-        db: Session, links: list[CourseSourceLink]
-    ) -> None:
+    def add_source_links(db: Session, links: list[CourseSourceLink]) -> None:
         db.add_all(links)
 
     @staticmethod
-    def add_update_proposal(
-        db: Session, proposal: CourseUpdateProposal
-    ) -> CourseUpdateProposal:
+    def add_update_proposal(db: Session, proposal: CourseUpdateProposal) -> CourseUpdateProposal:
         db.add(proposal)
         db.flush()
         return proposal
@@ -312,9 +293,6 @@ class PipelineRepository:
             CourseUpdateProposal.is_deleted.is_(False),
         )
         return (
-            query.order_by(CourseUpdateProposal.id.desc())
-            .offset(offset)
-            .limit(limit)
-            .all(),
+            query.order_by(CourseUpdateProposal.id.desc()).offset(offset).limit(limit).all(),
             query.count(),
         )

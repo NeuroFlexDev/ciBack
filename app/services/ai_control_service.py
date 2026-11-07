@@ -1,14 +1,18 @@
 """Operator-only management. Secrets never leave the credential resolver."""
-import json
+
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal
+
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from sqlalchemy.exc import IntegrityError
+
 from app.ai import control, providers
-from app.ai.managed_http import client as http_client, destination
+from app.ai.managed_http import client as http_client
+from app.ai.managed_http import destination
 from app.ai.models import model_policy
 from app.ai.pricing import candidate_price
 from app.core.config import AIProvider, AIRoutingCandidate, settings
@@ -18,18 +22,68 @@ from app.models.generation_run import GenerationRun
 from app.services.integration_secrets import seal
 from app.services.organization_access import audit
 
-ROLES = {"ingestion": "Разбор источников", "competency_mapper": "Компетенции",
-         "course_architect": "Структура курса", "lesson_writer": "Написание уроков",
-         "assessment": "Задания и тесты", "critic_qa": "Проверка качества",
-         "update": "Обновление курса", "chat": "Ответы помощника",
-         "memory": "Память диалога", "vision": "Анализ изображений", "canvas": "Редактор курса"}
+ROLES = {
+    "ingestion": "Разбор источников",
+    "competency_mapper": "Компетенции",
+    "course_architect": "Структура курса",
+    "lesson_writer": "Написание уроков",
+    "assessment": "Задания и тесты",
+    "critic_qa": "Проверка качества",
+    "update": "Обновление курса",
+    "chat": "Ответы помощника",
+    "memory": "Память диалога",
+    "vision": "Анализ изображений",
+    "canvas": "Редактор курса",
+}
 CATALOG = [
-    {"id": "vsellm", "name": "VSELLM", "base_url": "https://api.vsellm.ru/v1", "purpose": "Текущий основной канал и оплата в рублях", "docs": "https://vsellm.ru/", "local": False},
-    {"id": "openrouter", "name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "purpose": "Резервный агрегатор и широкий выбор моделей", "docs": "https://openrouter.ai/docs/quickstart", "local": False},
-    {"id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com", "purpose": "Прямой канал для сравнения стоимости генерации", "docs": "https://api-docs.deepseek.com/quick_start/pricing/", "local": False},
-    {"id": "gemini", "name": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "purpose": "Мультимодальность и независимый резерв", "docs": "https://ai.google.dev/gemini-api/docs/openai", "local": False},
-    {"id": "yandex", "name": "Yandex AI Studio", "base_url": "https://ai.api.cloud.yandex.net/v1", "purpose": "Российский облачный провайдер для корпоративных проектов", "docs": "https://aistudio.yandex.ru/ru/docs/ai-studio/operations/generation/completions-basic", "local": False},
-    {"id": "local", "name": "Ollama / vLLM", "base_url": "", "purpose": "Модели в собственном контуре и локальный резерв", "docs": "https://docs.ollama.com/api/openai-compatibility", "local": True},
+    {
+        "id": "vsellm",
+        "name": "VSELLM",
+        "base_url": "https://api.vsellm.ru/v1",
+        "purpose": "Текущий основной канал и оплата в рублях",
+        "docs": "https://vsellm.ru/",
+        "local": False,
+    },
+    {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "purpose": "Резервный агрегатор и широкий выбор моделей",
+        "docs": "https://openrouter.ai/docs/quickstart",
+        "local": False,
+    },
+    {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "purpose": "Прямой канал для сравнения стоимости генерации",
+        "docs": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "local": False,
+    },
+    {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "purpose": "Мультимодальность и независимый резерв",
+        "docs": "https://ai.google.dev/gemini-api/docs/openai",
+        "local": False,
+    },
+    {
+        "id": "yandex",
+        "name": "Yandex AI Studio",
+        "base_url": "https://ai.api.cloud.yandex.net/v1",
+        "purpose": "Российский облачный провайдер для корпоративных проектов",
+        "docs": "https://aistudio.yandex.ru/ru/docs/ai-studio/operations/generation/completions-basic",
+        "local": False,
+    },
+    {
+        "id": "local",
+        "name": "Ollama / vLLM",
+        "base_url": "",
+        "purpose": "Модели в собственном контуре и локальный резерв",
+        "docs": "https://docs.ollama.com/api/openai-compatibility",
+        "local": True,
+    },
 ]
 
 
@@ -61,11 +115,19 @@ class ModelChange(AIRoutingCandidate):
             raise ValueError("Лимиты входа и ответа не должны превышать контекст модели.")
         if not self.model.strip() or any(ord(c) < 32 for c in self.model):
             raise ValueError("Нужен идентификатор модели из каталога провайдера.")
-        if self.approved and (not self.json_mode or "critic_qa" in self.roles and not self.independent_review or "vision" in self.roles and not self.vision):
+        if self.approved and (
+            not self.json_mode
+            or "critic_qa" in self.roles
+            and not self.independent_review
+            or "vision" in self.roles
+            and not self.vision
+        ):
             raise ValueError("Включите JSON и нужные возможности модели для выбранных этапов.")
         allowed = {"provider", "thinking", "reasoning", "google", "chat_template_kwargs"}
         if set(self.extra_body) - allowed or len(json.dumps(self.extra_body)) > 4096:
-            raise ValueError("Допустимы параметры provider, thinking, reasoning, google, chat_template_kwargs (до 4 КБ).")
+            raise ValueError(
+                "Допустимы параметры provider, thinking, reasoning, google, chat_template_kwargs (до 4 КБ)."
+            )
         json.dumps(self.extra_body, allow_nan=False)
         return self
 
@@ -74,7 +136,7 @@ class PolicyChange(Revision):
     mode: Literal["adaptive"] = "adaptive"
     local_only: bool = False
     min_samples: int = Field(default=10, ge=3, le=1000)
-    min_pass_rate: float = Field(default=.85, ge=.5, le=1, allow_inf_nan=False)
+    min_pass_rate: float = Field(default=0.85, ge=0.5, le=1, allow_inf_nan=False)
 
 
 def row_for(db, revision=None):
@@ -88,14 +150,19 @@ def row_for(db, revision=None):
             db.rollback()
             raise HTTPException(409, "Настройки изменились. Обновите страницу.") from None
     if revision is not None and row.revision != revision:
-        raise HTTPException(409, "Настройки изменены другим оператором. Обновите страницу и проверьте изменения.")
+        raise HTTPException(
+            409, "Настройки изменены другим оператором. Обновите страницу и проверьте изменения."
+        )
     return row
 
 
 def save(db, actor, row, action, target, **changes):
     revision = row.revision
-    affected = db.query(AIControl).filter(AIControl.id == 1, AIControl.revision == revision).update(
-        {**changes, "revision": revision + 1}, synchronize_session=False)
+    affected = (
+        db.query(AIControl)
+        .filter(AIControl.id == 1, AIControl.revision == revision)
+        .update({**changes, "revision": revision + 1}, synchronize_session=False)
+    )
     if affected != 1:
         db.rollback()
         raise HTTPException(409, "Настройки изменились. Обновите страницу.")
@@ -121,14 +188,29 @@ def update_provider(db, actor, provider_id, payload):
     row = row_for(db, payload.expected_revision)
     previous, stored = provider_object(row, provider_id)
     try:
-        config = AIProvider(id=provider_id, **payload.model_dump(include={"base_url", "local", "enabled", "timeout_seconds", "project"}))
+        config = AIProvider(
+            id=provider_id,
+            **payload.model_dump(
+                include={"base_url", "local", "enabled", "timeout_seconds", "project"}
+            ),
+        )
         destination(config.base_url, local=config.local)
     except (ValueError, OSError):
-        raise HTTPException(422, "Проверьте адрес API: внешний — HTTPS/443 с публичным DNS; локальный — из списка разрешённых адресов сервера.") from None
+        raise HTTPException(
+            422,
+            "Проверьте адрес API: внешний — HTTPS/443 с публичным DNS; локальный — из списка разрешённых адресов сервера.",
+        ) from None
     encrypted = stored.get("sealed_key") if stored else None
     if payload.key_action == "keep":
-        if previous and previous.base_url != config.base_url and (encrypted or previous.api_key_env):
-            raise HTTPException(422, "При изменении адреса API замените или удалите ключ. Старый ключ не передаётся на новый адрес.")
+        if (
+            previous
+            and previous.base_url != config.base_url
+            and (encrypted or previous.api_key_env)
+        ):
+            raise HTTPException(
+                422,
+                "При изменении адреса API замените или удалите ключ. Старый ключ не передаётся на новый адрес.",
+            )
         config.api_key_env = previous.api_key_env if previous else ""
     elif payload.key_action == "replace":
         key = payload.api_key.get_secret_value().strip() if payload.api_key else ""
@@ -143,7 +225,12 @@ def update_provider(db, actor, provider_id, payload):
     config._managed, config._sealed_key = True, encrypted
     if config.enabled and not providers.credential(config):
         raise HTTPException(422, "Для включения провайдера нужен действующий сохранённый ключ.")
-    item = {"name": payload.name.strip(), "config": config.model_dump(mode="json"), "sealed_key": encrypted, "last_check": None}
+    item = {
+        "name": payload.name.strip(),
+        "config": config.model_dump(mode="json"),
+        "sealed_key": encrypted,
+        "last_check": None,
+    }
     rows = [entry for entry in row.providers if entry["config"]["id"] != provider_id] + [item]
     if len(rows) > 50:
         raise HTTPException(422, "Можно настроить до 50 подключений.")
@@ -155,35 +242,69 @@ def update_model(db, actor, payload):
     provider, _ = provider_object(row, payload.provider)
     if not provider:
         raise HTTPException(422, "Сначала сохраните подключение провайдера.")
-    if payload.approved and not provider.local and min(payload.input_rub_per_million, payload.output_rub_per_million) <= 0:
+    if (
+        payload.approved
+        and not provider.local
+        and min(payload.input_rub_per_million, payload.output_rub_per_million) <= 0
+    ):
         raise HTTPException(422, "Для внешней модели укажите оба тарифа больше нуля.")
-    if payload.approved and "critic_qa" in payload.roles and payload.model == settings.AI_MODEL_WRITER:
-        raise HTTPException(422, "Для независимой проверки выберите модель, отличную от основной модели написания уроков.")
+    if (
+        payload.approved
+        and "critic_qa" in payload.roles
+        and payload.model == settings.AI_MODEL_WRITER
+    ):
+        raise HTTPException(
+            422,
+            "Для независимой проверки выберите модель, отличную от основной модели написания уроков.",
+        )
     item = payload.model_dump(mode="json", exclude={"expected_revision"})
-    rows = [entry for entry in row.candidates if (entry["provider"], entry["model"]) != (payload.provider, payload.model)] + [item]
+    rows = [
+        entry
+        for entry in row.candidates
+        if (entry["provider"], entry["model"]) != (payload.provider, payload.model)
+    ] + [item]
     if len(rows) > 200:
         raise HTTPException(422, "Можно настроить до 200 маршрутов моделей.")
-    return save(db, actor, row, "ai.model.updated", payload.provider + "::" + payload.model, candidates=rows)
+    return save(
+        db, actor, row, "ai.model.updated", payload.provider + "::" + payload.model, candidates=rows
+    )
 
 
 def openrouter_details(items, ids):
     """Keep only bounded, typed public metadata; never store arbitrary catalog bodies."""
     details = []
     for item in items:
-        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item["id"] not in ids:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or item["id"] not in ids
+        ):
             continue
         try:
             context = item["context_length"]
             output = item["top_provider"]["max_completion_tokens"]
-            if type(context) is not int or type(output) is not int or not 0 < output <= context <= 10_000_000:
+            if (
+                type(context) is not int
+                or type(output) is not int
+                or not 0 < output <= context <= 10_000_000
+            ):
                 continue
-            prices = [Decimal(str(item["pricing"][key])) * 1_000_000 for key in ("prompt", "completion")]
+            prices = [
+                Decimal(str(item["pricing"][key])) * 1_000_000 for key in ("prompt", "completion")
+            ]
             if any(not price.is_finite() or not 0 <= price <= 1_000_000 for price in prices):
                 continue
-            details.append({"id": item["id"], "context_window": context, "max_output_tokens": output,
-                "input_usd_per_million": str(prices[0]), "output_usd_per_million": str(prices[1]),
-                "json_mode": "response_format" in item.get("supported_parameters", []),
-                "vision": "image" in item.get("architecture", {}).get("input_modalities", [])})
+            details.append(
+                {
+                    "id": item["id"],
+                    "context_window": context,
+                    "max_output_tokens": output,
+                    "input_usd_per_million": str(prices[0]),
+                    "output_usd_per_million": str(prices[1]),
+                    "json_mode": "response_format" in item.get("supported_parameters", []),
+                    "vision": "image" in item.get("architecture", {}).get("input_modalities", []),
+                }
+            )
         except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
             continue
     return details[:500]
@@ -201,12 +322,20 @@ def check_provider(db, actor, provider_id, payload):
     if provider.project:
         headers["OpenAI-Project"] = provider.project
     probe = provider.model_copy(update={"timeout_seconds": min(provider.timeout_seconds, 10)})
-    result = {"status": "unavailable", "checked_at": datetime.now(timezone.utc).isoformat(), "models": []}
+    result = {
+        "status": "unavailable",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "models": [],
+    }
     try:
         openrouter = str(provider.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
         with http_client(probe) as client:
             # /models is public on OpenRouter and cannot prove credential validity.
-            authorization = client.get(str(provider.base_url).rstrip("/") + "/key", headers=headers) if openrouter else None
+            authorization = (
+                client.get(str(provider.base_url).rstrip("/") + "/key", headers=headers)
+                if openrouter
+                else None
+            )
             if authorization is not None and authorization.status_code != 200:
                 response = authorization
             else:
@@ -215,13 +344,22 @@ def check_provider(db, actor, provider_id, payload):
                     if not isinstance(auth_data, dict):
                         raise ValueError("Invalid authorization response")
                     result["credential_verified"] = True
-                response = client.get(str(provider.base_url).rstrip("/") + "/models", headers=headers)
+                response = client.get(
+                    str(provider.base_url).rstrip("/") + "/models", headers=headers
+                )
         if response.status_code == 200:
             data = response.json()
             if not isinstance(data, dict) or not isinstance(data.get("data"), list):
                 raise ValueError("Invalid models response")
-            ids = [item["id"] for item in data["data"] if isinstance(item, dict) and isinstance(item.get("id"), str)
-                   and 0 < len(item["id"]) <= 255 and key not in item["id"] and all(ord(c) >= 32 for c in item["id"])]
+            ids = [
+                item["id"]
+                for item in data["data"]
+                if isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and 0 < len(item["id"]) <= 255
+                and key not in item["id"]
+                and all(ord(c) >= 32 for c in item["id"])
+            ]
             result.update(status="catalog_available", models=sorted(set(ids))[:500])
             if openrouter:
                 result["model_details"] = openrouter_details(data["data"], set(result["models"]))
@@ -235,8 +373,16 @@ def check_provider(db, actor, provider_id, payload):
         pass  # Never persist or echo remote bodies, headers or exception text.
     db.expire_all()
     row = row_for(db, payload.expected_revision)
-    item = {**stored, "last_check": result} if stored else {
-        "name": provider.id, "config": provider.model_dump(mode="json"), "sealed_key": None, "last_check": result}
+    item = (
+        {**stored, "last_check": result}
+        if stored
+        else {
+            "name": provider.id,
+            "config": provider.model_dump(mode="json"),
+            "sealed_key": None,
+            "last_check": result,
+        }
+    )
     rows = [entry for entry in row.providers if entry["config"]["id"] != provider_id] + [item]
     return {**save(db, actor, row, "ai.provider.checked", provider_id, providers=rows), **result}
 
@@ -247,12 +393,25 @@ def overview(db):
     items = []
     for provider_id in sorted(ids):
         provider, stored = provider_object(row, provider_id)
-        items.append({**provider.model_dump(mode="json", exclude={"api_key_env"}),
-            "name": stored["name"] if stored else provider_id,
-            "credential_source": "encrypted" if provider._sealed_key else "environment" if provider.api_key_env else "none",
-            "has_key": bool(providers.credential(provider)), "available": providers.available(provider),
-            "managed": bool(stored), "last_check": stored.get("last_check") if stored else None})
-    models = {(item.provider, item.model): item.model_copy(deep=True) for item in settings.AI_ROUTING_CANDIDATES}
+        items.append(
+            {
+                **provider.model_dump(mode="json", exclude={"api_key_env"}),
+                "name": stored["name"] if stored else provider_id,
+                "credential_source": "encrypted"
+                if provider._sealed_key
+                else "environment"
+                if provider.api_key_env
+                else "none",
+                "has_key": bool(providers.credential(provider)),
+                "available": providers.available(provider),
+                "managed": bool(stored),
+                "last_check": stored.get("last_check") if stored else None,
+            }
+        )
+    models = {
+        (item.provider, item.model): item.model_copy(deep=True)
+        for item in settings.AI_ROUTING_CANDIDATES
+    }
     explicit = set(models)
     for role in ROLES:
         for model in {model_policy(role).model, model_policy(role).fallback}:
@@ -266,23 +425,58 @@ def overview(db):
             if key in models and key not in explicit:
                 models[key].vision |= role == "vision"
                 models[key].independent_review |= role == "critic_qa"
-    models.update({(item["provider"], item["model"]): AIRoutingCandidate.model_validate(item) for item in row.candidates})
+    models.update(
+        {
+            (item["provider"], item["model"]): AIRoutingCandidate.model_validate(item)
+            for item in row.candidates
+        }
+    )
     stats = {}
-    calls = db.query(AICall).join(GenerationRun, GenerationRun.id == AICall.run_id).filter(
-        GenerationRun.created_at >= datetime.utcnow() - timedelta(days=1)).order_by(AICall.id.desc()).limit(5001).all()
+    calls = (
+        db.query(AICall)
+        .join(GenerationRun, GenerationRun.id == AICall.run_id)
+        .filter(GenerationRun.created_at >= datetime.utcnow() - timedelta(days=1))
+        .order_by(AICall.id.desc())
+        .limit(5001)
+        .all()
+    )
     for call in calls[:5000]:
         route = call.routing or {}
-        entry = stats.setdefault(route.get("selected_provider", "unknown"), {"calls": 0, "errors": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0, "estimated_rub": None})
+        entry = stats.setdefault(
+            route.get("selected_provider", "unknown"),
+            {
+                "calls": 0,
+                "errors": 0,
+                "cached_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "estimated_rub": None,
+            },
+        )
         entry["calls"] += 1
         entry["errors"] += int(bool(call.error_code))
         entry["cached_tokens"] += call.cached_tokens
         entry["input_tokens"] += call.input_tokens
         entry["output_tokens"] += call.output_tokens
         if route.get("usage_priced_uncached_rub") is not None:
-            entry["estimated_rub"] = str(Decimal(entry["estimated_rub"] or "0") + Decimal(route["usage_priced_uncached_rub"]))
-    return {"revision": row.revision, "providers": items, "models": [item.model_dump(mode="json") for item in models.values()],
-            "policy": {**control.policy(), **row.policy,
-                       "local_only": settings.AI_LOCAL_ONLY or row.policy.get("local_only", control.policy()["local_only"])},
-            "catalog": CATALOG, "roles": ROLES,
-            "stats": stats, "stats_truncated": len(calls) > 5000, "local_endpoints": settings.AI_LOCAL_ENDPOINTS,
-            "cache_ttl_seconds": settings.AI_CACHE_TTL_SECONDS, "reload_seconds": 5}
+            entry["estimated_rub"] = str(
+                Decimal(entry["estimated_rub"] or "0") + Decimal(route["usage_priced_uncached_rub"])
+            )
+    return {
+        "revision": row.revision,
+        "providers": items,
+        "models": [item.model_dump(mode="json") for item in models.values()],
+        "policy": {
+            **control.policy(),
+            **row.policy,
+            "local_only": settings.AI_LOCAL_ONLY
+            or row.policy.get("local_only", control.policy()["local_only"]),
+        },
+        "catalog": CATALOG,
+        "roles": ROLES,
+        "stats": stats,
+        "stats_truncated": len(calls) > 5000,
+        "local_endpoints": settings.AI_LOCAL_ENDPOINTS,
+        "cache_ttl_seconds": settings.AI_CACHE_TTL_SECONDS,
+        "reload_seconds": 5,
+    }

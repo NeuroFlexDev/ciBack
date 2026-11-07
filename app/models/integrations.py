@@ -1,5 +1,20 @@
 """Tenant-scoped integrations, durable deliveries and billing ledger."""
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+
 from app.database.db import Base
 
 
@@ -38,7 +53,9 @@ class IntegrationKey(Base):
 
 class IntegrationOperation(Base):
     __tablename__ = "integration_operations"
-    __table_args__ = (UniqueConstraint("organization_id", "external_id", name="uq_integration_org_external_id"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "external_id", name="uq_integration_org_external_id"),
+    )
     id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     external_id = Column(String(64), nullable=False)
@@ -77,7 +94,9 @@ class OIDCProvider(Base):
 
 class ExternalIdentity(Base):
     __tablename__ = "external_identities"
-    __table_args__ = (UniqueConstraint("provider_id", "subject", name="uq_identity_provider_subject"),)
+    __table_args__ = (
+        UniqueConstraint("provider_id", "subject", name="uq_identity_provider_subject"),
+    )
     id = Column(Integer, primary_key=True)
     provider_id = Column(Integer, ForeignKey("oidc_providers.id"), nullable=False)
     subject = Column(String(255), nullable=False)
@@ -104,7 +123,9 @@ class OIDCSession(Base):
 class MobileSession(Base):
     __tablename__ = "mobile_sessions"
     id = Column(String(36), primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     refresh_token_hash = Column(String(64), nullable=False, unique=True)
     previous_refresh_token_hash = Column(String(64), nullable=True, unique=True)
     token_version = Column(Integer, nullable=False, default=0)
@@ -118,7 +139,9 @@ class MobileSession(Base):
 class MobileRefreshToken(Base):
     __tablename__ = "mobile_refresh_tokens"
     token_hash = Column(String(64), primary_key=True)
-    session_id = Column(String(36), ForeignKey("mobile_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(
+        String(36), ForeignKey("mobile_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     issued_at = Column(DateTime, nullable=False, default=func.now())
     consumed_at = Column(DateTime, nullable=True)
 
@@ -126,7 +149,13 @@ class MobileRefreshToken(Base):
 class MobilePushDevice(Base):
     __tablename__ = "mobile_push_devices"
     id = Column(String(36), primary_key=True)
-    session_id = Column(String(36), ForeignKey("mobile_sessions.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    session_id = Column(
+        String(36),
+        ForeignKey("mobile_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
     token_hash = Column(String(64), nullable=False, unique=True)
     token_encrypted = Column(Text, nullable=True)
     platform = Column(String(16), nullable=False)
@@ -211,7 +240,9 @@ class LTIPlatform(Base):
 
 class LTIResource(Base):
     __tablename__ = "lti_resources"
-    __table_args__ = (UniqueConstraint("platform_id", "resource_link_id", name="uq_lti_platform_resource"),)
+    __table_args__ = (
+        UniqueConstraint("platform_id", "resource_link_id", name="uq_lti_platform_resource"),
+    )
     id = Column(Integer, primary_key=True)
     platform_id = Column(Integer, ForeignKey("lti_platforms.id"), nullable=False)
     resource_link_id = Column(String(255), nullable=False)
@@ -243,10 +274,16 @@ class LTISession(Base):
 
 class LTIGradeBinding(Base):
     __tablename__ = "lti_grade_bindings"
-    __table_args__ = (UniqueConstraint("platform_id", "assignment_id", "subject", name="uq_lti_assignment_grade_binding"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "platform_id", "assignment_id", "subject", name="uq_lti_assignment_grade_binding"
+        ),
+    )
     id = Column(Integer, primary_key=True)
     platform_id = Column(Integer, ForeignKey("lti_platforms.id"), nullable=False)
-    assignment_id = Column(Integer, ForeignKey("learning_assignments.id"), nullable=False, index=True)
+    assignment_id = Column(
+        Integer, ForeignKey("learning_assignments.id"), nullable=False, index=True
+    )
     subject = Column(String(255), nullable=False)
     lineitem_url = Column(String(2048), nullable=False)
     last_queued_at = Column(DateTime, nullable=True)

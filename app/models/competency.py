@@ -7,9 +7,7 @@ from app.models.base import BaseModelMixin
 
 class Competency(Base, BaseModelMixin):
     __tablename__ = "competencies"
-    __table_args__ = (
-        Index("ix_competencies_course_deleted", "course_id", "is_deleted"),
-    )
+    __table_args__ = (Index("ix_competencies_course_deleted", "course_id", "is_deleted"),)
 
     course_id = Column(
         Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True

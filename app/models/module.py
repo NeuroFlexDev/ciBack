@@ -1,7 +1,8 @@
 from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModelMixin
+
 from app.database.db import Base
+from app.models.base import BaseModelMixin
 
 # Импорты зависимых моделей
 
@@ -27,6 +28,4 @@ class Module(Base, BaseModelMixin):
     lessons = relationship("Lesson", back_populates="module", cascade="all, delete-orphan")
     tests = relationship("Test", back_populates="module", cascade="all, delete-orphan")
     tasks = relationship("Task", back_populates="module", cascade="all, delete-orphan")
-    learning_objectives = relationship(
-        "LearningObjective", back_populates="module"
-    )
+    learning_objectives = relationship("LearningObjective", back_populates="module")

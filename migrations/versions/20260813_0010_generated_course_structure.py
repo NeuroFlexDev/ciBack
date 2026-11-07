@@ -3,10 +3,11 @@
 Revision ID: 20260813_0010
 Revises: 20260813_0009
 """
+
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "20260813_0010"
 down_revision: str | None = "20260813_0009"
@@ -55,9 +56,13 @@ def upgrade() -> None:
     with op.batch_alter_table("tests") as batch:
         batch.alter_column("position", nullable=False)
         batch.alter_column("assessment_scope", nullable=False)
-        batch.create_foreign_key("fk_tests_course_id", "courses", ["course_id"], ["id"], ondelete="CASCADE")
+        batch.create_foreign_key(
+            "fk_tests_course_id", "courses", ["course_id"], ["id"], ondelete="CASCADE"
+        )
         batch.create_check_constraint("ck_tests_position_nonnegative", "position >= 0")
-        batch.create_check_constraint("ck_tests_assessment_scope", "assessment_scope IN ('module', 'final')")
+        batch.create_check_constraint(
+            "ck_tests_assessment_scope", "assessment_scope IN ('module', 'final')"
+        )
         batch.create_check_constraint(
             "ck_tests_parent_scope",
             "(assessment_scope = 'module' AND module_id IS NOT NULL AND course_id IS NULL) "

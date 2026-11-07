@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 from app.core.config import settings
 
 
@@ -18,7 +19,11 @@ def model_policy(role: str) -> ModelPolicy:
     policies = {
         "ingestion": (fast, 6000, "Extract explicit knowledge from bounded document batches"),
         "competency_mapper": (reason, 10000, "Map evidence to measurable competencies"),
-        "course_architect": (reason, 12000, "Plan objectives, prerequisites and exact lesson count"),
+        "course_architect": (
+            reason,
+            12000,
+            "Plan objectives, prerequisites and exact lesson count",
+        ),
         "lesson_writer": (writer, 12000, "Write one complete lesson from retrieved evidence"),
         "assessment": (reason, 12000, "Produce answerable assessments and scoring rubrics"),
         "critic_qa": (critic, 6000, "Independently verify grounding and pedagogical quality"),

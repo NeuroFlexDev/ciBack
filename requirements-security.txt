@@ -1,0 +1,2 @@
+# Semgrep has its own environment so its dependencies do not alter the application.
+semgrep==1.184.0

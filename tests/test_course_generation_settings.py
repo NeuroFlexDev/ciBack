@@ -1,4 +1,3 @@
-from tests.generated_graph_fixture import concrete_graph
 import pytest
 
 from app.core.security import create_access_token, hash_password
@@ -7,6 +6,7 @@ from app.models.generation_run import GenerationRun
 from app.models.user import User
 from app.services.pipeline_service import PipelineRunFailed, PipelineService
 from tests.factories import make_course
+from tests.generated_graph_fixture import concrete_graph
 
 
 def _payload(**overrides):
@@ -24,9 +24,7 @@ def _payload(**overrides):
     return payload
 
 
-def test_put_get_and_idempotent_settings(
-    client, db_session, auth_user, auth_headers
-):
+def test_put_get_and_idempotent_settings(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id, name="Draft")
     course.status = "draft"
     db_session.commit()
@@ -42,9 +40,7 @@ def test_put_get_and_idempotent_settings(
     assert created.json()["target_audience"] == "New employees"
     assert created.json()["course_status"] == "configured"
 
-    first = db_session.query(CourseGenerationSettings).filter_by(
-        course_id=course.id
-    ).one()
+    first = db_session.query(CourseGenerationSettings).filter_by(course_id=course.id).one()
     first_id = first.id
     first_created_at = first.created_at
 
@@ -64,18 +60,14 @@ def test_put_get_and_idempotent_settings(
     assert updated.status_code == 200
     assert updated.json()["target_audience"] is None
     assert updated.json()["lesson_count"] == 100
-    assert db_session.query(CourseGenerationSettings).filter_by(
-        course_id=course.id
-    ).count() == 1
+    assert db_session.query(CourseGenerationSettings).filter_by(course_id=course.id).count() == 1
     db_session.refresh(first)
     assert first.id == first_id
     assert first.created_at == first_created_at
     db_session.refresh(course)
     assert course.name == "Information Security"
 
-    restored = client.get(
-        f"/api/courses/{course.id}/generation-settings", headers=auth_headers
-    )
+    restored = client.get(f"/api/courses/{course.id}/generation-settings", headers=auth_headers)
     assert restored.status_code == 200
     assert restored.json() == updated.json()
 
@@ -98,25 +90,27 @@ def test_invalid_lesson_count_is_rejected(
     client, db_session, auth_user, auth_headers, lesson_count
 ):
     course = make_course(db_session, owner_id=auth_user.id)
-    assert client.put(
-        f"/api/courses/{course.id}/generation-settings",
-        json=_payload(lesson_count=lesson_count),
-        headers=auth_headers,
-    ).status_code == 422
+    assert (
+        client.put(
+            f"/api/courses/{course.id}/generation-settings",
+            json=_payload(lesson_count=lesson_count),
+            headers=auth_headers,
+        ).status_code
+        == 422
+    )
 
 
-@pytest.mark.parametrize(
-    "difficulty", ["internship", "basic", "intermediate", "advanced"]
-)
-def test_all_difficulties_are_accepted(
-    client, db_session, auth_user, auth_headers, difficulty
-):
+@pytest.mark.parametrize("difficulty", ["internship", "basic", "intermediate", "advanced"])
+def test_all_difficulties_are_accepted(client, db_session, auth_user, auth_headers, difficulty):
     course = make_course(db_session, owner_id=auth_user.id)
-    assert client.put(
-        f"/api/courses/{course.id}/generation-settings",
-        json=_payload(difficulty=difficulty),
-        headers=auth_headers,
-    ).status_code == 200
+    assert (
+        client.put(
+            f"/api/courses/{course.id}/generation-settings",
+            json=_payload(difficulty=difficulty),
+            headers=auth_headers,
+        ).status_code
+        == 200
+    )
 
 
 def test_settings_validation_is_strict(client, db_session, auth_user, auth_headers):
@@ -134,13 +128,9 @@ def test_settings_validation_is_strict(client, db_session, auth_user, auth_heade
         assert client.put(url, json=payload, headers=auth_headers).status_code == 422
 
 
-def test_settings_acl_missing_and_generating_conflict(
-    client, db_session, auth_user, auth_headers
-):
+def test_settings_acl_missing_and_generating_conflict(client, db_session, auth_user, auth_headers):
     course = make_course(db_session, owner_id=auth_user.id)
-    missing = client.get(
-        f"/api/courses/{course.id}/generation-settings", headers=auth_headers
-    )
+    missing = client.get(f"/api/courses/{course.id}/generation-settings", headers=auth_headers)
     assert missing.status_code == 404
     assert missing.json()["detail"]["code"] == "generation_settings_not_found"
 
@@ -150,22 +140,26 @@ def test_settings_acl_missing_and_generating_conflict(
     )
     db_session.add(foreign)
     db_session.commit()
-    foreign_headers = {
-        "Authorization": f"Bearer {create_access_token(foreign.id)}"
-    }
-    assert client.put(
-        f"/api/courses/{course.id}/generation-settings",
-        json=_payload(),
-        headers=foreign_headers,
-    ).status_code == 404
+    foreign_headers = {"Authorization": f"Bearer {create_access_token(foreign.id)}"}
+    assert (
+        client.put(
+            f"/api/courses/{course.id}/generation-settings",
+            json=_payload(),
+            headers=foreign_headers,
+        ).status_code
+        == 404
+    )
 
     course.status = "generating"
     db_session.commit()
-    assert client.put(
-        f"/api/courses/{course.id}/generation-settings",
-        json=_payload(),
-        headers=auth_headers,
-    ).status_code == 409
+    assert (
+        client.put(
+            f"/api/courses/{course.id}/generation-settings",
+            json=_payload(),
+            headers=auth_headers,
+        ).status_code
+        == 409
+    )
 
 
 def test_ready_course_can_be_reconfigured(client, db_session, auth_user, auth_headers):
@@ -181,11 +175,9 @@ def test_ready_course_can_be_reconfigured(client, db_session, auth_user, auth_he
     assert response.json()["course_status"] == "configured"
 
 
-def test_generation_uses_snapshot_and_settings_in_prompt(
-    db_session, auth_user, monkeypatch
-):
-    from tests.test_upload_pipeline import _course_and_document
+def test_generation_uses_snapshot_and_settings_in_prompt(db_session, auth_user, monkeypatch):
     from app.models.document import DocumentChunk
+    from tests.test_upload_pipeline import _course_and_document
 
     course, document, _ = _course_and_document(db_session, auth_user)
     document.status = "indexed"
@@ -218,11 +210,9 @@ def test_generation_uses_snapshot_and_settings_in_prompt(
     assert stored.settings_snapshot == run.settings_snapshot
 
 
-def test_settings_change_generation_fingerprint(
-    db_session, auth_user, monkeypatch
-):
-    from tests.test_upload_pipeline import _course_and_document
+def test_settings_change_generation_fingerprint(db_session, auth_user, monkeypatch):
     from app.models.document import DocumentChunk
+    from tests.test_upload_pipeline import _course_and_document
 
     course, document, _ = _course_and_document(db_session, auth_user)
     document.status = "indexed"
@@ -243,9 +233,7 @@ def test_settings_change_generation_fingerprint(
     first = PipelineService.generate_graph(
         db_session, course_id=course.id, owner_id=auth_user.id, force=False
     )
-    settings = db_session.query(CourseGenerationSettings).filter_by(
-        course_id=course.id
-    ).one()
+    settings = db_session.query(CourseGenerationSettings).filter_by(course_id=course.id).one()
     settings.difficulty = "advanced"
     course.status = "configured"
     db_session.commit()
@@ -257,11 +245,9 @@ def test_settings_change_generation_fingerprint(
     assert second.settings_snapshot["difficulty"] == "advanced"
 
 
-def test_generation_fails_when_lesson_count_does_not_match(
-    db_session, auth_user, monkeypatch
-):
-    from tests.test_upload_pipeline import _course_and_document
+def test_generation_fails_when_lesson_count_does_not_match(db_session, auth_user, monkeypatch):
     from app.models.document import DocumentChunk
+    from tests.test_upload_pipeline import _course_and_document
 
     course, document, _ = _course_and_document(db_session, auth_user)
     document.status = "indexed"
@@ -294,9 +280,7 @@ def test_generation_fails_when_lesson_count_does_not_match(
 
 def test_generation_settings_openapi_and_authentication(client):
     assert client.get("/api/courses/1/generation-settings").status_code == 401
-    assert client.put(
-        "/api/courses/1/generation-settings", json=_payload()
-    ).status_code == 401
+    assert client.put("/api/courses/1/generation-settings", json=_payload()).status_code == 401
     schema = client.get("/openapi.json").json()
     path = schema["paths"]["/api/courses/{course_id}/generation-settings"]
     assert set(path) == {"get", "put"}

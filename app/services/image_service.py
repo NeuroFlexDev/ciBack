@@ -1,31 +1,42 @@
 """Authenticated immutable image assets; generation is idempotent and reviewable."""
+
 from __future__ import annotations
 
+import re
+import warnings
 from datetime import datetime
 from io import BytesIO
-import re
 from uuid import uuid4
-import warnings
 
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
 
 from app.ai import providers
 from app.core.config import settings
-from app.models.materials import CourseImage
 from app.models.course import Course
+from app.models.materials import CourseImage
 from app.models.user import User
 from app.services.course_access import course_access_filter
 from app.services.file_storage import LocalFileStorage
 
 
 def course_access(db, user, course_id, *, allow_reviewer=False):
-    course = db.query(Course).filter(Course.id == course_id, course_access_filter(user.id),
-                                     Course.is_deleted.is_(False)).first()
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id, course_access_filter(user.id), Course.is_deleted.is_(False))
+        .first()
+    )
     if not course and allow_reviewer:
         from app.services.learning_service import can_scope
+
         candidate = db.get(Course, course_id)
-        if candidate and not candidate.is_deleted and candidate.organization_id is not None and candidate.organization_id == user.organization_id and can_scope(db, user, "reviewer", course_id=course_id):
+        if (
+            candidate
+            and not candidate.is_deleted
+            and candidate.organization_id is not None
+            and candidate.organization_id == user.organization_id
+            and can_scope(db, user, "reviewer", course_id=course_id)
+        ):
             course = candidate
     if not course:
         raise HTTPException(404, "Курс не найден")
@@ -33,10 +44,31 @@ def course_access(db, user, course_id, *, allow_reviewer=False):
 
 
 def image_out(item):
-    return {key: getattr(item, key) for key in ("id", "course_id", "status", "mime_type", "size_bytes",
-            "width", "height", "prompt", "error_code", "review_comment", "created_at", "updated_at",
-            "original_filename", "duration_seconds")} | {
-        "content_url": f"/api/media/{item.id}/content" if item.mime_type and item.mime_type.startswith("video/") and item.storage_key else f"/api/images/{item.id}/content" if item.storage_key else None}
+    return {
+        key: getattr(item, key)
+        for key in (
+            "id",
+            "course_id",
+            "status",
+            "mime_type",
+            "size_bytes",
+            "width",
+            "height",
+            "prompt",
+            "error_code",
+            "review_comment",
+            "created_at",
+            "updated_at",
+            "original_filename",
+            "duration_seconds",
+        )
+    } | {
+        "content_url": f"/api/media/{item.id}/content"
+        if item.mime_type and item.mime_type.startswith("video/") and item.storage_key
+        else f"/api/images/{item.id}/content"
+        if item.storage_key
+        else None
+    }
 
 
 def storage():
@@ -67,7 +99,12 @@ def normalize_image(content):
                 if len(result) > settings.IMAGE_MAX_BYTES:
                     raise HTTPException(413, "Декодированная иллюстрация превышает лимит")
                 return result, "image/png" if fmt == "PNG" else "image/jpeg", width, height
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+    except (
+        UnidentifiedImageError,
+        OSError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
         raise HTTPException(422, "Повреждённое или недопустимое изображение") from exc
 
 
@@ -85,14 +122,28 @@ def image_access(db, user, image_id, *, author_only=False):
     item = (query.with_for_update() if author_only else query).first()
     if not item:
         raise HTTPException(404, "Иллюстрация не найдена")
-    if db.query(Course).filter(Course.id == item.course_id, course_access_filter(user.id), Course.is_deleted.is_(False)).first():
+    if (
+        db.query(Course)
+        .filter(
+            Course.id == item.course_id, course_access_filter(user.id), Course.is_deleted.is_(False)
+        )
+        .first()
+    ):
         return item
     from app.services.learning_service import can_scope
+
     course = db.get(Course, item.course_id)
-    if course and not course.is_deleted and course.organization_id is not None and course.organization_id == user.organization_id and can_scope(db, user, "reviewer", course_id=course.id):
+    if (
+        course
+        and not course.is_deleted
+        and course.organization_id is not None
+        and course.organization_id == user.organization_id
+        and can_scope(db, user, "reviewer", course_id=course.id)
+    ):
         return item
     if not author_only and item.status == "approved":
         from app.services.learning_service import authorized_learning_image
+
         if authorized_learning_image(db, user, image_id):
             return item
     raise HTTPException(404, "Иллюстрация не найдена")
@@ -100,15 +151,19 @@ def image_access(db, user, image_id, *, author_only=False):
 
 def prepare_generation(db, user, course_id, prompt, request_id):
     from app.services.organization_access import lock_member
+
     user = lock_member(db, user.id, expected_auth_version=user.auth_version)
     from app.services.ai_resources import locked
+
     locked(db)  # Also serialize SQLite admission before checking idempotency and image count.
     from app.services.feature_access import require_feature
+
     require_feature(db, user.organization_id, "images")
     course_access(db, user, course_id)
     # Membership/resource locks serialize admission; sent or uncertain calls consume quota.
     if user.organization_id:
         from app.services.organization_access import lock_org
+
         org = lock_org(db, user.organization_id)
         if not org.is_active:
             raise HTTPException(403, "Организация приостановлена")
@@ -119,36 +174,82 @@ def prepare_generation(db, user, course_id, prompt, request_id):
         return existing, False
     provider = providers.registry().get(settings.IMAGE_PROVIDER)
     if not provider or not providers.available(provider) or not settings.IMAGE_MODEL:
-        raise HTTPException(503, {"code": "image_provider_unavailable", "message": "Генератор изображений недоступен. Можно загрузить PNG или JPEG."})
+        raise HTTPException(
+            503,
+            {
+                "code": "image_provider_unavailable",
+                "message": "Генератор изображений недоступен. Можно загрузить PNG или JPEG.",
+            },
+        )
     since = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     scope = Course.organization_id == user.organization_id
     if user.organization_id is None:
         scope = scope & (Course.owner_id == user.id)
-    used = db.query(CourseImage).join(Course).filter(scope, CourseImage.prompt.is_not(None),
-                                                   CourseImage.created_at >= since).count()
-    from app.services.material_quota import material_policy, check_storage
+    used = (
+        db.query(CourseImage)
+        .join(Course)
+        .filter(scope, CourseImage.prompt.is_not(None), CourseImage.created_at >= since)
+        .count()
+    )
     from app.services.ai_entitlements import unlimited_ai
-    if not unlimited_ai(db, user.organization_id) and used >= material_policy(db, user)["image_monthly_limit"]:
+    from app.services.material_quota import check_storage, material_policy
+
+    if (
+        not unlimited_ai(db, user.organization_id)
+        and used >= material_policy(db, user)["image_monthly_limit"]
+    ):
         raise HTTPException(429, "Исчерпан месячный лимит генерации иллюстраций")
     check_storage(db, user, settings.IMAGE_MAX_BYTES)
-    item = CourseImage(owner_id=user.id, course_id=course_id, prompt=prompt, request_id=request_id,
-                       status="queued", provider=provider.id, model=settings.IMAGE_MODEL, size_bytes=settings.IMAGE_MAX_BYTES)
+    item = CourseImage(
+        owner_id=user.id,
+        course_id=course_id,
+        prompt=prompt,
+        request_id=request_id,
+        status="queued",
+        provider=provider.id,
+        model=settings.IMAGE_MODEL,
+        size_bytes=settings.IMAGE_MAX_BYTES,
+    )
     from app.services.image_provider import generation_options
-    item.generation_config = {"options": generation_options(item.model), "endpoint": str(provider.base_url),
-                              "local": provider.local, "download_hosts": settings.IMAGE_DOWNLOAD_HOSTS}
+
+    item.generation_config = {
+        "options": generation_options(item.model),
+        "endpoint": str(provider.base_url),
+        "local": provider.local,
+        "download_hosts": settings.IMAGE_DOWNLOAD_HOSTS,
+    }
     from app.services.ai_resources import reserve
+
     if not provider.local and settings.IMAGE_PRICE_RUB is None:
-        raise HTTPException(503, {"code": "image_price_unconfigured", "message": "Не настроен денежный лимит одного изображения"})
-    db.add(item); db.flush()
-    reserve(db, owner_id=user.id, course_id=course_id, operation="image", lane="background",
-        key=f"image:{item.id}", queued=True, cost=0 if provider.local else settings.IMAGE_PRICE_RUB)
-    db.commit(); db.refresh(item)
+        raise HTTPException(
+            503,
+            {
+                "code": "image_price_unconfigured",
+                "message": "Не настроен денежный лимит одного изображения",
+            },
+        )
+    db.add(item)
+    db.flush()
+    reserve(
+        db,
+        owner_id=user.id,
+        course_id=course_id,
+        operation="image",
+        lane="background",
+        key=f"image:{item.id}",
+        queued=True,
+        cost=0 if provider.local else settings.IMAGE_PRICE_RUB,
+    )
+    db.commit()
+    db.refresh(item)
     return item, True
 
 
 def execute_image_generation(image_id):
-    from app.database.db import SessionLocal
     from openai import OpenAI
+
+    from app.database.db import SessionLocal
+
     db = SessionLocal()
     item = None
     claimed = False
@@ -158,10 +259,12 @@ def execute_image_generation(image_id):
         if item is None or item.status != "queued":
             return
         from app.services.ai_resources import claim
+
         claimed = claim(db, f"image:{image_id}")
         if not claimed:
             return
-        from app.services.ai_access_boundary import principal_stamp, author_result_access
+        from app.services.ai_access_boundary import author_result_access, principal_stamp
+
         owner = db.get(User, item.owner_id)
         if owner is None:
             raise RuntimeError("image_owner_unavailable")
@@ -170,31 +273,50 @@ def execute_image_generation(image_id):
         provider = providers.registry().get(item.provider)
         if not provider or not providers.available(provider):
             raise RuntimeError("provider_unavailable")
-        from app.services.image_provider import image_bytes, ImageResultError
+        from app.services.image_provider import ImageResultError, image_bytes
+
         config = item.generation_config
-        if not config or config.get("endpoint") != str(provider.base_url) or config.get("local") != provider.local:
+        if (
+            not config
+            or config.get("endpoint") != str(provider.base_url)
+            or config.get("local") != provider.local
+        ):
             raise ImageResultError("image_configuration_changed")
         item.status = "generating"
         db.commit()  # At-most-once submission: a killed worker never blindly bills again.
-        client = OpenAI(api_key=providers.credential(provider), base_url=str(provider.base_url),
-                        timeout=provider.timeout_seconds, max_retries=0, **providers.client_options(provider))
+        client = OpenAI(
+            api_key=providers.credential(provider),
+            base_url=str(provider.base_url),
+            timeout=provider.timeout_seconds,
+            max_retries=0,
+            **providers.client_options(provider),
+        )
         request_started = True
         result = client.images.generate(prompt=item.prompt, **config["options"])
         author_result_access(db, owner_id, stamp, course_id, "images")
-        content = image_bytes(result, timeout=provider.timeout_seconds, allowed_hosts=config.get("download_hosts", []))
+        content = image_bytes(
+            result, timeout=provider.timeout_seconds, allowed_hosts=config.get("download_hosts", [])
+        )
         author_result_access(db, owner_id, stamp, course_id, "images")
         save_content(item, content)
         db.commit()
     except Exception as exc:
         db.rollback()
         from app.services.ai_resources import CapacityBusy
+
         if isinstance(exc, CapacityBusy) and not claimed:
             from rq import get_current_job
+
             job = get_current_job()
             if job is not None and not job.retries_left:
                 item = db.get(CourseImage, image_id)
-                item.status, item.error_code, item.size_bytes = "failed", "image_capacity_unavailable", 0
+                item.status, item.error_code, item.size_bytes = (
+                    "failed",
+                    "image_capacity_unavailable",
+                    0,
+                )
                 from app.services.ai_resources import finish
+
                 finish(db, f"image:{image_id}", unsent=True)
                 return
             raise
@@ -203,12 +325,25 @@ def execute_image_generation(image_id):
             item.status = "failed"
             item.size_bytes = 0
             from app.services.image_provider import ImageResultError
-            item.error_code = "image_access_revoked" if isinstance(exc, HTTPException) and exc.status_code in {401, 403, 404, 409} else str(exc) if isinstance(exc, ImageResultError) else "image_generation_failed"
+
+            item.error_code = (
+                "image_access_revoked"
+                if isinstance(exc, HTTPException) and exc.status_code in {401, 403, 404, 409}
+                else str(exc)
+                if isinstance(exc, ImageResultError)
+                else "image_generation_failed"
+            )
             db.commit()
     finally:
         if claimed:
             from app.services.ai_resources import finish
-            finish(db, f"image:{image_id}", unsent=not request_started, failed=db.get(CourseImage, image_id).status == "failed")
+
+            finish(
+                db,
+                f"image:{image_id}",
+                unsent=not request_started,
+                failed=db.get(CourseImage, image_id).status == "failed",
+            )
         db.close()
 
 
@@ -218,16 +353,24 @@ def enqueue_image(image_id):
         return
     from redis import Redis
     from rq import Queue, Retry
+
     queue = Queue(settings.GENERATION_QUEUE_NAME, connection=Redis.from_url(settings.REDIS_URL))
-    queue.enqueue("app.services.image_service.execute_image_generation", image_id,
-                  job_id=f"course-image-{image_id}", job_timeout=360, result_ttl=86400, failure_ttl=604800,
-                  retry=Retry(max=20, interval=15))
+    queue.enqueue(
+        "app.services.image_service.execute_image_generation",
+        image_id,
+        job_id=f"course-image-{image_id}",
+        job_timeout=360,
+        result_ttl=86400,
+        failure_ttl=604800,
+        retry=Retry(max=20, interval=15),
+    )
 
 
 def reconcile_enqueue_failure(db, image_id):
     """Redis acknowledgement can be lost after a worker started: never refund that call."""
     from app.models.ai_resources import AIResourceUsage
-    from app.services.ai_resources import locked, finish
+    from app.services.ai_resources import finish, locked
+
     item = db.query(CourseImage).filter_by(id=image_id).with_for_update().populate_existing().one()
     locked(db)
     receipt = db.query(AIResourceUsage).filter_by(key=f"image:{image_id}").populate_existing().one()
@@ -244,16 +387,35 @@ def validate_course_images(db, course_id):
     course_id = getattr(course_id, "id", course_id)
     from app.services.learning_service import build_publication_snapshot
     from app.services.protected_image_refs import image_ids_in
+
     course = db.get(Course, course_id)
     if not course:
         raise HTTPException(404, "Курс не найден")
     # The same snapshot is rendered in author review, learner and support views.
     # Theory-only validation misses references in task descriptions and rubrics.
-    modules = sorted((module for module in course.modules if not module.is_deleted), key=lambda module: (module.position, module.id))
+    modules = sorted(
+        (module for module in course.modules if not module.is_deleted),
+        key=lambda module: (module.position, module.id),
+    )
     ids = image_ids_in(build_publication_snapshot(db, course, modules))
     if not ids:
         return
-    approved = {item.id for item in db.query(CourseImage).filter(CourseImage.id.in_(ids),
-                 CourseImage.course_id == course_id, CourseImage.status == "approved").all()}
+    approved = {
+        item.id
+        for item in db.query(CourseImage)
+        .filter(
+            CourseImage.id.in_(ids),
+            CourseImage.course_id == course_id,
+            CourseImage.status == "approved",
+        )
+        .all()
+    }
     if approved != ids:
-        raise HTTPException(409, {"code": "images_need_review", "message": "Проверьте и утвердите все изображения и видео перед публикацией", "image_ids": sorted(ids - approved)})
+        raise HTTPException(
+            409,
+            {
+                "code": "images_need_review",
+                "message": "Проверьте и утвердите все изображения и видео перед публикацией",
+                "image_ids": sorted(ids - approved),
+            },
+        )

@@ -1,25 +1,43 @@
 """Bounded HTTPS requests pinned to validated DNS results. No redirects or proxies."""
+
 import http.client
 import ipaddress
 import json
 import socket
 import ssl
 from urllib.parse import urlsplit
+
 from app.core.integration_config import integration_settings
 
 
 def validate_endpoint(url):
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
         raise ValueError("Integration endpoints require HTTPS without credentials or fragments")
     if parsed.port not in (None, 443):
         raise ValueError("Integration endpoints must use port 443")
-    allowed_private = {h.strip().lower() for h in integration_settings.INTEGRATION_PRIVATE_HOSTS.split(",") if h.strip()}
-    addresses = list({item[4][0] for item in socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)})
+    allowed_private = {
+        h.strip().lower()
+        for h in integration_settings.INTEGRATION_PRIVATE_HOSTS.split(",")
+        if h.strip()
+    }
+    addresses = list(
+        {item[4][0] for item in socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)}
+    )
     if not addresses:
         raise ValueError("Integration hostname has no address")
-    if parsed.hostname.lower() not in allowed_private and any(not ipaddress.ip_address(ip).is_global for ip in addresses):
-        raise ValueError("Private, loopback and reserved integration destinations are not permitted")
+    if parsed.hostname.lower() not in allowed_private and any(
+        not ipaddress.ip_address(ip).is_global for ip in addresses
+    ):
+        raise ValueError(
+            "Private, loopback and reserved integration destinations are not permitted"
+        )
     return parsed, addresses[0]
 
 
@@ -35,7 +53,9 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 def request(method, url, body=None, headers=None, max_bytes=1024 * 1024):
     parsed, address = validate_endpoint(url)
-    connection = PinnedHTTPSConnection(parsed.hostname, address, integration_settings.OIDC_HTTP_TIMEOUT)
+    connection = PinnedHTTPSConnection(
+        parsed.hostname, address, integration_settings.OIDC_HTTP_TIMEOUT
+    )
     try:
         path = parsed.path or "/"
         if parsed.query:

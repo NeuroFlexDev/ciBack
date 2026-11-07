@@ -1,7 +1,8 @@
 from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModelMixin
+
 from app.database.db import Base
+from app.models.base import BaseModelMixin
 
 
 class Lesson(Base, BaseModelMixin):
@@ -24,6 +25,4 @@ class Lesson(Base, BaseModelMixin):
         "Theory", uselist=False, back_populates="lesson", cascade="all, delete-orphan"
     )
     feedback = relationship("Feedback", back_populates="lesson", cascade="all, delete-orphan")
-    learning_objectives = relationship(
-        "LearningObjective", back_populates="lesson"
-    )
+    learning_objectives = relationship("LearningObjective", back_populates="lesson")

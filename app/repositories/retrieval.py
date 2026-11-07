@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.course import Course
-from app.services.course_access import course_access_filter, related_course_access
 from app.models.document import Document, DocumentChunk
 from app.models.domain_enums import DocumentStatus
+from app.services.course_access import course_access_filter, related_course_access
 
 
 class RetrievalRepository:
@@ -11,14 +11,14 @@ class RetrievalRepository:
     def get_owned_course(db: Session, course_id: int, owner_id: int) -> Course | None:
         return (
             db.query(Course)
-            .filter(Course.id == course_id, course_access_filter(owner_id), Course.is_deleted.is_(False))
+            .filter(
+                Course.id == course_id, course_access_filter(owner_id), Course.is_deleted.is_(False)
+            )
             .first()
         )
 
     @staticmethod
-    def accessible_chunks(
-        db: Session, course_id: int, owner_id: int
-    ) -> list[DocumentChunk]:
+    def accessible_chunks(db: Session, course_id: int, owner_id: int) -> list[DocumentChunk]:
         return (
             db.query(DocumentChunk)
             .join(Document, DocumentChunk.document_id == Document.id)

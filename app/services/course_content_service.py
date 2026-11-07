@@ -1,7 +1,7 @@
-from pathlib import Path
-from uuid import uuid4
 import codecs
 import zipfile
+from pathlib import Path
+from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
@@ -21,12 +21,9 @@ from app.schemas.course_graph import (
 )
 from app.services.file_storage import FileStorage, UploadTooLargeError
 
-
 ALLOWED_UPLOADS = {
     ".pdf": {"application/pdf"},
-    ".docx": {
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    },
+    ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
     ".txt": {"text/plain"},
     ".md": {"text/markdown", "text/plain"},
 }
@@ -46,6 +43,7 @@ def _validate_upload_content(upload: UploadFile, suffix: str) -> None:
     source = upload.file
     try:
         from app.services.document_safety import validate_container
+
         source.seek(0)
         bounded_content = source.read(settings.max_document_bytes + 1)
         if len(bounded_content) > settings.max_document_bytes:
@@ -157,9 +155,7 @@ class CourseContentService:
         course = CourseContentRepository.get_owned_course(db, course_id, owner_id)
         if course is None:
             raise _course_not_found()
-        graph = CourseContentRepository.get_graph_version(
-            db, course_id=course_id, version=version
-        )
+        graph = CourseContentRepository.get_graph_version(db, course_id=course_id, version=version)
         if graph is None:
             raise HTTPException(status_code=404, detail="Версия canvas не найдена")
         return CanvasVersionOut(
@@ -176,9 +172,7 @@ class CourseContentService:
         )
 
     @staticmethod
-    def save_canvas(
-        db: Session, course_id: int, owner_id: int, payload: CanvasPut
-    ) -> CanvasOut:
+    def save_canvas(db: Session, course_id: int, owner_id: int, payload: CanvasPut) -> CanvasOut:
         try:
             course = CourseContentRepository.get_owned_course(
                 db, course_id, owner_id, for_update=True
@@ -252,6 +246,7 @@ class CourseContentService:
 
         if replace_document_id is None:
             from app.services.organization_access import check_source_limit
+
             check_source_limit(db, owner_id, course_id)
         superseded = None
         if replace_document_id is not None:
@@ -283,6 +278,7 @@ class CourseContentService:
         storage_key = f"{owner_id}/{course_id}/{uuid4().hex}{suffix}"
         from app.models.user import User
         from app.services.material_quota import check_storage
+
         upload.file.seek(0, 2)
         check_storage(db, db.get(User, owner_id), upload.file.tell())
         upload.file.seek(0)

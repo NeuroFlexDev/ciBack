@@ -144,9 +144,7 @@ def valid_payload() -> dict:
                 "objective_ids": ["obj:apply"],
                 "competency_ids": ["cmp:safety"],
                 "source_ref_ids": ["src:policy"],
-                "rubric": _rubric(
-                    "rubric:practice_check", "criterion:practice_correct"
-                ),
+                "rubric": _rubric("rubric:practice_check", "criterion:practice_correct"),
             },
             {
                 "kind": "case",
@@ -254,9 +252,7 @@ def test_canvas_payload_validates_and_converts_to_current_graph_contract():
     assert lesson["practices"][0]["rubric_id"] == "rubric:practice_check"
     assert lesson["cases"][0]["lesson_ids"] == ["lesson:safety_check"]
     assert not any(node["type"] == "task" for node in nodes)
-    assert {
-        (edge["source"], edge["target"], edge["relation"]) for edge in edges
-    } == {
+    assert {(edge["source"], edge["target"], edge["relation"]) for edge in edges} == {
         ("mod:safety", "lesson:safety_check", "contains"),
         ("mod:safety", "test:module:safety", "contains"),
         ("mod:safety", "test:final:safety", "precedes"),
@@ -295,12 +291,8 @@ def test_json_schema_is_closed_and_assignment_union_is_discriminated():
         lambda value: value["tests"][1].update(module_id="mod:safety"),
         lambda value: value["assignments"][0].update(position=2),
         lambda value: value["modules"][0].update(estimated_minutes=31),
-        lambda value: value["lessons"][0].update(
-            prerequisite_lesson_ids=["lesson:safety_check"]
-        ),
-        lambda value: value["tests"][0]["questions"][0].update(
-            correct_option_ids=[]
-        ),
+        lambda value: value["lessons"][0].update(prerequisite_lesson_ids=["lesson:safety_check"]),
+        lambda value: value["tests"][0]["questions"][0].update(correct_option_ids=[]),
         lambda value: value["modules"][0].update(unknown_field=True),
     ],
 )

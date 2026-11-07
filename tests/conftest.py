@@ -1,10 +1,10 @@
 # tests/conftest.py
 import json
 import os
+import sys
 import tempfile
 from typing import Generator
 
-import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
 
 # Tests must never connect to a developer or deployment database. These values
@@ -24,11 +24,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from app.database.db import Base, get_db
-from app.core.security import create_access_token, hash_password
-from app.models.user import User
 # Domain contract app intentionally combines handlers; test_service_boundaries covers deployed isolation.
 from app.api_catalog import app
+from app.core.security import create_access_token, hash_password
+from app.database.db import Base, get_db
+from app.models.user import User
 
 
 @pytest.fixture(scope="session")
@@ -41,8 +41,10 @@ def tmpdir():
 def isolated_ai_control(monkeypatch):
     # Unit tests use environment model policy unless explicitly exercising the
     # managed registry. Never query the process-global production DB factory.
-    from app.ai import control
     from copy import deepcopy
+
+    from app.ai import control
+
     monkeypatch.setattr(control, "read_snapshot", lambda: deepcopy(control.EMPTY))
     control.invalidate()
     yield
@@ -53,12 +55,15 @@ def isolated_ai_control(monkeypatch):
 def engine():
     # чистый sqlite в памяти
     eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+
     @event.listens_for(eng, "connect")
     def explicit_transactions(connection, _):
         connection.isolation_level = None
+
     @event.listens_for(eng, "begin")
     def begin(connection):
         connection.exec_driver_sql("BEGIN")
+
     Base.metadata.create_all(eng)
     return eng
 

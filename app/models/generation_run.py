@@ -1,15 +1,15 @@
 from sqlalchemy import (
+    JSON,
+    Boolean,
     CheckConstraint,
     Column,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     Numeric,
     String,
     Text,
-    DateTime,
-    Boolean,
     UniqueConstraint,
     text,
 )
@@ -19,7 +19,6 @@ from sqlalchemy.orm import relationship
 from app.database.db import Base
 from app.models.base import BaseModelMixin
 from app.models.domain_enums import GenerationRunStatus
-
 
 JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 
@@ -51,8 +50,12 @@ class GenerationRun(Base, BaseModelMixin):
             "uq_generation_runs_active_graph_course",
             "course_id",
             unique=True,
-            postgresql_where=text("run_type = 'graph_generation' AND status IN ('queued', 'running') AND is_deleted = false"),
-            sqlite_where=text("run_type = 'graph_generation' AND status IN ('queued', 'running') AND is_deleted = 0"),
+            postgresql_where=text(
+                "run_type = 'graph_generation' AND status IN ('queued', 'running') AND is_deleted = false"
+            ),
+            sqlite_where=text(
+                "run_type = 'graph_generation' AND status IN ('queued', 'running') AND is_deleted = 0"
+            ),
         ),
         Index(
             "ix_generation_runs_fingerprint",
@@ -72,9 +75,7 @@ class GenerationRun(Base, BaseModelMixin):
         Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
     )
     run_type = Column(String(32), nullable=False)
-    status = Column(
-        String(32), nullable=False, default=GenerationRunStatus.QUEUED.value
-    )
+    status = Column(String(32), nullable=False, default=GenerationRunStatus.QUEUED.value)
     prompt = Column(Text, nullable=True)
     model = Column(String(255), nullable=True)
     input_docs = Column(JSON_PAYLOAD, nullable=False, default=list)

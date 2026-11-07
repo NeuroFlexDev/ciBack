@@ -7,10 +7,9 @@ Create Date: 2026-07-27
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "20260723_0003"
 down_revision: str | None = "20260723_0002"
@@ -43,9 +42,7 @@ def upgrade() -> None:
         sa.Column("model", sa.String(length=255), nullable=True),
         sa.Column("engine", sa.String(length=64), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False),
-        sa.CheckConstraint(
-            "status IN ('active', 'archived')", name="ck_chats_status"
-        ),
+        sa.CheckConstraint("status IN ('active', 'archived')", name="ck_chats_status"),
         sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -53,9 +50,7 @@ def upgrade() -> None:
     op.create_index("ix_chats_id", "chats", ["id"], unique=False)
     op.create_index("ix_chats_owner_id", "chats", ["owner_id"], unique=False)
     op.create_index("ix_chats_course_id", "chats", ["course_id"], unique=False)
-    op.create_index(
-        "ix_chats_owner_status", "chats", ["owner_id", "status"], unique=False
-    )
+    op.create_index("ix_chats_owner_status", "chats", ["owner_id", "status"], unique=False)
 
     op.create_table(
         "chat_messages",
@@ -75,9 +70,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_chat_messages_chat_id", "chat_messages", ["chat_id"], unique=False
-    )
+    op.create_index("ix_chat_messages_chat_id", "chat_messages", ["chat_id"], unique=False)
     op.create_index("ix_chat_messages_id", "chat_messages", ["id"], unique=False)
     op.create_index(
         "ix_chat_messages_chat_created_id",
@@ -88,9 +81,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_chat_messages_chat_created_id", table_name="chat_messages"
-    )
+    op.drop_index("ix_chat_messages_chat_created_id", table_name="chat_messages")
     op.drop_index("ix_chat_messages_id", table_name="chat_messages")
     op.drop_index("ix_chat_messages_chat_id", table_name="chat_messages")
     op.drop_table("chat_messages")

@@ -20,11 +20,13 @@ class DummyEngine:
 
 def test_chat_generate_persists_messages_and_usage(db_session, auth_user, monkeypatch):
     chat = ChatRepository.create_chat(db_session, auth_user.id, "Persistent")
-    engine = DummyEngine({
-        "text": "hi",
-        "model": "answer-model",
-        "usage": {"input_tokens": 3, "output_tokens": 2},
-    })
+    engine = DummyEngine(
+        {
+            "text": "hi",
+            "model": "answer-model",
+            "usage": {"input_tokens": 3, "output_tokens": 2},
+        }
+    )
     monkeypatch.setattr(chat_service, "get_chat_engine", lambda *_: engine)
 
     result = chat_service.chat_generate(
@@ -38,9 +40,7 @@ def test_chat_generate_persists_messages_and_usage(db_session, auth_user, monkey
     assert messages[1].total_tokens == 5
 
 
-def test_chat_generate_limits_llm_history_but_retains_all(
-    db_session, auth_user, monkeypatch
-):
+def test_chat_generate_limits_llm_history_but_retains_all(db_session, auth_user, monkeypatch):
     chat = ChatRepository.create_chat(db_session, auth_user.id, "Long")
     for index in range(25):
         ChatRepository.add_message(db_session, chat.id, "user", str(index))
