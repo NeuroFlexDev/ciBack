@@ -1,45 +1,85 @@
-from .ai_control import AIControl
-from .notifications import UserNotification
-from .business import BusinessPosition
-from .administration import Organization, Invitation, AdminEvent
-from .materials import CourseImage, LearnerAssistantMessage, OrganizationMaterialPolicy, ScopedAIUsage
-from .integrations import OutboundMessage, IntegrationKey, IntegrationOperation, WebhookEndpoint, OIDCProvider, ExternalIdentity, OIDCSession, MobileSession, MobileRefreshToken, MobilePushDevice, MobilePushPreference, BillingAccount, Invoice, PaymentEvent, LTIPlatform, LTIResource, LTIIdentity, LTISession, LTIGradeBinding
-from .approval import Approval
-from .account import PasswordReset, EmailBinding
-from .legal import LegalReceipt, LegalRequest
-from .ai_state import AICall, AIResponseCache, ChatMemory, ChunkEmbedding, CanvasWorkspace
+from .account import EmailBinding, PasswordReset
+from .administration import AdminEvent, Invitation, Organization
 from .agent_artifact import AgentArtifact
+from .ai_control import AIControl
+from .ai_resources import AIResourceMutex, AIResourceUsage, AIThreadReference
+from .ai_state import AICall, AIResponseCache, CanvasWorkspace, ChatMemory, ChunkEmbedding
+from .approval import Approval
 from .assessment_rubric import AssessmentRubric
+from .business import BusinessPosition
 from .chat import Chat, ChatMessage
 from .competency import Competency
 from .course import Course
 from .course_generation_settings import CourseGenerationSettings
 from .course_graph import CourseGraph
 from .course_modules import CourseModule
-from .course_structure import CourseStructure
 from .course_source_link import CourseSourceLink
+from .course_structure import CourseStructure
 from .course_update_proposal import CourseUpdateProposal
 from .course_version import CourseVersion
-from .feedback import Feedback
 from .document import Document, DocumentChunk
+from .feedback import Feedback
 from .generation_run import GenerationRun
+from .integrations import (
+    BillingAccount,
+    ExternalIdentity,
+    IntegrationKey,
+    IntegrationOperation,
+    Invoice,
+    LTIGradeBinding,
+    LTIIdentity,
+    LTIPlatform,
+    LTIResource,
+    LTISession,
+    MobilePushDevice,
+    MobilePushPreference,
+    MobileRefreshToken,
+    MobileSession,
+    OIDCProvider,
+    OIDCSession,
+    OutboundMessage,
+    PaymentEvent,
+    WebhookEndpoint,
+)
+from .learning import (
+    AssessmentDefinition,
+    LearningAssignment,
+    LearningDepartment,
+    LearningGradeEvent,
+    LearningGroup,
+    LearningGroupEnrollment,
+    LearningGroupMember,
+    LearningPerson,
+    LearningProgram,
+    LearningProgramEnrollment,
+    LearningProgressOperation,
+    LearningPublicationApproval,
+    LearningResponse,
+    LearningRoleGrant,
+    OrganizationLearningSettings,
+    OrganizationOwnershipTransfer,
+    PublishedLearningContent,
+)
 from .learning_event import LearningEvent
 from .learning_objective import LearningObjective
+from .legal import LegalReceipt, LegalRequest
 from .lesson import Lesson
 from .lesson_version import LessonVersion
+from .materials import (
+    CourseImage,
+    LearnerAssistantMessage,
+    OrganizationMaterialPolicy,
+    ScopedAIUsage,
+)
+from .mfa import MFAChallenge, MFARecoveryCode, UserMFA
 from .module import Module
 from .module_version import ModuleVersion
+from .notifications import UserNotification
 from .task import Task
 from .test import Test
 from .test_version import TestVersion
 from .theory import Theory
 from .user import User
-from .ai_resources import AIResourceMutex, AIResourceUsage, AIThreadReference
-from .mfa import UserMFA, MFARecoveryCode, MFAChallenge
-from .learning import (OrganizationLearningSettings, LearningRoleGrant, LearningDepartment, LearningPerson,
-    LearningGroup, LearningGroupMember, PublishedLearningContent, AssessmentDefinition, LearningAssignment,
-    LearningGroupEnrollment, LearningResponse, LearningGradeEvent, LearningProgram,
-    LearningProgramEnrollment, OrganizationOwnershipTransfer, LearningPublicationApproval, LearningProgressOperation)
 
 __all__ = [
     "LegalReceipt",

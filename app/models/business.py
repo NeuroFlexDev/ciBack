@@ -1,11 +1,25 @@
 """B2B job profiles; courses and employee membership retain tenant ownership."""
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+
 from app.database.db import Base
 
 
 class BusinessPosition(Base):
     __tablename__ = "business_positions"
-    __table_args__ = (UniqueConstraint("organization_id", "name_key", name="uq_business_position_name"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name_key", name="uq_business_position_name"),
+    )
     id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
     name = Column(String(200), nullable=False)

@@ -1,5 +1,6 @@
 """Bounded curriculum slices; IDs and evidence retain their original meaning."""
-from app.schemas.agentic_pipeline import CoursePlan, WriterArtifact, AssessmentArtifact
+
+from app.schemas.agentic_pipeline import AssessmentArtifact, CoursePlan, WriterArtifact
 
 
 def complete_writer_inventories(raw: dict, catalog: list[dict]) -> dict:
@@ -11,23 +12,27 @@ def complete_writer_inventories(raw: dict, catalog: list[dict]) -> dict:
     when it appears only in a redundant index.
     """
     import copy
+
     from app.services.agent_runtime import expand_source_refs
+
     if not isinstance(raw, dict):
         raise ValueError("Writer response must be an object")
     result = copy.deepcopy(raw)
-    canonical = {source['id']: source for source in catalog}
-    inventory = result.get('source_refs', [])
+    canonical = {source["id"]: source for source in catalog}
+    inventory = result.get("source_refs", [])
     if not isinstance(inventory, list):
         raise ValueError("Writer source_refs must be a list")
-    expand_source_refs({'source_refs': inventory}, canonical)
+    expand_source_refs({"source_refs": inventory}, canonical)
 
     def citations(node):
-        refs = node.get('source_ref_ids', [])
-        if not isinstance(refs, list) or any(not isinstance(ref, str) or ref not in canonical for ref in refs):
+        refs = node.get("source_ref_ids", [])
+        if not isinstance(refs, list) or any(
+            not isinstance(ref, str) or ref not in canonical for ref in refs
+        ):
             raise ValueError("Unknown or malformed writer citation")
         return refs
 
-    lessons = result.get('lessons')
+    lessons = result.get("lessons")
     if not isinstance(lessons, list):
         return result  # The response schema reports the missing semantic content.
     all_refs = []
@@ -35,13 +40,13 @@ def complete_writer_inventories(raw: dict, catalog: list[dict]) -> dict:
         if not isinstance(lesson, dict):
             continue
         citations(lesson)
-        sections = lesson.get('sections')
+        sections = lesson.get("sections")
         if not isinstance(sections, list) or not all(isinstance(s, dict) for s in sections):
             continue
         refs = list(dict.fromkeys(ref for section in sections for ref in citations(section)))
-        lesson['source_ref_ids'] = refs
+        lesson["source_ref_ids"] = refs
         all_refs.extend(refs)
-    result['source_refs'] = list(dict.fromkeys(all_refs))
+    result["source_refs"] = list(dict.fromkeys(all_refs))
     return result
 
 
@@ -53,6 +58,7 @@ def complete_competency_inventories(raw: dict, *, sources: set[str], knowledge: 
     Unknown IDs and malformed node references remain hard validation errors.
     """
     import copy
+
     result = copy.deepcopy(raw)
     if not isinstance(result, dict):
         return result
@@ -88,62 +94,116 @@ def complete_competency_inventories(raw: dict, *, sources: set[str], knowledge: 
 
 
 def slice_curriculum(plan: CoursePlan, writer: WriterArtifact, lesson_ids: set[str]):
-    lessons = [lesson.model_copy(update={"prerequisite_lesson_ids": [i for i in lesson.prerequisite_lesson_ids if i in lesson_ids]})
-               for lesson in plan.lessons if lesson.id in lesson_ids]
+    lessons = [
+        lesson.model_copy(
+            update={
+                "prerequisite_lesson_ids": [
+                    i for i in lesson.prerequisite_lesson_ids if i in lesson_ids
+                ]
+            }
+        )
+        for lesson in plan.lessons
+        if lesson.id in lesson_ids
+    ]
     objectives = {i for lesson in lessons for i in lesson.objective_ids}
     competencies = {i for lesson in lessons for i in lesson.competency_ids}
     modules = []
     for module in plan.modules:
         members = [lesson for lesson in lessons if lesson.id in module.lesson_ids]
         if members:
-            modules.append(module.model_copy(update={
-                "lesson_ids": [lesson.id for lesson in members],
-                "objective_ids": sorted({i for lesson in members for i in lesson.objective_ids}),
-                "competency_ids": sorted({i for lesson in members for i in lesson.competency_ids}),
-                "prerequisite_module_ids": [],
-                "source_ref_ids": sorted({i for lesson in members for i in lesson.source_ref_ids}
-                    | {ref for objective in plan.objectives
-                       if objective.id in {i for lesson in members for i in lesson.objective_ids}
-                       for ref in objective.source_ref_ids}),
-            }))
+            modules.append(
+                module.model_copy(
+                    update={
+                        "lesson_ids": [lesson.id for lesson in members],
+                        "objective_ids": sorted(
+                            {i for lesson in members for i in lesson.objective_ids}
+                        ),
+                        "competency_ids": sorted(
+                            {i for lesson in members for i in lesson.competency_ids}
+                        ),
+                        "prerequisite_module_ids": [],
+                        "source_ref_ids": sorted(
+                            {i for lesson in members for i in lesson.source_ref_ids}
+                            | {
+                                ref
+                                for objective in plan.objectives
+                                if objective.id
+                                in {i for lesson in members for i in lesson.objective_ids}
+                                for ref in objective.source_ref_ids
+                            }
+                        ),
+                    }
+                )
+            )
     draft_lessons = [lesson for lesson in writer.lessons if lesson.id in lesson_ids]
     refs = {i for lesson in [*lessons, *draft_lessons] for i in lesson.source_ref_ids}
     refs.update(i for module in modules for i in module.source_ref_ids)
-    refs.update(i for objective in plan.objectives if objective.id in objectives for i in objective.source_ref_ids)
+    refs.update(
+        i
+        for objective in plan.objectives
+        if objective.id in objectives
+        for i in objective.source_ref_ids
+    )
     sources = {ref.id: ref for ref in [*plan.source_refs, *writer.source_refs] if ref.id in refs}
-    partial_plan = plan.model_copy(update={"lessons": lessons, "modules": modules,
-        "objectives": [o for o in plan.objectives if o.id in objectives],
-        "competency_ids": sorted(competencies), "source_refs": list(sources.values()),
-        "estimated_minutes": sum(lesson.estimated_minutes for lesson in lessons)})
-    partial_writer = writer.model_copy(update={"lessons": draft_lessons, "expected_lesson_ids": sorted(lesson_ids),
-        "objective_ids": sorted(objectives), "competency_ids": sorted(competencies), "source_refs": list(sources.values())})
+    partial_plan = plan.model_copy(
+        update={
+            "lessons": lessons,
+            "modules": modules,
+            "objectives": [o for o in plan.objectives if o.id in objectives],
+            "competency_ids": sorted(competencies),
+            "source_refs": list(sources.values()),
+            "estimated_minutes": sum(lesson.estimated_minutes for lesson in lessons),
+        }
+    )
+    partial_writer = writer.model_copy(
+        update={
+            "lessons": draft_lessons,
+            "expected_lesson_ids": sorted(lesson_ids),
+            "objective_ids": sorted(objectives),
+            "competency_ids": sorted(competencies),
+            "source_refs": list(sources.values()),
+        }
+    )
     return partial_plan, partial_writer
 
 
 def merge_assessments(parts: list[AssessmentArtifact]) -> AssessmentArtifact:
     """Namespace generated IDs to avoid collisions between independent agents."""
     import hashlib
+
     payload = parts[0].model_dump(mode="json")
     for field in ("questions", "practices", "cases", "rubrics"):
         payload[field] = []
     for index, part in enumerate(parts):
+
         def visit(value):
             if isinstance(value, list):
                 return [visit(item) for item in value]
             if isinstance(value, dict):
                 return {key: visit(item) for key, item in value.items()}
-            if isinstance(value, str) and value.partition(":")[0] in {
-                "question", "option", "practice", "case", "rubric", "criterion", "level"
-            } and " " not in value:
+            if (
+                isinstance(value, str)
+                and value.partition(":")[0]
+                in {"question", "option", "practice", "case", "rubric", "criterion", "level"}
+                and " " not in value
+            ):
                 prefix, _, suffix = value.partition(":")
-                return f"{prefix}:b{index}:" + suffix[:85] + ":" + hashlib.sha256(value.encode()).hexdigest()[:8]
+                return (
+                    f"{prefix}:b{index}:"
+                    + suffix[:85]
+                    + ":"
+                    + hashlib.sha256(value.encode()).hexdigest()[:8]
+                )
             return value
+
         data = visit(part.model_dump(mode="json"))
         for field in ("questions", "practices", "cases", "rubrics"):
             payload[field].extend(data[field])
     for field in ("module_ids", "lesson_ids", "objective_ids", "competency_ids"):
         payload[field] = sorted({item for part in parts for item in getattr(part, field)})
-    payload["source_refs"] = list({ref.id: ref.model_dump(mode="json") for part in parts for ref in part.source_refs}.values())
+    payload["source_refs"] = list(
+        {ref.id: ref.model_dump(mode="json") for part in parts for ref in part.source_refs}.values()
+    )
     return AssessmentArtifact.model_validate(payload)
 
 
@@ -154,9 +214,15 @@ def assessment_excerpt(assessment, plan):
     modules = {module.id for module in plan.modules}
     data = assessment.model_dump(mode="json")
     for field in ("questions", "practices", "cases"):
-        data[field] = [item for item in data[field] if objectives.intersection(item["objective_ids"])]
-    data["questions"] = [q for q in data["questions"] if q["scope"] == "final" or
-                         q["target_id"] in (lessons if q["scope"] == "lesson" else modules)]
+        data[field] = [
+            item for item in data[field] if objectives.intersection(item["objective_ids"])
+        ]
+    data["questions"] = [
+        q
+        for q in data["questions"]
+        if q["scope"] == "final"
+        or q["target_id"] in (lessons if q["scope"] == "lesson" else modules)
+    ]
     data["practices"] = [item for item in data["practices"] if item["lesson_id"] in lessons]
     data["cases"] = [item for item in data["cases"] if lessons.intersection(item["lesson_ids"])]
     rubric_ids = {item["rubric_id"] for field in ("practices", "cases") for item in data[field]}
@@ -165,23 +231,44 @@ def assessment_excerpt(assessment, plan):
     data["lesson_ids"] = [l.id for l in plan.lessons]
     data["objective_ids"] = sorted(objectives)
     data["competency_ids"] = plan.competency_ids
-    refs = {ref for field in ("questions", "practices", "cases", "rubrics") for item in data[field] for ref in item["source_ref_ids"]}
+    refs = {
+        ref
+        for field in ("questions", "practices", "cases", "rubrics")
+        for item in data[field]
+        for ref in item["source_ref_ids"]
+    }
     data["source_refs"] = [ref for ref in data["source_refs"] if ref["id"] in refs]
     return data
 
 
 def competency_excerpt(competency_map, plan):
     data = competency_map.model_dump(mode="json")
-    data["competencies"] = [item for item in data["competencies"] if item["id"] in plan.competency_ids]
+    data["competencies"] = [
+        item for item in data["competencies"] if item["id"] in plan.competency_ids
+    ]
     skills = {i for item in data["competencies"] for i in item["skill_ids"]}
     data["skills"] = [item for item in data["skills"] if item["id"] in skills]
     knowledge = {i for item in data["skills"] for i in item["knowledge_ids"]}
     procedures = {i for item in data["skills"] for i in item["procedure_ids"]}
     data["knowledge"] = [item for item in data["knowledge"] if item["id"] in knowledge]
     data["procedures"] = [item for item in data["procedures"] if item["id"] in procedures]
-    data["roles"] = [{**item, "competency_ids": [i for i in item["competency_ids"] if i in plan.competency_ids]}
-                     for item in data["roles"] if set(item["competency_ids"]).intersection(plan.competency_ids)]
-    data["source_knowledge_item_ids"] = sorted({i for item in [*data["knowledge"], *data["procedures"]] for i in item["source_knowledge_item_ids"]})
-    refs = {i for field in ("roles", "competencies", "skills", "knowledge", "procedures") for item in data[field] for i in item["source_ref_ids"]}
+    data["roles"] = [
+        {**item, "competency_ids": [i for i in item["competency_ids"] if i in plan.competency_ids]}
+        for item in data["roles"]
+        if set(item["competency_ids"]).intersection(plan.competency_ids)
+    ]
+    data["source_knowledge_item_ids"] = sorted(
+        {
+            i
+            for item in [*data["knowledge"], *data["procedures"]]
+            for i in item["source_knowledge_item_ids"]
+        }
+    )
+    refs = {
+        i
+        for field in ("roles", "competencies", "skills", "knowledge", "procedures")
+        for item in data[field]
+        for i in item["source_ref_ids"]
+    }
     data["source_refs"] = [item for item in data["source_refs"] if item["id"] in refs]
     return data

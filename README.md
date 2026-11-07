@@ -6,6 +6,7 @@
 Подробности нового AI-контура, модели, запуск и ограничения: [AI_SYSTEM.md](AI_SYSTEM.md).
 Динамическое распределение запросов и безопасное включение: [AI_ROUTING.md](AI_ROUTING.md).
 Результаты проверок: [AI_VALIDATION.md](AI_VALIDATION.md).
+Линтеры CI, локальный pre-commit и область проверки типов: [LINTING.md](LINTING.md).
 
 ## Раздельные сервисы и B2B
 

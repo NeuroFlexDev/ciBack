@@ -1,14 +1,34 @@
 [tool.ruff]
 line-length = 100
-target-version = "py310"
-ignore = ["E501", "B008","B904", "UP035", "F401", "E402", "E741"]
+target-version = "py311"
+extend-exclude = ["mlcourse", "uploads"]
 
-[tool.black]
-line-length = 100
-target-version = ["py310"]
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+# Imports register ORM models/routes; some modules intentionally bootstrap sys.path.
+ignore = ["F401", "E402", "E741"]
 
-[tool.isort]
-profile = "black"
-line_length = 100
+[tool.ruff.lint.per-file-ignores]
+# Imported pytest fixtures are injected by name into test functions.
+"tests/**" = ["F811"]
 
-extend-exclude = "^(mlcourse|\\.venv|venv|env|node_modules)/"
+[tool.ty.environment]
+python-version = "3.11"
+python-platform = "all"
+
+[tool.ty.src]
+# Stage one: boundary contracts/configuration. Column-based ORM consumers need
+# a separate migration to SQLAlchemy Mapped before expanding this scope.
+include = ["app/core", "app/schemas", "scripts/lint_sql.py", "scripts/lint_native.py"]
+
+[tool.sqlfluff.core]
+dialect = "postgres"
+templater = "raw"
+# Check embedded SQL syntax without enforcing Python-string whitespace.
+rules = ["CP01", "CP02", "ST01", "ST02"]
+
+[tool.sqlfluff.rules.capitalisation.keywords]
+capitalisation_policy = "upper"
+
+[tool.sqlfluff.rules.capitalisation.identifiers]
+extended_capitalisation_policy = "lower"

@@ -3,22 +3,21 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from dataclasses import dataclass
 from contextvars import ContextVar
+from dataclasses import dataclass
 from io import BytesIO
 from statistics import median_low
 from zipfile import BadZipFile
 
 import fitz
 from docx import Document as DocxDocument
+from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml.ns import qn
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
-from docx.opc.exceptions import PackageNotFoundError
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from lxml.etree import XMLSyntaxError
-
 
 PDF_MIME = "application/pdf"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -29,9 +28,7 @@ _ATX_HEADING = re.compile(r"^\s{0,3}(#{1,6})\s*(\S.*?)\s*#*\s*$")
 _SETEXT_HEADING = re.compile(r"^\s*(=+|-+)\s*$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-+*]\s+|\d+[.)]\s+)")
 _DOCX_HEADING = re.compile(r"(?:heading|заголовок)\s*([1-9])", re.IGNORECASE)
-_PAGE_NUMBER = re.compile(
-    r"^(?:page\s+|стр(?:аница)?\.?\s*)?\d+$", re.IGNORECASE
-)
+_PAGE_NUMBER = re.compile(r"^(?:page\s+|стр(?:аница)?\.?\s*)?\d+$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -119,6 +116,7 @@ def _docx_row_text(row) -> str:
 
 def _extract_docx(content: bytes) -> list[ExtractedBlock]:
     from app.services.docx_math import paragraph_with_math
+
     document = DocxDocument(BytesIO(content))
     blocks: list[ExtractedBlock] = []
     headings: dict[int, str] = {}
@@ -165,6 +163,7 @@ def _extract_docx(content: bytes) -> list[ExtractedBlock]:
 
 def _pdf_blocks(document) -> list[_PdfBlock]:
     from app.core.config import settings
+
     if len(document) > settings.DOCUMENT_MAX_PAGES:
         raise ValueError("Слишком много страниц PDF; разделите документ")
     blocks: list[_PdfBlock] = []
@@ -176,14 +175,21 @@ def _pdf_blocks(document) -> list[_PdfBlock]:
         payload = page.get_text("dict", sort=True)
         if not page.get_text("text").strip() and page.get_images():
             from app.core.config import settings
+
             if not settings.AI_OCR_ENABLED:
                 raise ValueError("Scanned PDF requires OCR; enable AI_OCR_ENABLED")
             ocr_pages += 1
             if ocr_pages > settings.AI_OCR_MAX_PAGES:
                 raise ValueError("Scanned PDF exceeds AI_OCR_MAX_PAGES; split the document")
             usage = extraction_usage.get()
-            if usage is not None and usage.get("ocr_page_limit") is not None and ocr_pages > usage["ocr_page_limit"]:
-                raise ValueError("Недостаточно квоты OCR для документа; увеличьте лимит или загрузите текстовую версию")
+            if (
+                usage is not None
+                and usage.get("ocr_page_limit") is not None
+                and ocr_pages > usage["ocr_page_limit"]
+            ):
+                raise ValueError(
+                    "Недостаточно квоты OCR для документа; увеличьте лимит или загрузите текстовую версию"
+                )
             if usage is not None:
                 usage["ocr_pages"] = ocr_pages
             # Local OCR avoids shipping whole documents to a vision model and
@@ -192,7 +198,9 @@ def _pdf_blocks(document) -> list[_PdfBlock]:
                 textpage = page.get_textpage_ocr(language="rus+eng", dpi=150, full=True)
                 payload = page.get_text("dict", textpage=textpage, sort=True)
             except Exception as exc:
-                raise ValueError("OCR unavailable: install Tesseract with rus+eng language data") from exc
+                raise ValueError(
+                    "OCR unavailable: install Tesseract with rus+eng language data"
+                ) from exc
         page_height = float(page.rect.height)
         for raw_block in payload.get("blocks", []):
             if raw_block.get("type", 0) != 0:
@@ -252,9 +260,7 @@ def _pdf_repeated_margins(blocks: list[_PdfBlock], page_count: int) -> set[str]:
         if key is not None:
             pages_by_text.setdefault(key, set()).add(block.page)
     threshold = max(2, math.ceil(page_count * 0.5))
-    return {
-        text for text, pages in pages_by_text.items() if len(pages) >= threshold
-    }
+    return {text for text, pages in pages_by_text.items() if len(pages) >= threshold}
 
 
 def _is_pdf_heading(block: _PdfBlock, body_font_size: float) -> bool:
@@ -278,8 +284,7 @@ def _extract_pdf(content: bytes) -> list[ExtractedBlock]:
         for block in raw_blocks
         if _pdf_margin_key(block) not in repeated_margins
         and not (
-            _pdf_margin_key(block) is not None
-            and _PAGE_NUMBER.fullmatch(block.text) is not None
+            _pdf_margin_key(block) is not None and _PAGE_NUMBER.fullmatch(block.text) is not None
         )
     ]
     if not filtered:
@@ -291,8 +296,7 @@ def _extract_pdf(content: bytes) -> list[ExtractedBlock]:
         {
             round(block.font_size, 1)
             for block in filtered
-            if _is_pdf_heading(block, body_font_size)
-            and block.font_size > body_font_size
+            if _is_pdf_heading(block, body_font_size) and block.font_size > body_font_size
         },
         reverse=True,
     )
@@ -410,6 +414,7 @@ def _extract_txt(content: bytes) -> list[ExtractedBlock]:
 
 def extract_blocks(content: bytes, mime_type: str) -> list[ExtractedBlock]:
     from app.services.document_safety import validate_container
+
     validate_container(content, mime_type)
     if mime_type == PDF_MIME:
         try:
@@ -454,9 +459,7 @@ def _semantic_end(text: str, start: int, max_chars: int) -> int:
     sentence_ends = list(re.finditer(r"[.!?…](?:[\"'»)\]]*)\s+", window))
     if sentence_ends:
         match = sentence_ends[-1]
-        return minimum + match.end() - len(match.group(0)) + len(
-            match.group(0).rstrip()
-        )
+        return minimum + match.end() - len(match.group(0)) + len(match.group(0).rstrip())
 
     whitespace = max(window.rfind(" "), window.rfind("\t"))
     if whitespace >= 0:
@@ -464,9 +467,7 @@ def _semantic_end(text: str, start: int, max_chars: int) -> int:
     return hard_end
 
 
-def _next_window_start(
-    text: str, start: int, end: int, overlap_chars: int
-) -> int:
+def _next_window_start(text: str, start: int, end: int, overlap_chars: int) -> int:
     candidate = max(start + 1, end - overlap_chars)
     if candidate >= len(text):
         return len(text)
@@ -491,9 +492,7 @@ def _text_windows(text: str, *, max_chars: int, overlap_chars: int):
         start = _next_window_start(text, start, end, overlap_chars)
 
 
-def chunk_blocks(
-    blocks: list[ExtractedBlock], *, max_chars: int, overlap_chars: int
-) -> list[dict]:
+def chunk_blocks(blocks: list[ExtractedBlock], *, max_chars: int, overlap_chars: int) -> list[dict]:
     if max_chars <= 0:
         raise ValueError("Chunk size must be positive")
     if overlap_chars < 0:
@@ -509,9 +508,7 @@ def chunk_blocks(
     def emit_group() -> None:
         nonlocal group
         text = "\n".join(group).strip()
-        for window in _text_windows(
-            text, max_chars=max_chars, overlap_chars=overlap_chars
-        ):
+        for window in _text_windows(text, max_chars=max_chars, overlap_chars=overlap_chars):
             chunks.append(
                 {
                     "text": window,

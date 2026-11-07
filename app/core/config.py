@@ -1,11 +1,20 @@
+import re
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
-import re
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, SecretStr, PrivateAttr, model_validator, field_validator, AnyHttpUrl
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    Field,
+    PrivateAttr,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class AIRoutingCandidate(BaseModel):
     """Operator-approved provider/model route and its text-token price band."""
@@ -41,7 +50,12 @@ class AIProvider(BaseModel):
     def endpoint_policy(self):
         if not self.local and self.base_url.scheme != "https":
             raise ValueError("Remote AI providers require HTTPS")
-        if self.base_url.username or self.base_url.password or self.base_url.query or self.base_url.fragment:
+        if (
+            self.base_url.username
+            or self.base_url.password
+            or self.base_url.query
+            or self.base_url.fragment
+        ):
             raise ValueError("Provider URLs must not contain credentials or query parameters")
         return self
 
@@ -50,7 +64,7 @@ class Settings(BaseSettings):
     # Exact origins approved by the installation operator, e.g. http://ollama:11434.
     AI_LOCAL_ENDPOINTS: list[str] = []
     # Основные секции конфига
-    ENV: str = "dev" # dev/stage/prod
+    ENV: str = "dev"  # dev/stage/prod
     DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
     DATABASE_URL: str
@@ -205,16 +219,22 @@ class Settings(BaseSettings):
         if len(providers) != len(set(providers)):
             raise ValueError("AI_PROVIDERS must have unique IDs")
         version_pattern = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+
         def parse_version(value, name):
             match = version_pattern.fullmatch(value)
             if not match:
                 raise ValueError(f"{name} must use MAJOR.MINOR.PATCH")
             return tuple(map(int, match.groups()))
+
         minimum = parse_version(self.MOBILE_APP_MIN_VERSION, "MOBILE_APP_MIN_VERSION")
         if self.MOBILE_APP_RECOMMENDED_VERSION:
-            recommended = parse_version(self.MOBILE_APP_RECOMMENDED_VERSION, "MOBILE_APP_RECOMMENDED_VERSION")
+            recommended = parse_version(
+                self.MOBILE_APP_RECOMMENDED_VERSION, "MOBILE_APP_RECOMMENDED_VERSION"
+            )
             if recommended < minimum:
-                raise ValueError("MOBILE_APP_RECOMMENDED_VERSION must not be lower than MOBILE_APP_MIN_VERSION")
+                raise ValueError(
+                    "MOBILE_APP_RECOMMENDED_VERSION must not be lower than MOBILE_APP_MIN_VERSION"
+                )
         for name in ("MOBILE_APP_STORE_URL_IOS", "MOBILE_APP_STORE_URL_ANDROID"):
             value = getattr(self, name)
             if value:
@@ -223,7 +243,12 @@ class Settings(BaseSettings):
                     raise ValueError(f"{name} must be an HTTPS URL")
         return self
 
-    @field_validator("MOBILE_APP_RECOMMENDED_VERSION", "MOBILE_APP_STORE_URL_IOS", "MOBILE_APP_STORE_URL_ANDROID", mode="before")
+    @field_validator(
+        "MOBILE_APP_RECOMMENDED_VERSION",
+        "MOBILE_APP_STORE_URL_IOS",
+        "MOBILE_APP_STORE_URL_ANDROID",
+        mode="before",
+    )
     @classmethod
     def blank_mobile_setting(cls, value):
         return None if isinstance(value, str) and not value.strip() else value
@@ -240,5 +265,6 @@ class Settings(BaseSettings):
         if self.MAX_UPLOAD_BYTES is not None:
             return self.MAX_UPLOAD_BYTES
         return self.MAX_DOCUMENT_SIZE_MB * 1024 * 1024
+
 
 settings = Settings()

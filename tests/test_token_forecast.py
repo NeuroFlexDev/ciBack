@@ -1,26 +1,52 @@
-from app.ai.token_forecast import fit, predict, cross_validate, estimate_course
+from app.ai.token_forecast import cross_validate, estimate_course, fit, predict
 
 
 def sample(course, index=0, **overrides):
-    return {"course_key": course, "call_id": index, "role": "lesson_writer", "model": "test/model",
-            "status": "completed", "attempt": 1, "usage_reported": True, "max_output_tokens": 6000,
-            "features": {"prompt_bytes": 3000, "units": 1, "has_qa_feedback": False},
-            "input_tokens": 1000, "output_tokens": 500, **overrides}
+    return {
+        "course_key": course,
+        "call_id": index,
+        "role": "lesson_writer",
+        "model": "test/model",
+        "status": "completed",
+        "attempt": 1,
+        "usage_reported": True,
+        "max_output_tokens": 6000,
+        "features": {"prompt_bytes": 3000, "units": 1, "has_qa_feedback": False},
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        **overrides,
+    }
 
 
 def test_training_excludes_retries_failed_calls_revisions_and_unknown_usage():
-    rows = [sample("a"), sample("a", 1, attempt=2), sample("a", 2, status="failed"),
-            sample("a", 3, usage_reported=False), sample("a", 4, features={"prompt_bytes":3000,"units":1,"is_revision":True})]
+    rows = [
+        sample("a"),
+        sample("a", 1, attempt=2),
+        sample("a", 2, status="failed"),
+        sample("a", 3, usage_reported=False),
+        sample("a", 4, features={"prompt_bytes": 3000, "units": 1, "is_revision": True}),
+    ]
     model = fit(rows)
     assert model["samples"] == 1 and model["excluded_samples"] == 4
-    result = predict(model, role="lesson_writer", model_id="test/model",
-                     request_features={"prompt_bytes":6000,"units":2}, max_output_tokens=6000)
+    result = predict(
+        model,
+        role="lesson_writer",
+        model_id="test/model",
+        request_features={"prompt_bytes": 6000, "units": 2},
+        max_output_tokens=6000,
+    )
     assert result["input_tokens"] == 2000 and result["output_tokens"] == 1000
     assert not result["includes_retries"] and result["provisional"]
 
 
 def test_unknown_model_forecast_is_explicitly_uncalibrated_and_does_not_change_limits():
-    result = predict({}, role="chat", model_id="new", request_features={"prompt_bytes":3000,"units":1}, max_output_tokens=2500)
+    result = predict(
+        {},
+        role="chat",
+        model_id="new",
+        request_features={"prompt_bytes": 3000, "units": 1},
+        max_output_tokens=2500,
+    )
     assert result["method"] == "uncalibrated_prior" and result["samples"] == 0
     assert result["output_tokens"] < 2500 and result["output_range"][1] <= 2500
 

@@ -1,6 +1,6 @@
 """Route each request among approved providers/models without extra inference."""
+
 from __future__ import annotations
-from app.ai import control as ai_control
 
 import hashlib
 import json
@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Iterable
 
-from app.core.config import AIRoutingCandidate, settings
-from app.ai.providers import route_id, registry
-from app.ai.pricing import candidate_price, SNAPSHOT
+from app.ai import control as ai_control
 from app.ai.context_budget import effective_input_limit
-
+from app.ai.pricing import SNAPSHOT, candidate_price
+from app.ai.providers import registry, route_id
+from app.core.config import AIRoutingCandidate, settings
 
 ROUTER_VERSION = 3
 
@@ -43,10 +43,19 @@ def cache_policy() -> dict:
 def enabled_candidates(role: str) -> list[AIRoutingCandidate]:
     if ai_control.policy()["mode"] == "off":
         return []
-    return [item for item in ai_control.candidates()
-            if item.approved and role in item.roles and item.json_mode
-            and (role != "critic_qa" or item.independent_review and item.model != settings.AI_MODEL_WRITER)
-            and (role != "vision" or item.vision)]
+    return [
+        item
+        for item in ai_control.candidates()
+        if item.approved
+        and role in item.roles
+        and item.json_mode
+        and (
+            role != "critic_qa"
+            or item.independent_review
+            and item.model != settings.AI_MODEL_WRITER
+        )
+        and (role != "vision" or item.vision)
+    ]
 
 
 def token_bucket(input_tokens: int) -> str:
@@ -55,8 +64,10 @@ def token_bucket(input_tokens: int) -> str:
 
 def estimate_cost(candidate: AIRoutingCandidate, input_tokens: int, output_tokens: int) -> Decimal:
     """Uncached text-token estimate in RUB, including reserved output, not an invoice."""
-    return (Decimal(input_tokens) * candidate.input_rub_per_million
-            + Decimal(output_tokens) * candidate.output_rub_per_million) / Decimal(1_000_000)
+    return (
+        Decimal(input_tokens) * candidate.input_rub_per_million
+        + Decimal(output_tokens) * candidate.output_rub_per_million
+    ) / Decimal(1_000_000)
 
 
 @dataclass(frozen=True)
@@ -68,9 +79,15 @@ class RouteDecision:
 
 
 def choose_route(
-    *, role: str, baseline_model: str, input_tokens: int, output_tokens: int,
-    history: Iterable[dict] = (), excluded_models: set[str] | None = None,
-    min_tier: int = 0, now: float | None = None,
+    *,
+    role: str,
+    baseline_model: str,
+    input_tokens: int,
+    output_tokens: int,
+    history: Iterable[dict] = (),
+    excluded_models: set[str] | None = None,
+    min_tier: int = 0,
+    now: float | None = None,
     available_providers: set[str] | None = None,
     forecast: dict | None = None,
     requested_model: str | None = None,
@@ -85,70 +102,120 @@ def choose_route(
     now = time.time() if now is None else now
     signature = policy_fingerprint()
     bucket = token_bucket(input_tokens)
-    observations = [row for row in history
-                    if row.get("policy") == signature and row.get("input_bucket") == bucket
-                    and row.get("outcome") in {"contract_pass", "contract_fail", "provider_error"}]
+    observations = [
+        row
+        for row in history
+        if row.get("policy") == signature
+        and row.get("input_bucket") == bucket
+        and row.get("outcome") in {"contract_pass", "contract_fail", "provider_error"}
+    ]
     ranked = []
     unhealthy = set()
     candidates = enabled_candidates(role)
     baseline = candidate_price("vsellm", baseline_model, role)
-    if ai_control.policy()["mode"] != "off" and baseline and baseline.approved and role in baseline.roles and not any(
-            row.provider == "vsellm" and row.model == baseline_model for row in candidates):
+    if (
+        ai_control.policy()["mode"] != "off"
+        and baseline
+        and baseline.approved
+        and role in baseline.roles
+        and not any(row.provider == "vsellm" and row.model == baseline_model for row in candidates)
+    ):
         candidates.append(baseline)
     for candidate in candidates:
         if requested_model is not None and candidate.model != requested_model:
             continue
-        if (candidate.model in (excluded_models or set())
-                or route_id(candidate.provider, candidate.model) in (excluded_models or set())
-                or candidate.tier < min_tier):
+        if (
+            candidate.model in (excluded_models or set())
+            or route_id(candidate.provider, candidate.model) in (excluded_models or set())
+            or candidate.tier < min_tier
+        ):
             continue
         if available_providers is not None and candidate.provider not in available_providers:
             continue
-        candidate_input = (input_estimates or {}).get(route_id(candidate.provider, candidate.model), input_tokens)
-        if (candidate_input > effective_input_limit(candidate.max_input_tokens)
-                or output_tokens > candidate.max_output_tokens
-                or candidate_input + output_tokens > candidate.context_window):
+        candidate_input = (input_estimates or {}).get(
+            route_id(candidate.provider, candidate.model), input_tokens
+        )
+        if (
+            candidate_input > effective_input_limit(candidate.max_input_tokens)
+            or output_tokens > candidate.max_output_tokens
+            or candidate_input + output_tokens > candidate.context_window
+        ):
             continue
-        samples = sorted((row for row in observations if row.get("selected_model") == candidate.model
-                          and row.get("selected_provider", "vsellm") == candidate.provider),
-                         key=lambda row: row.get("finished_at", 0), reverse=True)
+        samples = sorted(
+            (
+                row
+                for row in observations
+                if row.get("selected_model") == candidate.model
+                and row.get("selected_provider", "vsellm") == candidate.provider
+            ),
+            key=lambda row: row.get("finished_at", 0),
+            reverse=True,
+        )
         # Three recent transport failures open a temporary circuit. Validation
         # failures are handled by the pass-rate floor and per-step escalation.
-        if (len(samples) >= 3 and all(row["outcome"] == "provider_error" for row in samples[:3])
-                and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS):
+        if (
+            len(samples) >= 3
+            and all(row["outcome"] == "provider_error" for row in samples[:3])
+            and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS
+        ):
             unhealthy.add(route_id(candidate.provider, candidate.model))
             continue
         # Two failed structured responses among the last three are enough to
         # stop spending on that route temporarily, even before ten samples exist.
-        if (sum(row["outcome"] == "contract_fail" for row in samples[:3]) >= 2
-                and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS):
+        if (
+            sum(row["outcome"] == "contract_fail" for row in samples[:3]) >= 2
+            and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS
+        ):
             unhealthy.add(route_id(candidate.provider, candidate.model))
             continue
         contracts = [row for row in samples if row["outcome"] != "provider_error"]
         passes = sum(row["outcome"] == "contract_pass" for row in contracts)
-        if (len(contracts) >= ai_control.policy()["min_samples"]
-                and passes / len(contracts) < ai_control.policy()["min_pass_rate"]):
+        if (
+            len(contracts) >= ai_control.policy()["min_samples"]
+            and passes / len(contracts) < ai_control.policy()["min_pass_rate"]
+        ):
             unhealthy.add(route_id(candidate.provider, candidate.model))
             continue
         # A fixed 9/10 prior avoids certainty from one success. This is a ranking
         # heuristic; it is not a calibrated probability of final course quality.
         probability = Decimal(9 + passes) / Decimal(10 + len(samples))
         predicted = (forecast or {}).get(route_id(candidate.provider, candidate.model), {})
-        cost = estimate_cost(candidate, predicted.get("input_tokens", candidate_input),
-                             predicted.get("output_tokens", output_tokens))
-        ranked.append((cost / probability, route_id(candidate.provider, candidate.model), candidate,
-                       cost, probability, len(samples)))
+        cost = estimate_cost(
+            candidate,
+            predicted.get("input_tokens", candidate_input),
+            predicted.get("output_tokens", output_tokens),
+        )
+        ranked.append(
+            (
+                cost / probability,
+                route_id(candidate.provider, candidate.model),
+                candidate,
+                cost,
+                probability,
+                len(samples),
+            )
+        )
     ranked.sort(key=lambda row: (row[0], row[1]))
     winner = ranked[0] if ranked else None
     if not winner and ai_control.policy()["mode"] == "adaptive":
         blocked = excluded_models or set()
         static_id = route_id("vsellm", baseline_model)
-        if (baseline_model in blocked or static_id in blocked or static_id in unhealthy
-                or (available_providers is not None and "vsellm" not in available_providers)
-                or (baseline and (input_tokens > effective_input_limit(baseline.max_input_tokens)
+        if (
+            baseline_model in blocked
+            or static_id in blocked
+            or static_id in unhealthy
+            or (available_providers is not None and "vsellm" not in available_providers)
+            or (
+                baseline
+                and (
+                    input_tokens > effective_input_limit(baseline.max_input_tokens)
                     or output_tokens > baseline.max_output_tokens
-                    or input_tokens + output_tokens > baseline.context_window))):
+                    or input_tokens + output_tokens > baseline.context_window
+                )
+            )
+        ):
             from app.ai.providers import AIUnavailable
+
             raise AIUnavailable()
     proposed = winner[2].model if winner else baseline_model
     proposed_provider = winner[2].provider if winner else "vsellm"
@@ -156,33 +223,49 @@ def choose_route(
     selected_provider = proposed_provider if ai_control.policy()["mode"] == "adaptive" else "vsellm"
     selected_candidate = candidate_price(selected_provider, selected, role)
     metadata = {
-        "version": ROUTER_VERSION, "mode": ai_control.policy()["mode"], "policy": signature,
-        "selected_model": selected, "proposed_model": proposed,
-        "selected_provider": selected_provider, "proposed_provider": proposed_provider,
-        "baseline_model": baseline_model, "input_bucket": bucket,
+        "version": ROUTER_VERSION,
+        "mode": ai_control.policy()["mode"],
+        "policy": signature,
+        "selected_model": selected,
+        "proposed_model": proposed,
+        "selected_provider": selected_provider,
+        "proposed_provider": proposed_provider,
+        "baseline_model": baseline_model,
+        "input_bucket": bucket,
         "reason": "lowest_estimated_cost_per_contract_pass" if winner else "static_recovery",
         "tier": selected_candidate.tier if selected_candidate else None,
         "samples": winner[5] if winner else 0,
         "rank_score_rub": str(winner[0]) if winner else None,
-        "estimated_uncached_rub": str(estimate_cost(selected_candidate, input_tokens, output_tokens))
-            if selected_candidate and input_tokens <= selected_candidate.max_input_tokens else None,
-        "prices": {"input_rub_per_million": str(selected_candidate.input_rub_per_million),
-                   "output_rub_per_million": str(selected_candidate.output_rub_per_million),
-                   "max_input_tokens": selected_candidate.max_input_tokens}
-            if selected_candidate else None,
+        "estimated_uncached_rub": str(
+            estimate_cost(selected_candidate, input_tokens, output_tokens)
+        )
+        if selected_candidate and input_tokens <= selected_candidate.max_input_tokens
+        else None,
+        "prices": {
+            "input_rub_per_million": str(selected_candidate.input_rub_per_million),
+            "output_rub_per_million": str(selected_candidate.output_rub_per_million),
+            "max_input_tokens": selected_candidate.max_input_tokens,
+        }
+        if selected_candidate
+        else None,
     }
     return RouteDecision(selected, proposed, metadata, selected_provider)
 
 
-def record_outcome(metadata: dict | None, *, outcome: str, usage: dict | None = None) -> dict | None:
+def record_outcome(
+    metadata: dict | None, *, outcome: str, usage: dict | None = None
+) -> dict | None:
     if metadata is None:
         return None
     result = {**metadata, "outcome": outcome, "finished_at": time.time()}
     prices = result.get("prices")
     if usage and prices and usage.get("input_tokens", 0) <= prices["max_input_tokens"]:
         # Cache discounts and non-token charges are deliberately not invented.
-        result["usage_priced_uncached_rub"] = str((
-            Decimal(usage["input_tokens"]) * Decimal(prices["input_rub_per_million"])
-            + Decimal(usage["output_tokens"]) * Decimal(prices["output_rub_per_million"])
-        ) / Decimal(1_000_000))
+        result["usage_priced_uncached_rub"] = str(
+            (
+                Decimal(usage["input_tokens"]) * Decimal(prices["input_rub_per_million"])
+                + Decimal(usage["output_tokens"]) * Decimal(prices["output_rub_per_million"])
+            )
+            / Decimal(1_000_000)
+        )
     return result

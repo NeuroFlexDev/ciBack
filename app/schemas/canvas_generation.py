@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.agentic_pipeline import (
     AgenticContract,
@@ -21,16 +21,11 @@ from app.schemas.agentic_pipeline import (
     SourceRefId,
 )
 
-
-CanvasTestId = Annotated[
-    str, Field(pattern=r"^test:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)
-]
+CanvasTestId = Annotated[str, Field(pattern=r"^test:[a-z0-9][a-z0-9._:-]{1,123}$", max_length=128)]
 
 
 def _require_unique(label: str, values: list[str]) -> None:
-    duplicates = sorted(
-        value for value, count in Counter(values).items() if count > 1
-    )
+    duplicates = sorted(value for value, count in Counter(values).items() if count > 1)
     if duplicates:
         raise ValueError(f"{label} must be unique; duplicates: {duplicates}")
 
@@ -69,9 +64,7 @@ def _validate_dag(label: str, dependencies: dict[str, list[str]]) -> None:
         state[node_id] = 1
         for prerequisite_id in dependencies[node_id]:
             if prerequisite_id not in known:
-                raise ValueError(
-                    f"{label} reference unknown prerequisite id: {prerequisite_id}"
-                )
+                raise ValueError(f"{label} reference unknown prerequisite id: {prerequisite_id}")
             if prerequisite_id == node_id:
                 raise ValueError(f"{label} cannot contain a self dependency: {node_id}")
             visit(prerequisite_id)
@@ -110,6 +103,7 @@ class CanvasLesson(AgenticContract):
     @classmethod
     def diagrams(cls, value):
         from app.services.diagram_policy import validate_generated_diagrams
+
         return validate_generated_diagrams(value)
 
 
@@ -129,9 +123,7 @@ class CanvasTestQuestion(AgenticContract):
     def validate_answer(self):
         option_ids = [item.id for item in self.options]
         _require_unique(f"question {self.id} option ids", option_ids)
-        _require_unique(
-            f"question {self.id} correct option ids", self.correct_option_ids
-        )
+        _require_unique(f"question {self.id} correct option ids", self.correct_option_ids)
         _require_known(
             f"question {self.id} correct option ids",
             self.correct_option_ids,
@@ -152,9 +144,7 @@ class CanvasTestQuestion(AgenticContract):
             if self.expected_answer is not None:
                 raise ValueError("multiple_choice must not define expected_answer")
         elif self.options or self.correct_option_ids or not self.expected_answer:
-            raise ValueError(
-                "short_answer requires expected_answer and must not define options"
-            )
+            raise ValueError("short_answer requires expected_answer and must not define options")
         return self
 
 
@@ -176,9 +166,7 @@ class CanvasTest(AgenticContract):
             raise ValueError("module test requires module_id")
         if self.scope == "final" and self.module_id is not None:
             raise ValueError("final test must not define module_id")
-        _require_unique(
-            f"test {self.id} question ids", [item.id for item in self.questions]
-        )
+        _require_unique(f"test {self.id} question ids", [item.id for item in self.questions])
         _require_exact(
             f"test {self.id} objective ids",
             self.objective_ids,
@@ -278,9 +266,7 @@ class CanvasGenerationPayload(AgenticContract):
             module_lessons = lessons_by_module[module.id]
             if not module_lessons:
                 raise ValueError(f"module {module.id} must contain at least one lesson")
-            _require_contiguous_positions(
-                f"module {module.id} lesson positions", module_lessons
-            )
+            _require_contiguous_positions(f"module {module.id} lesson positions", module_lessons)
             expected_minutes = sum(item.estimated_minutes for item in module_lessons)
             if module.estimated_minutes != expected_minutes:
                 raise ValueError(
@@ -308,21 +294,15 @@ class CanvasGenerationPayload(AgenticContract):
             )
             assignments_by_lesson[assignment.lesson_id].append(assignment)
         for lesson_id, assignments in assignments_by_lesson.items():
-            _require_contiguous_positions(
-                f"lesson {lesson_id} assignment positions", assignments
-            )
+            _require_contiguous_positions(f"lesson {lesson_id} assignment positions", assignments)
 
         for item in [*self.modules, *self.lessons, *self.tests, *self.assignments]:
             _require_unique(f"{item.id} objective ids", item.objective_ids)
             _require_unique(f"{item.id} competency ids", item.competency_ids)
             _require_unique(f"{item.id} source ref ids", item.source_ref_ids)
             _require_known(f"{item.id} objective ids", item.objective_ids, objective_ids)
-            _require_known(
-                f"{item.id} competency ids", item.competency_ids, competency_ids
-            )
-            _require_known(
-                f"{item.id} source ref ids", item.source_ref_ids, source_ref_ids
-            )
+            _require_known(f"{item.id} competency ids", item.competency_ids, competency_ids)
+            _require_known(f"{item.id} source ref ids", item.source_ref_ids, source_ref_ids)
 
         for test in self.tests:
             for question in test.questions:
@@ -342,15 +322,9 @@ class CanvasGenerationPayload(AgenticContract):
 
         for assignment in self.assignments:
             rubric = assignment.rubric
-            _require_known(
-                f"{rubric.id} objective ids", rubric.objective_ids, objective_ids
-            )
-            _require_known(
-                f"{rubric.id} competency ids", rubric.competency_ids, competency_ids
-            )
-            _require_known(
-                f"{rubric.id} source ref ids", rubric.source_ref_ids, source_ref_ids
-            )
+            _require_known(f"{rubric.id} objective ids", rubric.objective_ids, objective_ids)
+            _require_known(f"{rubric.id} competency ids", rubric.competency_ids, competency_ids)
+            _require_known(f"{rubric.id} source ref ids", rubric.source_ref_ids, source_ref_ids)
 
         _validate_dag(
             "module prerequisites",
@@ -422,22 +396,16 @@ class CanvasGenerationPayload(AgenticContract):
                     "estimated_minutes": lesson.estimated_minutes,
                     "objective_ids": lesson.objective_ids,
                     "competency_ids": lesson.competency_ids,
-                    "source_refs": sorted(
-                        set(lesson.source_ref_ids) | assignment_refs
-                    ),
+                    "source_refs": sorted(set(lesson.source_ref_ids) | assignment_refs),
                     "practices": practice_payloads,
                     "cases": case_payloads,
                 }
             )
 
         for module in modules:
-            module_lessons = sorted(
-                lessons_by_module[module.id], key=lambda item: item.position
-            )
+            module_lessons = sorted(lessons_by_module[module.id], key=lambda item: item.position)
             for lesson in module_lessons:
-                edges.append(
-                    {"source": module.id, "target": lesson.id, "relation": "contains"}
-                )
+                edges.append({"source": module.id, "target": lesson.id, "relation": "contains"})
             for previous, current in zip(module_lessons, module_lessons[1:]):
                 edges.append(
                     {
@@ -487,9 +455,7 @@ class CanvasGenerationPayload(AgenticContract):
             for question in test.questions:
                 option_by_id = {item.id: item.text for item in question.options}
                 correct_answer = (
-                    " | ".join(
-                        option_by_id[item] for item in question.correct_option_ids
-                    )
+                    " | ".join(option_by_id[item] for item in question.correct_option_ids)
                     if question.correct_option_ids
                     else question.expected_answer or ""
                 )

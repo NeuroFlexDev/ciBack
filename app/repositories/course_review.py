@@ -1,10 +1,10 @@
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.course import Course
-from app.services.course_access import course_access_filter
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.task import Task
+from app.services.course_access import course_access_filter
 
 
 class CourseReviewRepository:
@@ -13,7 +13,9 @@ class CourseReviewRepository:
         return (
             db.query(Course)
             .options(
-                selectinload(Course.modules).selectinload(Module.lessons).selectinload(Lesson.theory),
+                selectinload(Course.modules)
+                .selectinload(Module.lessons)
+                .selectinload(Lesson.theory),
                 selectinload(Course.modules).selectinload(Module.tests),
                 selectinload(Course.modules).selectinload(Module.tasks),
                 selectinload(Course.final_tests),

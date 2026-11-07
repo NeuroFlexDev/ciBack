@@ -1,0 +1,108 @@
+# Проверки качества
+
+CI запускает Ruff, SQLFluff, Hadolint, actionlint, Gitleaks, Semgrep, ty,
+pip-audit и существующие pytest/миграции. Ошибка обязательной проверки блокирует
+публикацию образа. Для ручного DEV-деплоя действуют те же проверки.
+
+## Локальная подготовка
+
+Используйте Python 3.11, как в CI, и активированное окружение проекта:
+
+```sh
+python -m pip install -r requirements-dev.txt
+python scripts/lint_native.py install
+pre-commit install
+```
+
+Установщик поддерживает Linux/Windows x86-64 и проверяет SHA256 закреплённых
+официальных релизов. Бинарники лежат в игнорируемой `.lint-tools/`.
+На других платформах пока нужно выполнять native-проверки в Linux x86-64.
+
+Перед коммитом автоматически запускаются Ruff, ty, Gitleaks для staged patch,
+а при изменении соответствующих файлов — Hadolint/actionlint. Black и isort
+заменены Ruff Format и правилом сортировки импортов Ruff.
+
+```sh
+ruff check .
+ruff format --check .
+ty check
+python scripts/lint_sql.py
+python scripts/lint_native.py actionlint
+python scripts/lint_native.py hadolint
+python scripts/lint_native.py gitleaks snapshot
+python -m pip_audit --progress-spinner off
+python -m pytest -q
+```
+
+Для тестов также нужны FFmpeg/ffprobe в PATH, нативный `rl-renderPM` из
+`requirements.txt`, Node-зависимости PDF и подготовленный кеш токенизатора:
+
+```sh
+npm ci --omit=dev --ignore-scripts --prefix pdf_runtime
+python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+```
+
+Для полного совпадения с CI используйте Linux/Python 3.11. PostgreSQL-проверкам
+нужен отдельный тестовый PostgreSQL с pgvector и `TEST_POSTGRES_DSN`.
+
+`pre-commit run --all-files` запускает быстрые хуки. SQLFluff и pip-audit доступны
+также через `pre-commit run --all-files --hook-stage manual <id>`.
+Аудит проверяет установленное окружение приложения, включая dev-зависимости.
+Поэтому перед аудитом установите актуальный `requirements-dev.txt`.
+
+## Область проверки типов
+
+Обязательный `ty check` проверяет `app/core`, все `app/schemas` и скрипты
+линтеров. Пять исходных диагностик в этой области устранены: явно описан
+тип результата синхронного Redis Lua-скрипта и фабрики списка языков Pydantic.
+
+Полное приложение также анализируется на каждом запуске CI. Отчёт
+`full-type-report/ty-full.sarif` пока информационный: старые модели
+SQLAlchemy с `Column` и их потребители требуют отдельного разбора.
+Общие проверки присваивания/аргументов не отключены. Расширяйте `tool.ty.src.include`
+по мере исправления модулей. Полный отчёт локально:
+
+```sh
+ty check --config 'src.include=["app", "main.py", "admin_main.py", "scripts/lint_sql.py", "scripts/lint_native.py"]' --output-format sarif --exit-zero > lint-reports/ty-full.sarif
+```
+
+Создайте `lint-reports/` перед перенаправлением. Обычный запуск без `--exit-zero`
+возвращает ошибку при обнаружении нарушений.
+
+`ruff analyze graph app --detect-string-imports` строит карту импортов.
+В CI она доступна в артефакте `python-import-map/imports.json`. Это средство
+анализа связей, а не дополнительная проверка типов.
+
+## Безопасность и ограничения покрытия
+
+Gitleaks проверяет весь снимок исходников и коммиты, добавленные push/PR.
+Ручной запуск без базового SHA проверяет снимок. Полная историческая проверка
+отдельна: старые утечки уже описаны в `.github/secret-remediation.md`.
+Локальный `snapshot` учитывает tracked-файлы, правки и новые неигнорируемые файлы;
+локальные игнорируемые `.env`, базы и окружения в него не попадают.
+Вывод Gitleaks всегда маскирует значения. Исключение для тестового
+`submission_key` ограничено конкретной строкой.
+
+Hadolint допускает обновляемые версии apt/Python-пакетов: политику Python
+зависимостей проверяет pip-audit. Отдельные Docker RUN-проверки сохранены для
+диагностики кеширования слоёв. Единственное исключение на строке ENV относится
+к каталогу кеша токенизатора, а не к секрету.
+
+SQLFluff использует PostgreSQL-диалект. Проверяются `.sql` и полные статические
+строки в `text()`, `execute()` и `exec_driver_sql()`. Число пропущенных динамических
+выражений и SQL-фрагментов печатается отдельно. Их SQLFluff не валидирует.
+
+Semgrep применяет локальные правила из `.semgrep.yml`: выполнение Python-кода
+из строки, shell-команды, отключение TLS-проверки и небезопасный YAML loader.
+Это начальный набор конкретных проверок, а не полный аудит безопасности.
+Он устанавливается отдельно, чтобы не менять зависимости приложения:
+
+```sh
+python -m venv .venv-security
+# Linux: .venv-security/bin/python; Windows: .venv-security/Scripts/python.exe
+.venv-security/bin/python -m pip install -r requirements-security.txt
+.venv-security/bin/semgrep scan --config .semgrep.yml --error --strict --metrics off --disable-version-check app scripts main.py admin_main.py
+```
+
+Manual-хук `semgrep` создаёт своё изолированное окружение через pre-commit.
+Метрики и проверка версии Semgrep отключены; облачный аккаунт и токен не нужны.

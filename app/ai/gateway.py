@@ -1,18 +1,26 @@
 """Routed OpenAI-compatible text transport through LangChain; isolated credentials."""
+
 from __future__ import annotations
-from app.ai import control as ai_control
 
 import json
 from typing import Any
 
 from fastapi import HTTPException
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from openai import LengthFinishReasonError
-from app.ai.models import model_policy
-from app.ai.routing import enabled_candidates, choose_route
+
+from app.ai import control as ai_control
 from app.ai import providers
-from app.ai.context_budget import count_messages, require_fits, limits, ContextBudgetExceeded, provider_context_error
+from app.ai.context_budget import (
+    ContextBudgetExceeded,
+    count_messages,
+    limits,
+    provider_context_error,
+    require_fits,
+)
+from app.ai.models import model_policy
+from app.ai.routing import choose_route, enabled_candidates
 from app.core.config import settings
 
 
@@ -48,20 +56,37 @@ def retryable(exc: Exception) -> bool:
         return False
     status = getattr(exc, "status_code", None)
     return status in {408, 409, 429, 500, 502, 503, 504} or type(exc).__name__ in {
-        "APITimeoutError", "OpenAITimeoutError", "APIConnectionError", "OpenAIConnectionError", "TimeoutError", "ConnectionError"
+        "APITimeoutError",
+        "OpenAITimeoutError",
+        "APIConnectionError",
+        "OpenAIConnectionError",
+        "TimeoutError",
+        "ConnectionError",
     }
 
 
-def invoke_messages(role: str, messages: list[dict], *, model: str | None = None,
-                    max_tokens: int | None = None, json_mode: bool = False,
-                    fallback: bool = False, provider: str | None = None,
-                    excluded_routes: set[str] | None = None) -> dict:
+def invoke_messages(
+    role: str,
+    messages: list[dict],
+    *,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    json_mode: bool = False,
+    fallback: bool = False,
+    provider: str | None = None,
+    excluded_routes: set[str] | None = None,
+) -> dict:
     if not configured():
         raise providers.AIUnavailable()
     policy = model_policy(role)
     used_model = policy.fallback if fallback else (model or policy.model)
-    allowed_models = {settings.AI_MODEL_FAST, settings.AI_MODEL_REASONING, settings.AI_MODEL_WRITER,
-                      settings.AI_MODEL_CRITIC, settings.AI_MODEL_FALLBACK}
+    allowed_models = {
+        settings.AI_MODEL_FAST,
+        settings.AI_MODEL_REASONING,
+        settings.AI_MODEL_WRITER,
+        settings.AI_MODEL_CRITIC,
+        settings.AI_MODEL_FALLBACK,
+    }
     static_models = set(allowed_models)
     if ai_control.policy()["mode"] == "adaptive":
         allowed_models.update(item.model for item in enabled_candidates(role))
@@ -73,33 +98,63 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
     if provider is None:
         # Normal calls are routed before sending, not only after an error/limit.
         from app.ai import token_forecast
+
         request_features = token_forecast.features(messages, role)
-        predictions = {providers.route_id(item.provider, item.model): token_forecast.predict(
-            token_forecast.current_model(), role=role, model_id=item.model,
-            request_features=request_features, max_output_tokens=output_limit,
-        ) for item in enabled_candidates(role)}
+        predictions = {
+            providers.route_id(item.provider, item.model): token_forecast.predict(
+                token_forecast.current_model(),
+                role=role,
+                model_id=item.model,
+                request_features=request_features,
+                max_output_tokens=output_limit,
+            )
+            for item in enabled_candidates(role)
+        }
         predictions[providers.route_id("vsellm", used_model)] = token_forecast.predict(
-            token_forecast.current_model(), role=role, model_id=used_model,
-            request_features=request_features, max_output_tokens=output_limit)
-        input_estimates = {providers.route_id(item.provider, item.model): count_messages(messages, item.model) for item in enabled_candidates(role)}
+            token_forecast.current_model(),
+            role=role,
+            model_id=used_model,
+            request_features=request_features,
+            max_output_tokens=output_limit,
+        )
+        input_estimates = {
+            providers.route_id(item.provider, item.model): count_messages(messages, item.model)
+            for item in enabled_candidates(role)
+        }
         input_estimates[providers.route_id("vsellm", used_model)] = input_estimate
-        decision = choose_route(role=role, baseline_model=used_model,
-                                input_tokens=input_estimate, output_tokens=output_limit,
-                                available_providers=available_provider_ids(),
-                                excluded_models=excluded_routes,
-                                requested_model=model if not fallback else None,
-                                forecast=predictions, input_estimates=input_estimates)
+        decision = choose_route(
+            role=role,
+            baseline_model=used_model,
+            input_tokens=input_estimate,
+            output_tokens=output_limit,
+            available_providers=available_provider_ids(),
+            excluded_models=excluded_routes,
+            requested_model=model if not fallback else None,
+            forecast=predictions,
+            input_estimates=input_estimates,
+        )
         provider, used_model = decision.selected_provider, decision.selected_model
     selected_provider = providers.registry().get(provider)
     if selected_provider is None or not providers.available(selected_provider):
         raise providers.AIUnavailable()
-    candidate = next((item for item in enabled_candidates(role)
-                      if item.model == used_model and item.provider == provider), None)
+    candidate = next(
+        (
+            item
+            for item in enabled_candidates(role)
+            if item.model == used_model and item.provider == provider
+        ),
+        None,
+    )
     if candidate is None and not (provider == "vsellm" and used_model in static_models):
         # Approval is for a provider/model pair. A model approved at another
         # endpoint must never silently leak into the baseline provider fallback.
         raise providers.AIUnavailable()
-    if any(item.provider == provider and item.model == used_model and (not item.approved or role not in item.roles) for item in ai_control.candidates()):
+    if any(
+        item.provider == provider
+        and item.model == used_model
+        and (not item.approved or role not in item.roles)
+        for item in ai_control.candidates()
+    ):
         raise providers.AIUnavailable()
     input_estimate = require_fits(messages, used_model, output_limit, provider)
     llm = ChatOpenAI(
@@ -117,7 +172,9 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         llm = llm.bind(response_format={"type": "json_object"})
     constructors = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
     try:
-        response = llm.invoke([constructors[item["role"]](content=item["content"]) for item in messages])
+        response = llm.invoke(
+            [constructors[item["role"]](content=item["content"]) for item in messages]
+        )
     except LengthFinishReasonError as exc:
         # The SDK may reject truncated JSON before LangChain returns a message.
         # Preserve actual billed usage while still rejecting the partial content.
@@ -126,16 +183,25 @@ def invoke_messages(role: str, messages: list[dict], *, model: str | None = None
         completion = exc.completion
         usage = completion.usage
         if usage is not None:
-            error.ai_usage = {"input_tokens": usage.prompt_tokens, "output_tokens": usage.completion_tokens,
-                              "cached_tokens": getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0}
+            error.ai_usage = {
+                "input_tokens": usage.prompt_tokens,
+                "output_tokens": usage.completion_tokens,
+                "cached_tokens": getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0,
+            }
         error.ai_model = completion.model or used_model
         error.ai_provider = provider
         raise error from None
     except Exception as exc:
         if provider_context_error(exc):
             max_input, _, context = limits(used_model, provider)
-            error = ContextBudgetExceeded(model=used_model, input_tokens=input_estimate,
-                output_tokens=output_limit, input_limit=max_input, context_window=context, request_sent=True)
+            error = ContextBudgetExceeded(
+                model=used_model,
+                input_tokens=input_estimate,
+                output_tokens=output_limit,
+                input_limit=max_input,
+                context_window=context,
+                request_sent=True,
+            )
             error.ai_provider = provider
             # No usage was reported. Retain the conservative paid reservation;
             # never invent zero billing or repeat this unchanged prompt.
@@ -192,13 +258,16 @@ def chat_completion(role: str, messages: list[dict], **kwargs) -> dict:
     excluded_routes = set()
     for attempt in range(settings.AI_MAX_ATTEMPTS):
         try:
-            return invoke_messages(role, messages, fallback=attempt > 0,
-                                   excluded_routes=excluded_routes, **kwargs)
+            return invoke_messages(
+                role, messages, fallback=attempt > 0, excluded_routes=excluded_routes, **kwargs
+            )
         except Exception as exc:
             if isinstance(exc, HTTPException) and exc.status_code in {402, 413, 422}:
                 raise
             if getattr(exc, "ai_model", None):
-                excluded_routes.add(providers.route_id(getattr(exc, "ai_provider", "vsellm"), exc.ai_model))
+                excluded_routes.add(
+                    providers.route_id(getattr(exc, "ai_provider", "vsellm"), exc.ai_model)
+                )
             if not retryable(exc) or attempt + 1 == settings.AI_MAX_ATTEMPTS:
                 raise providers.AIUnavailable() from None
     raise RuntimeError("unreachable")

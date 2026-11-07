@@ -1,14 +1,15 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, validator, ConfigDict
-from sqlalchemy.orm import Session
 from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, validator
+from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.course_structure import CourseStructure
 from app.models.user import User
-from app.services.auth_service import get_current_user
 from app.schemas.course_review import CourseReviewStructure
+from app.services.auth_service import get_current_user
 from app.services.course_review_service import CourseReviewService
 
 router = APIRouter()
@@ -27,6 +28,7 @@ def get_generated_course_structure(
 ):
     return CourseReviewService.structure(db, course_id, current_user.id)
 
+
 # Pydantic-модель для создания структуры курса
 class CourseStructureCreate(BaseModel):
     sections: int = Field(..., gt=0, description="Количество секций курса")
@@ -41,6 +43,7 @@ class CourseStructureCreate(BaseModel):
         if not v.strip():
             raise ValueError("Элементы content_types не должны быть пустыми")
         return v.strip()
+
 
 # Pydantic-модель для обновления структуры курса (все поля опциональны)
 class CourseStructureUpdate(BaseModel):
@@ -57,6 +60,7 @@ class CourseStructureUpdate(BaseModel):
             raise ValueError("Элементы content_types не должны быть пустыми")
         return v.strip() if v else v
 
+
 # Pydantic-модель для ответа
 class CourseStructureResponse(BaseModel):
     id: int
@@ -69,7 +73,10 @@ class CourseStructureResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-@router.post("/course-structure/", summary="Создание структуры курса", response_model=CourseStructureResponse)
+
+@router.post(
+    "/course-structure/", summary="Создание структуры курса", response_model=CourseStructureResponse
+)
 def create_course_structure(
     struct: CourseStructureCreate,
     db: Session = Depends(get_db),
@@ -99,7 +106,7 @@ def create_course_structure(
             lessons_per_section=new_struct.lessons_per_section,
             questions_per_test=new_struct.questions_per_test,
             final_test=new_struct.final_test,
-            content_types=new_struct.content_types.split(",") if new_struct.content_types else []
+            content_types=new_struct.content_types.split(",") if new_struct.content_types else [],
         )
     except HTTPException:
         raise
@@ -108,7 +115,12 @@ def create_course_structure(
         logger.error(f"Ошибка создания структуры курса: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка создания структуры курса")
 
-@router.get("/course-structure/", summary="Получение всех структур курсов", response_model=List[CourseStructureResponse])
+
+@router.get(
+    "/course-structure/",
+    summary="Получение всех структур курсов",
+    response_model=List[CourseStructureResponse],
+)
 def get_all_course_structures(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -117,7 +129,9 @@ def get_all_course_structures(
     Возвращает список всех структур курсов.
     """
     try:
-        structs = db.query(CourseStructure).filter(CourseStructure.owner_id == current_user.id).all()
+        structs = (
+            db.query(CourseStructure).filter(CourseStructure.owner_id == current_user.id).all()
+        )
         return [
             CourseStructureResponse(
                 id=cs.id,
@@ -126,7 +140,7 @@ def get_all_course_structures(
                 lessons_per_section=cs.lessons_per_section,
                 questions_per_test=cs.questions_per_test,
                 final_test=cs.final_test,
-                content_types=cs.content_types.split(",") if cs.content_types else []
+                content_types=cs.content_types.split(",") if cs.content_types else [],
             )
             for cs in structs
         ]
@@ -136,7 +150,12 @@ def get_all_course_structures(
         logger.error(f"Ошибка получения структур курсов: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка получения структур курсов")
 
-@router.get("/course-structure/{cs_id}", summary="Получение структуры курса по ID", response_model=CourseStructureResponse)
+
+@router.get(
+    "/course-structure/{cs_id}",
+    summary="Получение структуры курса по ID",
+    response_model=CourseStructureResponse,
+)
 def get_course_structure(
     cs_id: int,
     db: Session = Depends(get_db),
@@ -160,7 +179,7 @@ def get_course_structure(
             lessons_per_section=cs.lessons_per_section,
             questions_per_test=cs.questions_per_test,
             final_test=cs.final_test,
-            content_types=cs.content_types.split(",") if cs.content_types else []
+            content_types=cs.content_types.split(",") if cs.content_types else [],
         )
     except HTTPException:
         raise
@@ -168,7 +187,12 @@ def get_course_structure(
         logger.error(f"Ошибка получения структуры курса: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка получения структуры курса")
 
-@router.put("/course-structure/{cs_id}", summary="Обновление структуры курса", response_model=CourseStructureResponse)
+
+@router.put(
+    "/course-structure/{cs_id}",
+    summary="Обновление структуры курса",
+    response_model=CourseStructureResponse,
+)
 def update_course_structure(
     cs_id: int,
     struct_update: CourseStructureUpdate,
@@ -186,14 +210,14 @@ def update_course_structure(
         )
         if not cs:
             raise HTTPException(status_code=404, detail="Структура курса не найдена")
-        
+
         update_data = struct_update.dict(exclude_unset=True)
         if "content_types" in update_data and update_data["content_types"] is not None:
             update_data["content_types"] = ",".join(update_data["content_types"])
-        
+
         for field, value in update_data.items():
             setattr(cs, field, value)
-        
+
         db.commit()
         db.refresh(cs)
         logger.info(f"Обновлена структура курса с ID: {cs.id}")
@@ -204,7 +228,7 @@ def update_course_structure(
             lessons_per_section=cs.lessons_per_section,
             questions_per_test=cs.questions_per_test,
             final_test=cs.final_test,
-            content_types=cs.content_types.split(",") if cs.content_types else []
+            content_types=cs.content_types.split(",") if cs.content_types else [],
         )
     except HTTPException:
         raise
@@ -212,6 +236,7 @@ def update_course_structure(
         db.rollback()
         logger.error(f"Ошибка обновления структуры курса: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка обновления структуры курса")
+
 
 @router.delete("/course-structure/{cs_id}", summary="Удаление структуры курса")
 def delete_course_structure(
@@ -230,7 +255,7 @@ def delete_course_structure(
         )
         if not cs:
             raise HTTPException(status_code=404, detail="Структура курса не найдена")
-        
+
         db.delete(cs)
         db.commit()
         logger.info(f"Удалена структура курса с ID: {cs_id}")

@@ -23,6 +23,82 @@ env:
   IMAGE_NAME: ghcr.io/neuroflexdev/ciback
 
 jobs:
+  lint:
+    name: Python, SQL, Docker and workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-lint.txt
+      - name: Install lint dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-lint.txt
+      - name: Check Python
+        run: |
+          ruff check --output-format github .
+          ruff format --check .
+      - name: Check SQL
+        run: python scripts/lint_sql.py
+      - name: Install checksum-pinned native tools
+        run: python scripts/lint_native.py install
+      - name: Check workflows
+        run: python scripts/lint_native.py actionlint
+      - name: Check Dockerfile
+        run: python scripts/lint_native.py hadolint
+      - name: Scan repository snapshot for secrets
+        run: |
+          # Checkout contains tracked source only. Scan every file in the snapshot,
+          # including previously committed files, without obsolete historical secrets.
+          snapshot="$(mktemp -d)"
+          git archive HEAD | tar -x -C "$snapshot"
+          python scripts/lint_native.py gitleaks dir --redact --no-banner "$snapshot"
+      - name: Scan introduced commits for secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]] && git cat-file -e "$BASE_SHA^{commit}"; then
+            python scripts/lint_native.py gitleaks git --redact --no-banner --log-opts="$BASE_SHA..HEAD"
+          fi
+      - name: Build import dependency map
+        if: always()
+        run: |
+          mkdir -p lint-reports
+          ruff analyze graph app --detect-string-imports > lint-reports/imports.json
+      - name: Upload import map
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-import-map
+          path: lint-reports/imports.json
+          if-no-files-found: error
+
+  security:
+    name: Semgrep security rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-security.txt
+      - name: Install Semgrep in its own environment
+        run: python -m pip install --disable-pip-version-check -r requirements-security.txt
+      - name: Run local security rules
+        run: semgrep scan --config .semgrep.yml --error --strict --metrics off --disable-version-check app scripts main.py admin_main.py
+      - name: Test security rules against unsafe and safe examples
+        run: semgrep scan --test --config .semgrep.yml tests/security/.semgrep.py --metrics off --disable-version-check
+
   quality:
     name: Tests and migrations
     runs-on: ubuntu-latest
@@ -74,6 +150,25 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
 
+      - name: Check types in core and API schemas
+        run: ty check --output-format github
+
+      - name: Report types across the application (migration visibility)
+        run: |
+          mkdir -p lint-reports
+          ty check --config 'src.include=["app", "main.py", "admin_main.py", "scripts/lint_sql.py", "scripts/lint_native.py"]' --output-format sarif --exit-zero > lint-reports/ty-full.sarif
+
+      - name: Upload full type report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: full-type-report
+          path: lint-reports/ty-full.sarif
+          if-no-files-found: warn
+
+      - name: Audit installed application and development dependencies
+        run: python -m pip_audit --progress-spinner off
+
       - name: Prepare offline tokenizer
         run: python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
 
@@ -116,7 +211,7 @@ jobs:
   image:
     name: Build and publish image
     if: github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
-    needs: quality
+    needs: [quality, lint, security]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

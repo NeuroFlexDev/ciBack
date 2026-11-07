@@ -7,13 +7,13 @@ from sqlalchemy.orm import Session
 from app.models.assessment_rubric import AssessmentRubric
 from app.models.competency import Competency
 from app.models.course import Course
+from app.models.learning import AssessmentDefinition
 from app.models.learning_objective import LearningObjective
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.task import Task
 from app.models.test import Test
 from app.models.theory import Theory
-from app.models.learning import AssessmentDefinition
 
 
 def _ordered_ids(nodes: list[dict], edges: list[dict], node_type: str) -> list[str]:
@@ -23,7 +23,11 @@ def _ordered_ids(nodes: list[dict], edges: list[dict], node_type: str) -> list[s
     indegree = {item: 0 for item in candidates}
     for edge in edges:
         source, target = str(edge["source"]), str(edge["target"])
-        if edge.get("relation") != "precedes" or source not in candidate_set or target not in candidate_set:
+        if (
+            edge.get("relation") != "precedes"
+            or source not in candidate_set
+            or target not in candidate_set
+        ):
             continue
         if target not in follows[source]:
             follows[source].add(target)
@@ -56,30 +60,59 @@ def _question_payload(test_node: dict) -> list[dict]:
         if not question or not isinstance(answers, list):
             raise ValueError("generated test question is invalid")
         kind = item.get("kind") or ("single_choice" if answers else "short_answer")
-        question_type = {"single_choice": "single", "multiple_choice": "multiple", "short_answer": "open"}.get(kind)
+        question_type = {
+            "single_choice": "single",
+            "multiple_choice": "multiple",
+            "short_answer": "open",
+        }.get(kind)
         if question_type is None:
             raise ValueError("unknown generated question type")
         correct_answers = item.get("correct_answers")
         if correct_answers is None:
-            correct_answers = [item.get("expected_answer") or correct] if question_type == "open" else [correct]
-        if not isinstance(correct_answers, list) or not correct_answers or any(not isinstance(value, str) or not value.strip() for value in correct_answers):
+            correct_answers = (
+                [item.get("expected_answer") or correct] if question_type == "open" else [correct]
+            )
+        if (
+            not isinstance(correct_answers, list)
+            or not correct_answers
+            or any(not isinstance(value, str) or not value.strip() for value in correct_answers)
+        ):
             raise ValueError("generated test has no valid answer key")
         if len(set(answers)) != len(answers) or len(set(correct_answers)) != len(correct_answers):
             raise ValueError("generated answer options must be unambiguous")
-        if question_type != "open" and (len(answers) < 2 or not set(correct_answers).issubset(answers) or (question_type == "single" and len(correct_answers) != 1)):
+        if question_type != "open" and (
+            len(answers) < 2
+            or not set(correct_answers).issubset(answers)
+            or (question_type == "single" and len(correct_answers) != 1)
+        ):
             raise ValueError("generated answer key does not match options")
         if question_type == "open" and answers:
             raise ValueError("open generated question cannot contain answer options")
-        result.append({
-            "logical_id": str(item.get("id") or f"{test_node['id']}:question:{len(result)}"),
-            "question": question,
-            "answers": [str(answer) for answer in answers],
-            "correct": correct or " | ".join(correct_answers),
-            "definition": {"question_type": question_type, "correct_answers": correct_answers, "max_points": 1,
-                "grading_mode": "manual" if question_type == "open" else "automatic",
-                "criteria": [{"id": "accuracy", "title": "Корректность ответа", "description": "Ответ соответствует условиям вопроса и изученным материалам.", "max_points": 1}] if question_type == "open" else []},
-            "source_refs": list(item.get("source_refs") or test_node.get("source_refs") or []),
-        })
+        result.append(
+            {
+                "logical_id": str(item.get("id") or f"{test_node['id']}:question:{len(result)}"),
+                "question": question,
+                "answers": [str(answer) for answer in answers],
+                "correct": correct or " | ".join(correct_answers),
+                "definition": {
+                    "question_type": question_type,
+                    "correct_answers": correct_answers,
+                    "max_points": 1,
+                    "grading_mode": "manual" if question_type == "open" else "automatic",
+                    "criteria": [
+                        {
+                            "id": "accuracy",
+                            "title": "Корректность ответа",
+                            "description": "Ответ соответствует условиям вопроса и изученным материалам.",
+                            "max_points": 1,
+                        }
+                    ]
+                    if question_type == "open"
+                    else [],
+                },
+                "source_refs": list(item.get("source_refs") or test_node.get("source_refs") or []),
+            }
+        )
     return result
 
 
@@ -139,9 +172,7 @@ class CourseMaterializationService:
         }
 
     @staticmethod
-    def materialize(
-        db: Session, *, course: Course, nodes: list[dict], edges: list[dict]
-    ) -> dict:
+    def materialize(db: Session, *, course: Course, nodes: list[dict], edges: list[dict]) -> dict:
         by_id = {str(node["id"]): node for node in nodes}
         module_ids = _ordered_ids(nodes, edges, "module")
         lesson_ids = set(_ordered_ids(nodes, edges, "lesson"))
@@ -203,16 +234,20 @@ class CourseMaterializationService:
             materialized_modules.append(module)
             module_canvas_id = f"module:{module.id}"
             persisted_ids[module_id] = [module_canvas_id]
-            canvas_nodes.append({
-                "id": module_canvas_id,
-                "logical_id": module_id,
-                "type": "module",
-                "label": module.title,
-                "description": module.description,
-                "position": module.position,
-                "source_refs": list(node.get("source_refs") or []),
-            })
-            ordered_lessons = [item for item in _ordered_ids(nodes, edges, "lesson") if item in contains[module_id]]
+            canvas_nodes.append(
+                {
+                    "id": module_canvas_id,
+                    "logical_id": module_id,
+                    "type": "module",
+                    "label": module.title,
+                    "description": module.description,
+                    "position": module.position,
+                    "source_refs": list(node.get("source_refs") or []),
+                }
+            )
+            ordered_lessons = [
+                item for item in _ordered_ids(nodes, edges, "lesson") if item in contains[module_id]
+            ]
             for lesson_position, lesson_id in enumerate(ordered_lessons):
                 lesson_node = by_id[lesson_id]
                 lesson = Lesson(
@@ -227,16 +262,18 @@ class CourseMaterializationService:
                 persisted_ids[lesson_id] = [lesson_canvas_id]
                 content = str(lesson_node.get("content") or lesson_node.get("description") or "")
                 db.add(Theory(lesson_id=lesson.id, content=content))
-                canvas_nodes.append({
-                    "id": lesson_canvas_id,
-                    "logical_id": lesson_id,
-                    "type": "lesson",
-                    "label": lesson.title,
-                    "description": lesson.description or "",
-                    "content": content,
-                    "position": lesson.position,
-                    "source_refs": list(lesson_node.get("source_refs") or []),
-                })
+                canvas_nodes.append(
+                    {
+                        "id": lesson_canvas_id,
+                        "logical_id": lesson_id,
+                        "type": "lesson",
+                        "label": lesson.title,
+                        "description": lesson.description or "",
+                        "content": content,
+                        "position": lesson.position,
+                        "source_refs": list(lesson_node.get("source_refs") or []),
+                    }
+                )
                 assessment_items = [
                     ("practice", item) for item in lesson_node.get("practices", [])
                 ] + [("case", item) for item in lesson_node.get("cases", [])]
@@ -271,32 +308,60 @@ class CourseMaterializationService:
                     task_logical_id = str(item.get("id") or f"{lesson_id}:{kind}:{task.id}")
                     task_canvas_id = f"task:{task.id}"
                     persisted_ids[task_logical_id] = [task_canvas_id]
-                    canvas_nodes.append({
-                        "id": task_canvas_id,
-                        "logical_id": task_logical_id,
-                        "type": "task",
-                        "label": task.name,
-                        "description": task.description or "",
-                        "source_refs": list(item.get("source_ref_ids") or []),
-                    })
-                    canvas_edges.append({
-                        "source": lesson_canvas_id,
-                        "target": task_canvas_id,
-                        "relation": "contains",
-                    })
+                    canvas_nodes.append(
+                        {
+                            "id": task_canvas_id,
+                            "logical_id": task_logical_id,
+                            "type": "task",
+                            "label": task.name,
+                            "description": task.description or "",
+                            "source_refs": list(item.get("source_ref_ids") or []),
+                        }
+                    )
+                    canvas_edges.append(
+                        {
+                            "source": lesson_canvas_id,
+                            "target": task_canvas_id,
+                            "relation": "contains",
+                        }
+                    )
                     task_count += 1
                     rubric = item.get("rubric")
                     if rubric:
-                        normalized = [{"id": criterion["id"], "title": criterion["title"],
-                            "description": criterion.get("description", ""),
-                            "max_points": criterion["weight"] * max(level["score"] for level in criterion["levels"]),
-                            "levels": [{"title": level["title"], "description": level.get("description", ""), "points": criterion["weight"] * level["score"]} for level in criterion["levels"]]}
-                            for criterion in rubric.get("criteria", [])]
-                        if not normalized or any(criterion["max_points"] <= 0 for criterion in normalized):
+                        normalized = [
+                            {
+                                "id": criterion["id"],
+                                "title": criterion["title"],
+                                "description": criterion.get("description", ""),
+                                "max_points": criterion["weight"]
+                                * max(level["score"] for level in criterion["levels"]),
+                                "levels": [
+                                    {
+                                        "title": level["title"],
+                                        "description": level.get("description", ""),
+                                        "points": criterion["weight"] * level["score"],
+                                    }
+                                    for level in criterion["levels"]
+                                ],
+                            }
+                            for criterion in rubric.get("criteria", [])
+                        ]
+                        if not normalized or any(
+                            criterion["max_points"] <= 0 for criterion in normalized
+                        ):
                             raise ValueError("generated practice requires positive rubric criteria")
-                        db.add(AssessmentDefinition(task_id=task.id, question_type="open", grading_mode="manual",
-                            correct_answers=[item["expected_response"]] if item.get("expected_response") else [],
-                            max_points=sum(criterion["max_points"] for criterion in normalized), criteria=normalized))
+                        db.add(
+                            AssessmentDefinition(
+                                task_id=task.id,
+                                question_type="open",
+                                grading_mode="manual",
+                                correct_answers=[item["expected_response"]]
+                                if item.get("expected_response")
+                                else [],
+                                max_points=sum(criterion["max_points"] for criterion in normalized),
+                                criteria=normalized,
+                            )
+                        )
                         levels = [
                             {"criterion_id": criterion.get("id"), **level}
                             for criterion in rubric.get("criteria", [])
@@ -328,23 +393,29 @@ class CourseMaterializationService:
                     test_canvas_id = f"test:{test.id}"
                     persisted_ids.setdefault(test_node_id, []).append(test_canvas_id)
                     persisted_ids[question["logical_id"]] = [test_canvas_id]
-                    canvas_nodes.append({
-                        "id": test_canvas_id,
-                        "logical_id": question["logical_id"],
-                        "type": "test",
-                        "assessment_scope": "module",
-                        "label": question["question"],
-                        "question": question["question"],
-                        "answers": question["answers"],
-                        "correct_answer": question["correct"],
-                        "question_type": question["definition"]["question_type"],
-                        "correct_answers": question["definition"]["correct_answers"],
-                        "position": position,
-                        "source_refs": question["source_refs"],
-                    })
+                    canvas_nodes.append(
+                        {
+                            "id": test_canvas_id,
+                            "logical_id": question["logical_id"],
+                            "type": "test",
+                            "assessment_scope": "module",
+                            "label": question["question"],
+                            "question": question["question"],
+                            "answers": question["answers"],
+                            "correct_answer": question["correct"],
+                            "question_type": question["definition"]["question_type"],
+                            "correct_answers": question["definition"]["correct_answers"],
+                            "position": position,
+                            "source_refs": question["source_refs"],
+                        }
+                    )
                     test_count += 1
 
-        final_nodes = [node for node in nodes if node.get("type") == "test" and node.get("assessment_scope") == "final"]
+        final_nodes = [
+            node
+            for node in nodes
+            if node.get("type") == "test" and node.get("assessment_scope") == "final"
+        ]
         for final_node in final_nodes:
             for position, question in enumerate(_question_payload(final_node)):
                 test = Test(
@@ -362,31 +433,35 @@ class CourseMaterializationService:
                 logical_test_id = str(final_node["id"])
                 persisted_ids.setdefault(logical_test_id, []).append(test_canvas_id)
                 persisted_ids[question["logical_id"]] = [test_canvas_id]
-                canvas_nodes.append({
-                    "id": test_canvas_id,
-                    "logical_id": question["logical_id"],
-                    "type": "test",
-                    "assessment_scope": "final",
-                    "label": question["question"],
-                    "question": question["question"],
-                    "answers": question["answers"],
-                    "correct_answer": question["correct"],
-                    "question_type": question["definition"]["question_type"],
-                    "correct_answers": question["definition"]["correct_answers"],
-                    "position": position,
-                    "source_refs": question["source_refs"],
-                })
+                canvas_nodes.append(
+                    {
+                        "id": test_canvas_id,
+                        "logical_id": question["logical_id"],
+                        "type": "test",
+                        "assessment_scope": "final",
+                        "label": question["question"],
+                        "question": question["question"],
+                        "answers": question["answers"],
+                        "correct_answer": question["correct"],
+                        "question_type": question["definition"]["question_type"],
+                        "correct_answers": question["definition"]["correct_answers"],
+                        "position": position,
+                        "source_refs": question["source_refs"],
+                    }
+                )
                 test_count += 1
         for edge in edges:
             sources = persisted_ids.get(str(edge["source"]), [])
             targets = persisted_ids.get(str(edge["target"]), [])
             for source in sources:
                 for target in targets:
-                    canvas_edges.append({
-                        "source": source,
-                        "target": target,
-                        "relation": edge.get("relation") or "contains",
-                    })
+                    canvas_edges.append(
+                        {
+                            "source": source,
+                            "target": target,
+                            "relation": edge.get("relation") or "contains",
+                        }
+                    )
         unique_edges = []
         seen_edges = set()
         for edge in canvas_edges:

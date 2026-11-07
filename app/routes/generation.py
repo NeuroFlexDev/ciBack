@@ -1,19 +1,26 @@
+import json
+import logging
+import traceback
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from app.schemas.generation import LessonRequest
-from app.repositories.generation import GenerationRepository
-from app.services.generation_service import course_kwargs, llm_json, DEFAULT_ENGINE, DEFAULT_MODEL
-from app.models.module import Module
+
+from app.database.db import get_db
 from app.models.lesson import Lesson
+from app.models.module import Module
 from app.models.task import Task
 from app.models.test import Test
 from app.models.theory import Theory
+from app.repositories.generation import GenerationRepository
+from app.schemas.generation import LessonRequest
 from app.services.embedding_service import embed_and_add
-from app.database.db import get_db
-import json, logging, traceback
+from app.services.generation_service import DEFAULT_ENGINE, DEFAULT_MODEL, course_kwargs, llm_json
 
-router = APIRouter(prefix="/courses",)
+router = APIRouter(
+    prefix="/courses",
+)
 logger = logging.getLogger(__name__)
+
 
 @router.get("/{course_id}/generate_modules", summary="Генерация и сохранение модулей курса")
 def generate_and_save_modules(
@@ -40,9 +47,13 @@ def generate_and_save_modules(
         for mod in modules:
             m = GenerationRepository.add_module(db, course.id, mod.get("title") or "Без названия")
             for lesson in mod.get("lessons", []):
-                db.add(Lesson(module_id=m.id,
-                              title=lesson.get("title", "Без названия"),
-                              description=lesson.get("description", "")))
+                db.add(
+                    Lesson(
+                        module_id=m.id,
+                        title=lesson.get("title", "Без названия"),
+                        description=lesson.get("description", ""),
+                    )
+                )
             # ... и далее по аналогии для tests/tasks
         db.commit()
         return {"message": "✅ Модули успешно сгенерированы и сохранены"}

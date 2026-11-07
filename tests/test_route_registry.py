@@ -26,6 +26,7 @@ REQUIRED_ROUTES = {
 
 def _registered_method_paths():
     """Flatten FastAPI's included routers without relying on OpenAPI deduping."""
+
     def walk(router, prefix=""):
         for route in router.routes:
             nested = getattr(route, "original_router", None)
@@ -34,6 +35,7 @@ def _registered_method_paths():
             elif getattr(route, "path", None) is not None:
                 for method in getattr(route, "methods", set()):
                     yield method, prefix + route.path
+
     yield from walk(app.router)
 
 

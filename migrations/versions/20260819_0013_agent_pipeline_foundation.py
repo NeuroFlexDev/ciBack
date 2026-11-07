@@ -7,10 +7,9 @@ Create Date: 2026-08-19
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "20260819_0013"
 down_revision: str | None = "20260813_0012"
@@ -45,9 +44,7 @@ def upgrade() -> None:
                 server_default=sa.true(),
             )
         )
-        batch.add_column(
-            sa.Column("supersedes_document_id", sa.Integer(), nullable=True)
-        )
+        batch.add_column(sa.Column("supersedes_document_id", sa.Integer(), nullable=True))
 
     documents = sa.table(
         "documents",
@@ -59,16 +56,13 @@ def upgrade() -> None:
         documents.update()
         .where(documents.c.document_key.is_(None))
         .values(
-            document_key=sa.literal("legacy-")
-            + sa.cast(documents.c.id, sa.String()),
+            document_key=sa.literal("legacy-") + sa.cast(documents.c.id, sa.String()),
             is_current=sa.true(),
         )
     )
 
     with op.batch_alter_table("documents") as batch:
-        batch.alter_column(
-            "document_key", existing_type=sa.String(64), nullable=False
-        )
+        batch.alter_column("document_key", existing_type=sa.String(64), nullable=False)
         batch.alter_column(
             "is_current",
             existing_type=sa.Boolean(),
@@ -109,20 +103,14 @@ def upgrade() -> None:
         sa.Column("artifact", sa.String(64), nullable=False),
         sa.Column("schema_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("sequence", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column(
-            "status", sa.String(32), nullable=False, server_default="completed"
-        ),
+        sa.Column("status", sa.String(32), nullable=False, server_default="completed"),
         sa.Column("payload", _json_type(), nullable=False),
         sa.Column("input_fingerprint", sa.String(128), nullable=True),
         sa.Column("model", sa.String(255), nullable=True),
         sa.Column("latency_ms", sa.Integer(), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),
-        sa.CheckConstraint(
-            "schema_version > 0", name="ck_agent_artifacts_schema_version_positive"
-        ),
-        sa.CheckConstraint(
-            "sequence >= 0", name="ck_agent_artifacts_sequence_nonnegative"
-        ),
+        sa.CheckConstraint("schema_version > 0", name="ck_agent_artifacts_schema_version_positive"),
+        sa.CheckConstraint("sequence >= 0", name="ck_agent_artifacts_sequence_nonnegative"),
         sa.CheckConstraint(
             "latency_ms IS NULL OR latency_ms >= 0",
             name="ck_agent_artifacts_latency_nonnegative",
@@ -131,9 +119,7 @@ def upgrade() -> None:
             "status IN ('completed', 'failed')",
             name="ck_agent_artifacts_status",
         ),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["generation_runs.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["generation_runs.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -172,9 +158,7 @@ def upgrade() -> None:
         sa.Column("excerpt", sa.Text(), nullable=False),
         sa.Column("excerpt_hash", sa.String(128), nullable=False),
         sa.Column("ref_id", sa.String(128), nullable=False),
-        sa.Column(
-            "relation", sa.String(64), nullable=False, server_default="supports"
-        ),
+        sa.Column("relation", sa.String(64), nullable=False, server_default="supports"),
         sa.Column("confidence", sa.Numeric(5, 4), nullable=True),
         sa.CheckConstraint(
             "document_version > 0",
@@ -192,24 +176,16 @@ def upgrade() -> None:
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
             name="ck_course_source_links_confidence_range",
         ),
-        sa.ForeignKeyConstraint(
-            ["course_id"], ["courses.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["graph_id"], ["course_graphs.id"], ondelete="SET NULL"
-        ),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["generation_runs.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["graph_id"], ["course_graphs.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["run_id"], ["generation_runs.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(
             ["document_id", "document_version"],
             ["documents.id", "documents.version"],
             name="fk_course_source_links_document_version",
             ondelete="CASCADE",
         ),
-        sa.ForeignKeyConstraint(
-            ["chunk_id"], ["document_chunks.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["chunk_id"], ["document_chunks.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "graph_id",
@@ -235,9 +211,7 @@ def upgrade() -> None:
         "course_source_links",
         ["graph_id", "node_id"],
     )
-    op.create_index(
-        "ix_course_source_links_run", "course_source_links", ["run_id"]
-    )
+    op.create_index("ix_course_source_links_run", "course_source_links", ["run_id"])
 
     op.create_table(
         "course_update_proposals",
@@ -251,22 +225,14 @@ def upgrade() -> None:
         sa.Column("affected_node_ids", _json_type(), nullable=False),
         sa.Column("proposed_diff", _json_type(), nullable=False),
         sa.Column("summary", sa.Text(), nullable=True),
-        sa.Column(
-            "status", sa.String(32), nullable=False, server_default="proposed"
-        ),
+        sa.Column("status", sa.String(32), nullable=False, server_default="proposed"),
         sa.CheckConstraint(
             "status IN ('proposed', 'accepted', 'rejected', 'applied', 'conflict')",
             name="ck_course_update_proposals_status",
         ),
-        sa.ForeignKeyConstraint(
-            ["course_id"], ["courses.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["document_id"], ["documents.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["base_graph_id"], ["course_graphs.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["document_id"], ["documents.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["base_graph_id"], ["course_graphs.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(
             ["detected_by_run_id"],
             ["generation_runs.id"],
@@ -274,9 +240,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_course_update_proposals_id", "course_update_proposals", ["id"]
-    )
+    op.create_index("ix_course_update_proposals_id", "course_update_proposals", ["id"])
     op.create_index(
         "ix_course_update_proposals_course_status",
         "course_update_proposals",
@@ -316,18 +280,12 @@ def downgrade() -> None:
         "ix_course_update_proposals_course_status",
         table_name="course_update_proposals",
     )
-    op.drop_index(
-        "ix_course_update_proposals_id", table_name="course_update_proposals"
-    )
+    op.drop_index("ix_course_update_proposals_id", table_name="course_update_proposals")
     op.drop_table("course_update_proposals")
 
     op.drop_index("ix_course_source_links_run", table_name="course_source_links")
-    op.drop_index(
-        "ix_course_source_links_graph_node", table_name="course_source_links"
-    )
-    op.drop_index(
-        "ix_course_source_links_course_target", table_name="course_source_links"
-    )
+    op.drop_index("ix_course_source_links_graph_node", table_name="course_source_links")
+    op.drop_index("ix_course_source_links_course_target", table_name="course_source_links")
     op.drop_index(
         "ix_course_source_links_document_version",
         table_name="course_source_links",
@@ -335,22 +293,16 @@ def downgrade() -> None:
     op.drop_index("ix_course_source_links_id", table_name="course_source_links")
     op.drop_table("course_source_links")
 
-    op.drop_index(
-        "ix_agent_artifacts_course_artifact", table_name="agent_artifacts"
-    )
+    op.drop_index("ix_agent_artifacts_course_artifact", table_name="agent_artifacts")
     op.drop_index("ix_agent_artifacts_run_status", table_name="agent_artifacts")
     op.drop_index("ix_agent_artifacts_id", table_name="agent_artifacts")
     op.drop_table("agent_artifacts")
 
     op.drop_index("uq_documents_current_lineage", table_name="documents")
     with op.batch_alter_table("documents") as batch:
-        batch.drop_constraint(
-            "uq_documents_supersedes_document_id", type_="unique"
-        )
+        batch.drop_constraint("uq_documents_supersedes_document_id", type_="unique")
         batch.drop_constraint("uq_documents_course_key_version", type_="unique")
-        batch.drop_constraint(
-            "fk_documents_supersedes_document_id", type_="foreignkey"
-        )
+        batch.drop_constraint("fk_documents_supersedes_document_id", type_="foreignkey")
         batch.drop_column("supersedes_document_id")
         batch.drop_column("is_current")
         batch.drop_column("document_key")

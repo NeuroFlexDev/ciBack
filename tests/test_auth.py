@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 
-from app.services.legal_service import CATALOG
 from app.core.config import settings
 from app.core.security import (
     TokenExpiredError,
@@ -13,6 +12,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.services.legal_service import CATALOG
 
 
 def _encode(payload: dict, secret: str | None = None) -> str:
@@ -88,7 +88,10 @@ def test_access_token_with_invalid_payload_is_rejected(payload):
 def test_register_login_and_me(client):
     credentials = {"email": "  USER@example.com ", "password": "password123"}
 
-    registered = client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]})
+    registered = client.post(
+        "/api/auth/register",
+        json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]},
+    )
     assert registered.status_code == 200
     registered_body = registered.json()
     assert registered_body["token_type"] == "bearer"
@@ -112,15 +115,30 @@ def test_register_login_and_me(client):
 def test_duplicate_registration_is_rejected(client):
     credentials = {"email": "duplicate@example.com", "password": "password123"}
 
-    assert client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]}).status_code == 200
-    duplicate = client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]})
+    assert (
+        client.post(
+            "/api/auth/register",
+            json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]},
+        ).status_code
+        == 200
+    )
+    duplicate = client.post(
+        "/api/auth/register",
+        json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]},
+    )
 
     assert duplicate.status_code == 409
 
 
 def test_login_with_wrong_password_is_rejected(client):
     credentials = {"email": "login@example.com", "password": "password123"}
-    assert client.post("/api/auth/register", json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]}).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/register",
+            json={**credentials, "terms_accepted": True, "legal_version": CATALOG["version"]},
+        ).status_code
+        == 200
+    )
 
     response = client.post(
         "/api/auth/login",
@@ -147,37 +165,54 @@ def test_me_rejects_unknown_user(client):
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
 
+
 def test_web_session_renewal_preserves_login_boundary_and_mfa(client, auth_user):
     import time
+
     start = int(time.time()) - 600
-    token = create_access_token(auth_user.id, auth_user.auth_version, amr=['pwd','otp'], mfa_at=start, wsid='test-web-session', web_started_at=start)
-    response = client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token})
+    token = create_access_token(
+        auth_user.id,
+        auth_user.auth_version,
+        amr=["pwd", "otp"],
+        mfa_at=start,
+        wsid="test-web-session",
+        web_started_at=start,
+    )
+    response = client.post("/api/auth/renew", headers={"Authorization": "Bearer " + token})
     assert response.status_code == 200, response.text
-    claims = decode_access_token(response.json()['access_token'])
-    assert claims['wsid'] == 'test-web-session' and claims['wsa'] == start
-    assert claims['mfa_at'] == start and claims['amr'] == ['pwd','otp']
-    assert claims['exp'] <= start + 8 * 3600
-    assert response.json()['user']['id'] == auth_user.id
+    claims = decode_access_token(response.json()["access_token"])
+    assert claims["wsid"] == "test-web-session" and claims["wsa"] == start
+    assert claims["mfa_at"] == start and claims["amr"] == ["pwd", "otp"]
+    assert claims["exp"] <= start + 8 * 3600
+    assert response.json()["user"]["id"] == auth_user.id
 
 
 def test_web_renewal_rejects_expired_revoked_and_legacy_tokens(client, auth_user, db_session):
     import time
+
     start = int(time.time()) - 8 * 3600
     expired = create_access_token(auth_user.id, web_started_at=start)
     legacy = _encode(_payload(sub=str(auth_user.id)))
     for token in [expired, legacy]:
-        assert client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token}).status_code == 401
+        assert (
+            client.post("/api/auth/renew", headers={"Authorization": "Bearer " + token}).status_code
+            == 401
+        )
     token = create_access_token(auth_user.id, auth_user.auth_version)
     auth_user.auth_version += 1
     db_session.commit()
-    assert client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token}).status_code == 401
+    assert (
+        client.post("/api/auth/renew", headers={"Authorization": "Bearer " + token}).status_code
+        == 401
+    )
 
 
 def test_web_renewal_cannot_extend_past_absolute_workday(client, auth_user):
     import time
+
     start = int(time.time()) - 8 * 3600 + 40
-    token = create_access_token(auth_user.id, wsid='bounded', web_started_at=start)
-    response = client.post('/api/auth/renew', headers={'Authorization':'Bearer '+token})
+    token = create_access_token(auth_user.id, wsid="bounded", web_started_at=start)
+    response = client.post("/api/auth/renew", headers={"Authorization": "Bearer " + token})
     assert response.status_code == 200
-    claims = decode_access_token(response.json()['access_token'])
-    assert claims['exp'] == start + 8 * 3600
+    claims = decode_access_token(response.json()["access_token"])
+    assert claims["exp"] == start + 8 * 3600

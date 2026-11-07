@@ -39,9 +39,7 @@ class VectorStore(Protocol):
 
     def delete_document(self, document_id: int) -> None: ...
 
-    def search(
-        self, query: str, filters: VectorSearchFilters, limit: int
-    ) -> list[VectorMatch]: ...
+    def search(self, query: str, filters: VectorSearchFilters, limit: int) -> list[VectorMatch]: ...
 
 
 class FaissVectorStore:
@@ -89,8 +87,7 @@ class FaissVectorStore:
                 if entry[0].metadata.get("document_id") != document_id
             ]
             self._entries.extend(
-                (record, vector)
-                for record, vector in zip(normalized_records, vectors, strict=True)
+                (record, vector) for record, vector in zip(normalized_records, vectors, strict=True)
             )
         return [record.embedding_id for record in normalized_records]
 
@@ -102,9 +99,7 @@ class FaissVectorStore:
                 if entry[0].metadata.get("document_id") != document_id
             ]
 
-    def search(
-        self, query: str, filters: VectorSearchFilters, limit: int
-    ) -> list[VectorMatch]:
+    def search(self, query: str, filters: VectorSearchFilters, limit: int) -> list[VectorMatch]:
         if not query.strip() or limit <= 0 or not filters.allowed_chunk_ids:
             return []
         # ACL and scope are applied before the candidate FAISS index is built.
@@ -112,7 +107,8 @@ class FaissVectorStore:
             candidates = [
                 entry
                 for entry in self._entries
-                if entry[0].metadata.get("owner_id") in (filters.allowed_owner_ids or {filters.owner_id})
+                if entry[0].metadata.get("owner_id")
+                in (filters.allowed_owner_ids or {filters.owner_id})
                 and entry[0].metadata.get("course_id") == filters.course_id
                 and entry[0].metadata.get("chunk_id") in filters.allowed_chunk_ids
             ]
@@ -130,13 +126,9 @@ class FaissVectorStore:
 
         candidate_index = faiss.IndexFlatL2(vectors.shape[1])
         candidate_index.add(vectors)
-        distances, indices = candidate_index.search(
-            query_vector, min(limit, len(candidates))
-        )
+        distances, indices = candidate_index.search(query_vector, min(limit, len(candidates)))
         matches = []
-        for distance, candidate_index_value in zip(
-            distances[0], indices[0], strict=True
-        ):
+        for distance, candidate_index_value in zip(distances[0], indices[0], strict=True):
             if candidate_index_value < 0:
                 continue
             record = candidates[int(candidate_index_value)][0]

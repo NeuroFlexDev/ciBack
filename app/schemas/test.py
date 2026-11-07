@@ -1,14 +1,18 @@
-from pydantic import BaseModel, ConfigDict
 from typing import List
+
+from pydantic import BaseModel, ConfigDict
+
 
 class TestCreate(BaseModel):
     test: str
     description: str
 
+
 class TestUpdate(BaseModel):
     question: str
     answers: List[str]
     correct: str
+
 
 class TestResponse(BaseModel):
     id: int

@@ -12,7 +12,9 @@ def test_lesson_crud(client, db_session, auth_user, auth_headers):
         "title": "Lesson 1",
         "description": "some content",
     }
-    r = client.post(f"/api/courses/{course.id}/modules/{module.id}/lessons/", json=payload, headers=auth_headers)
+    r = client.post(
+        f"/api/courses/{course.id}/modules/{module.id}/lessons/", json=payload, headers=auth_headers
+    )
     assert r.status_code == 201
     lid = r.json()["id"]
 
@@ -22,7 +24,11 @@ def test_lesson_crud(client, db_session, auth_user, auth_headers):
     assert any(l["id"] == lid for l in r.json())
 
     # update
-    r = client.put(f"/api/lessons/{lid}", json={"title": "Lesson 2", "expected_revision": 1}, headers=auth_headers)
+    r = client.put(
+        f"/api/lessons/{lid}",
+        json={"title": "Lesson 2", "expected_revision": 1},
+        headers=auth_headers,
+    )
     assert r.status_code == 200
     assert r.json()["title"] == "Lesson 2"
 

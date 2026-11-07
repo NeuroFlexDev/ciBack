@@ -1,10 +1,10 @@
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     Column,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
 )
@@ -13,7 +13,6 @@ from sqlalchemy.orm import relationship
 
 from app.database.db import Base
 from app.models.base import BaseModelMixin
-
 
 JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 

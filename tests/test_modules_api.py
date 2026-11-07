@@ -21,7 +21,11 @@ def test_module_crud(client, db_session, auth_user, auth_headers):
     assert any(m["id"] == mid for m in r.json())
 
     # update
-    r = client.put(f"/api/modules/{mid}", json={"title": "Module 2", "expected_revision": 1}, headers=auth_headers)
+    r = client.put(
+        f"/api/modules/{mid}",
+        json={"title": "Module 2", "expected_revision": 1},
+        headers=auth_headers,
+    )
     assert r.status_code == 200
     assert r.json()["title"] == "Module 2"
 

@@ -1,0 +1,7 @@
+pip>=26.2.0
+setuptools>=84.1.0
+ruff==0.17.4
+ty==0.0.99
+pip-audit==2.10.1
+pre-commit==4.7.0
+sqlfluff==4.5.0

@@ -1,0 +1,7 @@
+# Security updates are deliberately installed at build time; Debian/PyPI
+# requirements are maintained separately instead of pinning every apt package.
+ignored:
+  - DL3008 # apt package versions follow patched Debian repositories
+  - DL3013 # Python dependency policy lives in requirements.txt
+  - DL3059 # Separate tokenizer/native-runtime smoke checks aid build diagnosis
+failure-threshold: warning

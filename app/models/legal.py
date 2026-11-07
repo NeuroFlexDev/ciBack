@@ -1,14 +1,17 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text, func
 
 from app.database.db import Base
 
 
 class LegalReceipt(Base):
     """Append-only application events; the accepted text survives catalog changes."""
+
     __tablename__ = "legal_receipts"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     subject_email = Column(String(255), nullable=False)
     document_slug = Column(String(64), nullable=False)
     document_version = Column(String(32), nullable=False)

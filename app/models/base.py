@@ -1,5 +1,7 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, DateTime, Boolean
+
+from sqlalchemy import Boolean, Column, DateTime, Integer
+
 
 class BaseModelMixin:
     id = Column(Integer, primary_key=True, index=True)

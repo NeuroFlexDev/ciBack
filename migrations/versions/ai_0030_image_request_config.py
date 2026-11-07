@@ -1,6 +1,7 @@
 """Freeze priced image request options at admission; never reconstruct legacy spend."""
-from alembic import op
+
 import sqlalchemy as sa
+from alembic import op
 
 revision = "ai_0030"
 down_revision = "ai_0029"

@@ -122,7 +122,9 @@ def document_list_item(document) -> DocumentListItem:
         original_filename=document.original_filename,
         content_type=document.mime_type,
         size_bytes=document.size_bytes,
-        extracted_characters=sum(len(chunk.text) for chunk in document.chunks if not chunk.is_deleted),
+        extracted_characters=sum(
+            len(chunk.text) for chunk in document.chunks if not chunk.is_deleted
+        ),
         chunk_count=sum(not chunk.is_deleted for chunk in document.chunks),
         source_type=document.source_type,
         version=document.version,

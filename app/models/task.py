@@ -1,7 +1,8 @@
 from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModelMixin
+
 from app.database.db import Base
+from app.models.base import BaseModelMixin
 
 
 class Task(Base, BaseModelMixin):
@@ -9,7 +10,7 @@ class Task(Base, BaseModelMixin):
 
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    revision = Column(Integer, nullable=False, default=1, server_default='1')
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
     module_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"))
 
     # Обратная связь с Module

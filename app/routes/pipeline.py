@@ -1,21 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.user import User
-from app.schemas.document import DocumentListItem, document_list_item
+from app.repositories.pipeline import PipelineRepository
 from app.schemas.agent_artifact import AgentArtifactOut
 from app.schemas.course_update import CourseUpdateProposalList
-from app.schemas.generation_run import GenerationRunAccepted, GenerationRunCreate, GenerationRunOut, GenerationRunStatusOut
-from app.services.course_generation_settings_service import CourseGenerationSettingsService
-from app.services.job_queue import enqueue_generation
-from app.repositories.pipeline import PipelineRepository
+from app.schemas.document import DocumentListItem, document_list_item
+from app.schemas.generation_run import (
+    GenerationRunAccepted,
+    GenerationRunCreate,
+    GenerationRunOut,
+    GenerationRunStatusOut,
+)
 from app.services.auth_service import get_current_user
-from app.services.file_storage import FileStorage, get_file_storage
-from app.services.pipeline_service import PipelineRunFailed, PipelineService
+from app.services.course_generation_settings_service import CourseGenerationSettingsService
 from app.services.course_update_service import CourseUpdateService
-
+from app.services.file_storage import FileStorage, get_file_storage
+from app.services.job_queue import enqueue_generation
+from app.services.pipeline_service import PipelineRunFailed, PipelineService
 
 router = APIRouter()
 
@@ -25,19 +29,31 @@ class SourceSuggestionRequest(BaseModel):
 
 
 @router.post("/courses/{course_id}/source-suggestion")
-def suggest_course_from_sources(course_id: int, payload: SourceSuggestionRequest,
-                                db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    PipelineService.validate_generation_documents(db, course_id=course_id, owner_id=current_user.id,
-                                                 document_ids=payload.document_ids)
-    documents = PipelineRepository.selected_indexed_documents(db, course_id, current_user.id, payload.document_ids)
+def suggest_course_from_sources(
+    course_id: int,
+    payload: SourceSuggestionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    PipelineService.validate_generation_documents(
+        db, course_id=course_id, owner_id=current_user.id, document_ids=payload.document_ids
+    )
+    documents = PipelineRepository.selected_indexed_documents(
+        db, course_id, current_user.id, payload.document_ids
+    )
     from app.services.source_suggestion import source_suggestion
+
     return source_suggestion(documents)
 
 
 @router.post("/generation-runs/{run_id}/cancel", response_model=GenerationRunStatusOut)
-def cancel_generation(run_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def cancel_generation(
+    run_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     run = PipelineService.get_run(db, run_id, current_user.id)
-    course = PipelineRepository.get_owned_course(db, run.course_id, current_user.id, for_update=True)
+    course = PipelineRepository.get_owned_course(
+        db, run.course_id, current_user.id, for_update=True
+    )
     db.refresh(run)
     if run.run_type != "graph_generation" or run.status not in {"queued", "running", "paused"}:
         raise HTTPException(409, "Этот запуск уже завершён")
@@ -51,25 +67,42 @@ def cancel_generation(run_id: int, db: Session = Depends(get_db), current_user: 
 
 
 @router.post("/courses/{course_id}/generation-preflight")
-def preflight_generation(course_id: int, payload: GenerationRunCreate,
-                         db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    PipelineService.validate_generation_documents(db, course_id=course_id, owner_id=current_user.id,
-                                                 document_ids=payload.document_ids)
-    documents = PipelineRepository.selected_indexed_documents(db, course_id, current_user.id, payload.document_ids)
-    from app.services.generation_preflight import generation_preflight
+def preflight_generation(
+    course_id: int,
+    payload: GenerationRunCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    PipelineService.validate_generation_documents(
+        db, course_id=course_id, owner_id=current_user.id, document_ids=payload.document_ids
+    )
+    documents = PipelineRepository.selected_indexed_documents(
+        db, course_id, current_user.id, payload.document_ids
+    )
     from app.services.ai_entitlements import unlimited_ai
+    from app.services.generation_preflight import generation_preflight
     from app.services.regulation_assessment import regulation_assessment_mode
+
     course = PipelineRepository.get_owned_course(db, course_id, current_user.id)
-    return generation_preflight(documents, {**payload.settings.model_dump(mode="json"),
-        "web_search_enabled": payload.web_search_enabled,
-        "regulation_assessment_mode": regulation_assessment_mode(course, payload.settings)},
-        unlimited=unlimited_ai(db, current_user.organization_id))
+    return generation_preflight(
+        documents,
+        {
+            **payload.settings.model_dump(mode="json"),
+            "web_search_enabled": payload.web_search_enabled,
+            "regulation_assessment_mode": regulation_assessment_mode(course, payload.settings),
+        },
+        unlimited=unlimited_ai(db, current_user.organization_id),
+    )
 
 
 @router.delete("/documents/{document_id}", status_code=204)
-def delete_document(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_document(
+    document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     document = PipelineService.get_document(db, document_id, current_user.id)
-    course = PipelineRepository.get_owned_course(db, document.course_id, current_user.id, for_update=True)
+    course = PipelineRepository.get_owned_course(
+        db, document.course_id, current_user.id, for_update=True
+    )
     if PipelineRepository.active_graph_run(db, document.course_id, current_user.id):
         raise HTTPException(409, "Остановите генерацию перед удалением источника")
     # Preserve historical files/chunks for immutable publications and their audit.
@@ -79,38 +112,79 @@ def delete_document(document_id: int, db: Session = Depends(get_db), current_use
         course.content_revision += 1
     from app.models.ai_state import AIResponseCache, ChatMemory
     from app.models.chat import Chat
-    db.query(AIResponseCache).filter_by(course_id=document.course_id).delete(synchronize_session=False)
+
+    db.query(AIResponseCache).filter_by(course_id=document.course_id).delete(
+        synchronize_session=False
+    )
     chat_ids = db.query(Chat.id).filter_by(course_id=document.course_id, owner_id=current_user.id)
     db.query(ChatMemory).filter(ChatMemory.chat_id.in_(chat_ids)).delete(synchronize_session=False)
     from app.services.embedding_service import remove_document_embeddings
+
     remove_document_embeddings(document.id)
     db.commit()
 
 
-@router.post("/courses/{course_id}/generation-runs", response_model=GenerationRunAccepted, status_code=202)
+@router.post(
+    "/courses/{course_id}/generation-runs", response_model=GenerationRunAccepted, status_code=202
+)
 def launch_generation(
     course_id: int,
     payload: GenerationRunCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.services.organization_access import lock_member
     from app.models.generation_run import GenerationRun
+    from app.services.organization_access import lock_member
+
     current_user = lock_member(db, current_user.id, expected_auth_version=current_user.auth_version)
     if PipelineRepository.get_owned_course(db, course_id, current_user.id) is None:
         raise HTTPException(404, "Курс не найден")
     if payload.request_id:
-        previous = db.query(GenerationRun).filter_by(owner_id=current_user.id, request_id=payload.request_id).first()
+        previous = (
+            db.query(GenerationRun)
+            .filter_by(owner_id=current_user.id, request_id=payload.request_id)
+            .first()
+        )
         if previous:
-            previous_settings = {key: value for key, value in previous.settings_snapshot.items() if key not in {"settings_revision", "organization_context", "position_context", "web_search_enabled", "regulation_assessment_mode"}}
-            requested_search = (payload.web_search_enabled if "web_search_enabled" in payload.model_fields_set
-                                or "web_search_enabled" in previous.settings_snapshot else False)
-            if (previous.course_id != course_id or previous_settings != payload.settings.model_dump(mode="json", exclude={"expected_revision"})
-                    or previous.settings_snapshot.get("web_search_enabled", False) != requested_search
-                    or {item["document_id"] for item in previous.input_documents_snapshot} != set(payload.document_ids)):
-                raise HTTPException(409, {"code": "idempotency_conflict", "message": "Ключ запуска уже использован с другими параметрами"})
-            return GenerationRunAccepted(run_id=previous.id, course_id=course_id, status=previous.status,
-                                         status_url=f"/api/generation-runs/{previous.id}")
+            previous_settings = {
+                key: value
+                for key, value in previous.settings_snapshot.items()
+                if key
+                not in {
+                    "settings_revision",
+                    "organization_context",
+                    "position_context",
+                    "web_search_enabled",
+                    "regulation_assessment_mode",
+                }
+            }
+            requested_search = (
+                payload.web_search_enabled
+                if "web_search_enabled" in payload.model_fields_set
+                or "web_search_enabled" in previous.settings_snapshot
+                else False
+            )
+            if (
+                previous.course_id != course_id
+                or previous_settings
+                != payload.settings.model_dump(mode="json", exclude={"expected_revision"})
+                or previous.settings_snapshot.get("web_search_enabled", False) != requested_search
+                or {item["document_id"] for item in previous.input_documents_snapshot}
+                != set(payload.document_ids)
+            ):
+                raise HTTPException(
+                    409,
+                    {
+                        "code": "idempotency_conflict",
+                        "message": "Ключ запуска уже использован с другими параметрами",
+                    },
+                )
+            return GenerationRunAccepted(
+                run_id=previous.id,
+                course_id=course_id,
+                status=previous.status,
+                status_url=f"/api/generation-runs/{previous.id}",
+            )
     active = PipelineRepository.active_graph_run(db, course_id, current_user.id)
     if active is not None:
         raise HTTPException(
@@ -122,22 +196,30 @@ def launch_generation(
             },
         )
     PipelineService.validate_generation_documents(
-        db, course_id=course_id, owner_id=current_user.id,
+        db,
+        course_id=course_id,
+        owner_id=current_user.id,
         document_ids=payload.document_ids,
     )
     CourseGenerationSettingsService.upsert(
         db, course_id, current_user.id, payload.settings, commit=False
     )
     run = PipelineService.prepare_graph_generation(
-        db, course_id=course_id, owner_id=current_user.id, document_ids=payload.document_ids, request_id=payload.request_id,
-        web_search_enabled=payload.web_search_enabled
+        db,
+        course_id=course_id,
+        owner_id=current_user.id,
+        document_ids=payload.document_ids,
+        request_id=payload.request_id,
+        web_search_enabled=payload.web_search_enabled,
     )
     try:
         enqueue_generation(run.id)
     except Exception:
         PipelineService.pause_enqueue(db, run.id)
     return GenerationRunAccepted(
-        run_id=run.id, course_id=course_id, status=run.status,
+        run_id=run.id,
+        course_id=course_id,
+        status=run.status,
         status_url=f"/api/generation-runs/{run.id}",
     )
 
@@ -155,28 +237,47 @@ def get_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return document_list_item(
-        PipelineService.get_document(db, document_id, current_user.id)
-    )
+    return document_list_item(PipelineService.get_document(db, document_id, current_user.id))
 
 
 @router.get("/courses/{course_id}/sources/{chunk_id}")
-def source_fragment(course_id: int, chunk_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def source_fragment(
+    course_id: int,
+    chunk_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     if PipelineRepository.get_owned_course(db, course_id, current_user.id) is None:
         raise HTTPException(404, "Курс не найден")
     from app.models.document import Document, DocumentChunk
-    chunk = db.query(DocumentChunk).join(Document).filter(DocumentChunk.id == chunk_id,
-        Document.course_id == course_id, Document.is_deleted.is_(False), Document.is_current.is_(True),
-        Document.status == "indexed", DocumentChunk.is_deleted.is_(False)).first()
+
+    chunk = (
+        db.query(DocumentChunk)
+        .join(Document)
+        .filter(
+            DocumentChunk.id == chunk_id,
+            Document.course_id == course_id,
+            Document.is_deleted.is_(False),
+            Document.is_current.is_(True),
+            Document.status == "indexed",
+            DocumentChunk.is_deleted.is_(False),
+        )
+        .first()
+    )
     if chunk is None:
         raise HTTPException(404, "Фрагмент источника недоступен")
-    return {"id": chunk.id, "document_id": chunk.document_id, "document_version": chunk.document_version,
-            "filename": chunk.document.original_filename, "page": chunk.page, "section": chunk.section, "text": chunk.text}
+    return {
+        "id": chunk.id,
+        "document_id": chunk.document_id,
+        "document_version": chunk.document_version,
+        "filename": chunk.document.original_filename,
+        "page": chunk.page,
+        "section": chunk.section,
+        "text": chunk.text,
+    }
 
 
-@router.post(
-    "/documents/{document_id}/reindex", response_model=GenerationRunOut
-)
+@router.post("/documents/{document_id}/reindex", response_model=GenerationRunOut)
 def reindex_document(
     document_id: int,
     db: Session = Depends(get_db),
@@ -195,9 +296,7 @@ def reindex_document(
         raise _translate_failure(exc)
 
 
-@router.post(
-    "/courses/{course_id}/generate-graph", response_model=GenerationRunOut
-)
+@router.post("/courses/{course_id}/generate-graph", response_model=GenerationRunOut)
 def generate_graph(
     course_id: int,
     force: bool = Query(default=False),
@@ -210,6 +309,7 @@ def generate_graph(
         )
     except PipelineRunFailed as exc:
         from app.ai.providers import AIUnavailable
+
         if isinstance(exc.__cause__, AIUnavailable):
             return PipelineService.get_run(db, exc.run_id, current_user.id)
         raise _translate_failure(exc)
@@ -254,9 +354,7 @@ def list_course_update_proposals(
         limit=limit,
         offset=offset,
     )
-    return CourseUpdateProposalList(
-        items=items, total=total, limit=limit, offset=offset
-    )
+    return CourseUpdateProposalList(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post(

@@ -1,11 +1,14 @@
 from pydantic import BaseModel, ConfigDict
 
+
 class TheoryCreate(BaseModel):
     lesson_id: int
     content: str
 
+
 class TheoryUpdate(BaseModel):
     content: str
+
 
 class TheoryResponse(BaseModel):
     lesson_id: int

@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
+
 from app.models.user import User
 
 if TYPE_CHECKING:
     from app.schemas.user import UserUpdate
+
 
 class UserRepository:
     @staticmethod

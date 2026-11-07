@@ -7,10 +7,9 @@ Create Date: 2026-07-31
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "20260731_0007"
 down_revision: str | None = "20260731_0006"
@@ -85,14 +84,10 @@ def upgrade() -> None:
     )
 
     with op.batch_alter_table("generation_runs") as batch_op:
-        batch_op.add_column(
-            sa.Column("settings_snapshot", _json_type(), nullable=True)
-        )
+        batch_op.add_column(sa.Column("settings_snapshot", _json_type(), nullable=True))
     op.execute(sa.text("UPDATE generation_runs SET settings_snapshot = '{}'"))
     with op.batch_alter_table("generation_runs") as batch_op:
-        batch_op.alter_column(
-            "settings_snapshot", existing_type=_json_type(), nullable=False
-        )
+        batch_op.alter_column("settings_snapshot", existing_type=_json_type(), nullable=False)
 
 
 def downgrade() -> None:

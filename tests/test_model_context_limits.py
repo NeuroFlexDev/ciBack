@@ -1,11 +1,13 @@
 """Removing the installation cap must keep full prompts and real model limits."""
+
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr
 
-from app.ai import context_budget as budget, gateway, memory, routing
+from app.ai import context_budget as budget
+from app.ai import gateway, memory, routing
 from app.ai.pricing import candidate_price
 from app.core.config import AIRoutingCandidate, Settings, settings
 
@@ -46,8 +48,12 @@ def test_large_prompt_reaches_gateway_intact_without_the_old_64k_cap(monkeypatch
 
         def invoke(self, prompt):
             sent.extend(prompt)
-            return SimpleNamespace(content="ok", response_metadata={}, additional_kwargs={},
-                                   usage_metadata={"input_tokens": 80000, "output_tokens": 1})
+            return SimpleNamespace(
+                content="ok",
+                response_metadata={},
+                additional_kwargs={},
+                usage_metadata={"input_tokens": 80000, "output_tokens": 1},
+            )
 
     monkeypatch.setattr(gateway, "ChatOpenAI", Model)
     result = gateway.invoke_messages("ingestion", messages)
@@ -56,23 +62,38 @@ def test_large_prompt_reaches_gateway_intact_without_the_old_64k_cap(monkeypatch
     assert result["routing"]["prices"]["max_input_tokens"] > 64000
 
 
-@pytest.mark.parametrize("overrides,selected", [
-    ({}, "test/large"),
-    ({"max_input_tokens": 79999}, "openai/gpt-5.4-mini"),
-    ({"context_window": 85999}, "openai/gpt-5.4-mini"),
-    ({"max_output_tokens": 5999}, "openai/gpt-5.4-mini"),
-])
+@pytest.mark.parametrize(
+    "overrides,selected",
+    [
+        ({}, "test/large"),
+        ({"max_input_tokens": 79999}, "openai/gpt-5.4-mini"),
+        ({"context_window": 85999}, "openai/gpt-5.4-mini"),
+        ({"max_output_tokens": 5999}, "openai/gpt-5.4-mini"),
+    ],
+)
 def test_large_prompt_routing_still_respects_each_provider_window(monkeypatch, overrides, selected):
-    candidate = AIRoutingCandidate(**{
-        "provider": "vsellm", "model": "test/large", "approved": True,
-        "roles": ["ingestion"], "input_rub_per_million": 1, "output_rub_per_million": 1,
-        "max_input_tokens": 100000, "max_output_tokens": 12000, "context_window": 120000,
-        **overrides,
-    })
+    candidate = AIRoutingCandidate(
+        **{
+            "provider": "vsellm",
+            "model": "test/large",
+            "approved": True,
+            "roles": ["ingestion"],
+            "input_rub_per_million": 1,
+            "output_rub_per_million": 1,
+            "max_input_tokens": 100000,
+            "max_output_tokens": 12000,
+            "context_window": 120000,
+            **overrides,
+        }
+    )
     monkeypatch.setattr(settings, "AI_ROUTING_MODE", "adaptive")
     monkeypatch.setattr(settings, "AI_ROUTING_CANDIDATES", [candidate])
-    decision = routing.choose_route(role="ingestion", baseline_model="openai/gpt-5.4-mini",
-                                    input_tokens=80000, output_tokens=6000)
+    decision = routing.choose_route(
+        role="ingestion",
+        baseline_model="openai/gpt-5.4-mini",
+        input_tokens=80000,
+        output_tokens=6000,
+    )
     assert decision.selected_model == selected
     if selected == candidate.model:
         assert budget.limits(candidate.model) == (100000, 12000, 120000)
@@ -99,9 +120,11 @@ def test_unknown_model_needs_declared_limits_when_installation_cap_is_disabled()
     assert error.value.detail["code"] == "ai_model_limits_missing"
 
 
-def test_chat_memory_still_summarizes_with_disabled_installation_cap(db_session, auth_user, monkeypatch):
-    from app.repositories.chat import ChatRepository
+def test_chat_memory_still_summarizes_with_disabled_installation_cap(
+    db_session, auth_user, monkeypatch
+):
     from app.models.ai_state import ChatMemory
+    from app.repositories.chat import ChatRepository
     from app.services import scoped_ai
 
     monkeypatch.setattr(settings, "CHAT_HISTORY_MESSAGES", 1)

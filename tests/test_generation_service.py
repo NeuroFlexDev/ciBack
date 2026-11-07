@@ -164,14 +164,20 @@ def test_prompt_and_raw_response_are_not_logged(monkeypatch, caplog):
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
-@pytest.mark.parametrize("markdown", [
-    'Порядок действий\n```mermaid\nflowchart LR\n A["Проверка"] --> B["Результат"]\n```\nОбъяснение.',
-    '```json\n{"example": true}\n```\n```python\nprint("Пример")\n```',
-    '$$E=mc^2$$\n![Иллюстрация](/api/images/7/content)\n```plantuml\n@startuml\nAlice -> Bob: Сообщение\n@enduml\n```',
-])
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        'Порядок действий\n```mermaid\nflowchart LR\n A["Проверка"] --> B["Результат"]\n```\nОбъяснение.',
+        '```json\n{"example": true}\n```\n```python\nprint("Пример")\n```',
+        "$$E=mc^2$$\n![Иллюстрация](/api/images/7/content)\n```plantuml\n@startuml\nAlice -> Bob: Сообщение\n@enduml\n```",
+    ],
+)
 def test_json_response_preserves_nested_markdown_fences(monkeypatch, wrapped, markdown):
-    expected = {"lesson_id": "lesson:one", "sections": [{"content_markdown": markdown}],
-                "source_refs": ["src:doc:1:v1:chunk:1"]}
+    expected = {
+        "lesson_id": "lesson:one",
+        "sections": [{"content_markdown": markdown}],
+        "source_refs": ["src:doc:1:v1:chunk:1"],
+    }
     raw = json.dumps(expected, ensure_ascii=False, indent=2)
     if wrapped:
         raw = "```json\n" + raw + "\n```"
@@ -182,14 +188,18 @@ def test_json_response_preserves_nested_markdown_fences(monkeypatch, wrapped, ma
     assert result["sections"][0]["content_markdown"] == markdown
 
 
-@pytest.mark.parametrize("response", [
-    'Unrequested prose\n```json\n{"partial": true}\n```',
-    '{"broken": "```json\\n{\\"partial\\": true}\\n```",',
-    '```json\n{"partial": true}\n```\n{"extra": true}',
-])
+@pytest.mark.parametrize(
+    "response",
+    [
+        'Unrequested prose\n```json\n{"partial": true}\n```',
+        '{"broken": "```json\\n{\\"partial\\": true}\\n```",',
+        '```json\n{"partial": true}\n```\n{"extra": true}',
+    ],
+)
 def test_embedded_json_fragment_cannot_replace_invalid_outer_response(response):
-    from app.services.generation_service import _json_object
     from app.ai.gateway import safe_error
+    from app.services.generation_service import _json_object
+
     with pytest.raises(HTTPException) as error:
         _json_object(response)
     assert error.value.ai_failure_kind == "invalid_json"
@@ -198,6 +208,7 @@ def test_embedded_json_fragment_cannot_replace_invalid_outer_response(response):
 
 def test_outer_json_fence_accepts_bom_and_whitespace_without_changing_nested_code():
     from app.services.generation_service import _json_object
+
     expected = {"content_markdown": "```mermaid\nflowchart LR\n A --> B\n```"}
     envelope = " \ufeff \n```json\n" + json.dumps(expected) + "\n```\n "
     assert _json_object(envelope) == expected
@@ -205,27 +216,47 @@ def test_outer_json_fence_accepts_bom_and_whitespace_without_changing_nested_cod
 
 def test_completed_stages_are_reused_after_parser_upgrade(db_session, auth_user, monkeypatch):
     from pydantic import BaseModel
+
     from app.models.agent_artifact import AgentArtifact
     from app.services.agent_runtime import AgentRuntime
     from tests.test_ai_runtime_v2 import make_runtime
+
     class Content(BaseModel):
         content_markdown: str
-    markdown = '```mermaid\nflowchart LR\n A --> B\n```'
+
+    markdown = "```mermaid\nflowchart LR\n A --> B\n```"
     _patch_model_factory(monkeypatch, "gigachat", json.dumps({"content_markdown": markdown}))
     calls = []
+
     def generated(*args, **kwargs):
         calls.append(kwargs["agent_role"])
         return generate_from_prompt(prompt="test", engine="gigachat", expect_json=True)
+
     runtime = make_runtime(db_session, auth_user, generated)
+
     def stage(active, role):
-        return active.execute(agent=role, artifact="checkpoint", sequence=0,
-            template_name="unused.j2", response_model=Content, prompt_context={}, max_tokens=6000)
+        return active.execute(
+            agent=role,
+            artifact="checkpoint",
+            sequence=0,
+            template_name="unused.j2",
+            response_model=Content,
+            prompt_context={},
+            max_tokens=6000,
+        )
+
     for role in ("ingestion", "competency_mapper", "course_architect"):
         assert stage(runtime, role).content_markdown == markdown
     original_ids = [row.id for row in db_session.query(AgentArtifact).order_by(AgentArtifact.id)]
-    resumed = AgentRuntime(db=db_session, run_id=runtime.run_id, course_id=runtime.course_id,
-        generate=lambda *a, **k: pytest.fail("completed stages must not call a provider on resume"))
+    resumed = AgentRuntime(
+        db=db_session,
+        run_id=runtime.run_id,
+        course_id=runtime.course_id,
+        generate=lambda *a, **k: pytest.fail("completed stages must not call a provider on resume"),
+    )
     for role in ("ingestion", "competency_mapper", "course_architect"):
         assert stage(resumed, role).content_markdown == markdown
     assert calls == ["ingestion", "competency_mapper", "course_architect"]
-    assert [row.id for row in db_session.query(AgentArtifact).order_by(AgentArtifact.id)] == original_ids
+    assert [
+        row.id for row in db_session.query(AgentArtifact).order_by(AgentArtifact.id)
+    ] == original_ids

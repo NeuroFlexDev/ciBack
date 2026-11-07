@@ -9,9 +9,7 @@ from app.services.document_processing import ExtractedBlock, chunk_blocks, extra
 
 
 def test_txt_extraction_and_chunking_preserve_section():
-    blocks = extract_blocks(
-        "# Введение\nПервый абзац.\nВторой абзац.".encode(), "text/plain"
-    )
+    blocks = extract_blocks("# Введение\nПервый абзац.\nВторой абзац.".encode(), "text/plain")
     chunks = chunk_blocks(blocks, max_chars=40, overlap_chars=5)
 
     assert blocks[0].section == "Введение"
@@ -95,9 +93,7 @@ def test_txt_extraction_builds_heading_hierarchy_and_paragraphs():
 
 
 def test_txt_does_not_treat_markdown_inside_fence_as_structure():
-    blocks = extract_blocks(
-        "# Outside\n\n```text\n# Not a heading\n```".encode(), "text/plain"
-    )
+    blocks = extract_blocks("# Outside\n\n```text\n# Not a heading\n```".encode(), "text/plain")
 
     assert [item.text for item in blocks] == [
         "Outside",
@@ -151,9 +147,7 @@ def test_pdf_extraction_removes_repeated_margins_and_infers_section():
     assert heading.block_type == "heading"
     assert heading.heading_level == 1
     assert all(
-        item.section == "Safety section"
-        for item in blocks
-        if item.text.startswith("Body content")
+        item.section == "Safety section" for item in blocks if item.text.startswith("Body content")
     )
 
 
@@ -172,13 +166,9 @@ def test_chunking_is_deterministic_bounded_and_does_not_cross_metadata():
     assert all(0 < len(item["text"]) <= 64 for item in first)
     assert [item["chunk_index"] for item in first] == list(range(len(first)))
     assert {item["section"] for item in first} == {"Alpha", "Beta"}
+    assert all(not ("alpha" in item["text"] and "beta" in item["text"]) for item in first)
     assert all(
-        not ("alpha" in item["text"] and "beta" in item["text"])
-        for item in first
-    )
-    assert all(
-        item["metadata_json"]
-        == {"page": item["page"], "section": item["section"]}
+        item["metadata_json"] == {"page": item["page"], "section": item["section"]}
         for item in first
     )
     allowed_words = set(alpha_words + beta_words)
@@ -186,9 +176,7 @@ def test_chunking_is_deterministic_bounded_and_does_not_cross_metadata():
 
 
 def test_chunking_handles_a_long_unbroken_token_without_stalling():
-    chunks = chunk_blocks(
-        [ExtractedBlock(text="x" * 205)], max_chars=50, overlap_chars=10
-    )
+    chunks = chunk_blocks([ExtractedBlock(text="x" * 205)], max_chars=50, overlap_chars=10)
 
     assert len(chunks) == 5
     assert all(0 < len(item["text"]) <= 50 for item in chunks)

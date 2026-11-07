@@ -22,28 +22,60 @@ class TheoryUpdateEditor(BaseModel):
 
 
 def _out(lesson):
-    return {"lesson_id": lesson.id, "content": lesson.theory.content if lesson.theory else "", "revision": lesson.revision}
+    return {
+        "lesson_id": lesson.id,
+        "content": lesson.theory.content if lesson.theory else "",
+        "revision": lesson.revision,
+    }
 
 
 @router.post("/theories/")
-def create_theory(payload: TheoryCreateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    lesson = CourseEditorService.update_lesson(db, payload.lesson_id, current_user.id, {"content": payload.content}, payload.expected_revision)
+def create_theory(
+    payload: TheoryCreateEditor,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    lesson = CourseEditorService.update_lesson(
+        db,
+        payload.lesson_id,
+        current_user.id,
+        {"content": payload.content},
+        payload.expected_revision,
+    )
     return _out(lesson)
 
 
 @router.get("/theories/{lesson_id}")
-def get_theory_by_lesson(lesson_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_theory_by_lesson(
+    lesson_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     return _out(CourseEditorService._lesson(db, lesson_id, current_user.id))
 
 
 @router.put("/theories/{lesson_id}")
-def update_theory(lesson_id: int, payload: TheoryUpdateEditor, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return _out(CourseEditorService.update_lesson(db, lesson_id, current_user.id, {"content": payload.content}, payload.expected_revision))
+def update_theory(
+    lesson_id: int,
+    payload: TheoryUpdateEditor,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _out(
+        CourseEditorService.update_lesson(
+            db, lesson_id, current_user.id, {"content": payload.content}, payload.expected_revision
+        )
+    )
 
 
 @router.delete("/theories/{lesson_id}")
-def delete_theory(lesson_id: int, expected_revision: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    lesson = CourseEditorService.update_lesson(db, lesson_id, current_user.id, {"content": ""}, expected_revision)
+def delete_theory(
+    lesson_id: int,
+    expected_revision: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    lesson = CourseEditorService.update_lesson(
+        db, lesson_id, current_user.id, {"content": ""}, expected_revision
+    )
     lesson.theory.is_deleted = True
     db.commit()
     return {"message": "Theory deleted", "revision": lesson.revision}

@@ -14,7 +14,6 @@ from app.models.test import Test
 from app.models.theory import Theory
 from app.repositories.course_review import CourseReviewRepository
 
-
 WORDS_PER_MINUTE = 200
 MIN_LESSON_MINUTES = 1
 MINUTES_PER_TEST_QUESTION = 2
@@ -141,9 +140,10 @@ class CourseReviewService:
         duration += question_count * MINUTES_PER_TEST_QUESTION
         timeline = []
         for module in module_payload:
-            module_duration = sum(
-                lesson["estimated_duration_minutes"] for lesson in module["lessons"]
-            ) + len(module["tests"]) * MINUTES_PER_TEST_QUESTION
+            module_duration = (
+                sum(lesson["estimated_duration_minutes"] for lesson in module["lessons"])
+                + len(module["tests"]) * MINUTES_PER_TEST_QUESTION
+            )
             timeline.append(
                 {
                     "module_id": module["id"],

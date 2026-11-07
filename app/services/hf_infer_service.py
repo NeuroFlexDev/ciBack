@@ -22,9 +22,7 @@ class HFClientWrapper(LLMClient):
         self.inner = inner
 
     def generate(self, prompt: str, max_tokens: int = 1024) -> str:
-        return self.inner.text_generation(
-            prompt, max_new_tokens=max_tokens
-        )
+        return self.inner.text_generation(prompt, max_new_tokens=max_tokens)
 
 
 # -------------------- Helpers --------------------

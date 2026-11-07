@@ -1,7 +1,10 @@
+from typing import List, Optional
+
 from sqlalchemy.orm import Session
-from app.models.module import Module
+
 from app.models.course import Course
-from typing import Optional, List
+from app.models.module import Module
+
 
 class ModuleRepository:
     @staticmethod
@@ -10,7 +13,9 @@ class ModuleRepository:
         Создает новый модуль для курса с заданным course_id.
         """
         # Проверяем, существует ли курс с данным course_id
-        course = db.query(Course).filter(Course.id == course_id, Course.is_deleted == False).first()
+        course = (
+            db.query(Course).filter(Course.id == course_id, Course.is_deleted.is_(False)).first()
+        )
         if not course:
             raise ValueError("Course not found")
 
@@ -26,17 +31,23 @@ class ModuleRepository:
         Возвращает список всех модулей для курса с указанным course_id.
         """
         # Проверяем, существует ли курс с данным course_id
-        course = db.query(Course).filter(Course.id == course_id, Course.is_deleted == False).first()
+        course = (
+            db.query(Course).filter(Course.id == course_id, Course.is_deleted.is_(False)).first()
+        )
         if not course:
             raise ValueError("Course not found")
-        return db.query(Module).filter(Module.course_id == course_id, Module.is_deleted == False).all()
+        return (
+            db.query(Module)
+            .filter(Module.course_id == course_id, Module.is_deleted.is_(False))
+            .all()
+        )
 
     @staticmethod
     def get_by_id(db: Session, module_id: int) -> Optional[Module]:
         """
         Возвращает данные модуля по его ID.
         """
-        return db.query(Module).filter(Module.id == module_id, Module.is_deleted == False).first()
+        return db.query(Module).filter(Module.id == module_id, Module.is_deleted.is_(False)).first()
 
     @staticmethod
     def update_module(db: Session, mod: Module, update_data: dict) -> Module:

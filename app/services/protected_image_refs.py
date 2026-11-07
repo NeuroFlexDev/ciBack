@@ -1,8 +1,10 @@
 """Normalize protected image references without granting access from their text."""
+
 import re
 
-
-_IMAGE_PATH = re.compile(r'''(?<![\w/])(?:/api)?/(?:images|media)/(\d+)/content(?=$|[\s?#)\]>"'])''')
+_IMAGE_PATH = re.compile(
+    r"""(?<![\w/])(?:/api)?/(?:images|media)/(\d+)/content(?=$|[\s?#)\]>"'])"""
+)
 
 
 def image_ids_in(value):

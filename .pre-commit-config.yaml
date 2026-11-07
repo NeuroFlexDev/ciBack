@@ -1,16 +1,53 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.6  # актуальную версию смотри на гитхабе
+    rev: v0.17.4
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix]
-      - id: ruff-format  # форматирование как black-замена, можно убрать если юзаешь black
-  - repo: https://github.com/psf/black
-    rev: 24.8.0
+      - id: ruff-format
+  - repo: local
     hooks:
-      - id: black
-        language_version: python3
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
+      - id: ty
+        name: ty (core and API schemas)
+        entry: python -m ty check
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: gitleaks
+        name: Gitleaks (staged patch)
+        entry: python scripts/lint_native.py gitleaks
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: actionlint
+        name: actionlint
+        entry: python scripts/lint_native.py actionlint
+        language: system
+        files: ^\.github/workflows/.*\.ya?ml$
+      - id: hadolint
+        name: Hadolint
+        entry: python scripts/lint_native.py hadolint
+        language: system
+        files: ^Dockerfile$
+      - id: sqlfluff
+        name: SQLFluff (static SQL and Python-embedded statements)
+        entry: python scripts/lint_sql.py
+        language: system
+        files: ^(app/|migrations/|scripts/).*\.py$|\.sql$
+        pass_filenames: false
+        stages: [manual]
+      - id: pip-audit
+        name: pip-audit (installed environment)
+        entry: python -m pip_audit --progress-spinner off
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+      - id: semgrep
+        name: Semgrep
+        entry: semgrep scan --config .semgrep.yml --error --strict --metrics off --disable-version-check app scripts main.py admin_main.py
+        language: python
+        additional_dependencies: [semgrep==1.184.0]
+        types: [python]
+        pass_filenames: false
+        stages: [manual]

@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -9,7 +10,6 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -22,7 +22,6 @@ from sqlalchemy.orm import relationship
 from app.database.db import Base
 from app.models.base import BaseModelMixin
 from app.models.domain_enums import DocumentStatus
-
 
 JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 
@@ -64,13 +63,9 @@ class Document(Base, BaseModelMixin):
     course_id = Column(
         Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    document_key = Column(
-        String(64), nullable=False, default=lambda: uuid4().hex
-    )
+    document_key = Column(String(64), nullable=False, default=lambda: uuid4().hex)
     version = Column(Integer, nullable=False, default=1)
-    is_current = Column(
-        Boolean, nullable=False, default=True, server_default=true()
-    )
+    is_current = Column(Boolean, nullable=False, default=True, server_default=true())
     supersedes_document_id = Column(
         Integer,
         ForeignKey(
@@ -80,9 +75,7 @@ class Document(Base, BaseModelMixin):
         ),
         nullable=True,
     )
-    status = Column(
-        String(32), nullable=False, default=DocumentStatus.UPLOADED.value
-    )
+    status = Column(String(32), nullable=False, default=DocumentStatus.UPLOADED.value)
     content_hash = Column(String(128), nullable=False)
     source_type = Column(String(64), nullable=False)
     original_filename = Column(String(512), nullable=False)
@@ -93,9 +86,7 @@ class Document(Base, BaseModelMixin):
 
     owner = relationship("User", back_populates="documents")
     course = relationship("Course", back_populates="documents")
-    chunks = relationship(
-        "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
-    )
+    chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
     generation_runs = relationship("GenerationRun", back_populates="document")
 
 
@@ -113,9 +104,7 @@ class DocumentChunk(Base, BaseModelMixin):
             name="ck_document_chunks_document_version_positive",
         ),
         CheckConstraint("chunk_index >= 0", name="ck_document_chunks_index_nonnegative"),
-        CheckConstraint(
-            "page IS NULL OR page > 0", name="ck_document_chunks_page_positive"
-        ),
+        CheckConstraint("page IS NULL OR page > 0", name="ck_document_chunks_page_positive"),
         UniqueConstraint(
             "document_id",
             "document_version",

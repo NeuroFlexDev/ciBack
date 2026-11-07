@@ -1,6 +1,9 @@
 """Official LangGraph checkpoint stores, isolated from application tables."""
-from contextlib import contextmanager, ExitStack
+
+from contextlib import ExitStack, contextmanager
+
 from sqlalchemy.engine import make_url
+
 from app.core.config import settings
 
 
@@ -9,11 +12,17 @@ def checkpoint_store():
     url = make_url(settings.DATABASE_URL)
     if url.get_backend_name() == "postgresql":
         import psycopg
-        from psycopg.conninfo import make_conninfo
         from langgraph.checkpoint.postgres import PostgresSaver
-        conninfo = make_conninfo(host=url.host, port=url.port or 5432,
-                                dbname=url.database, user=url.username, password=url.password,
-                                **dict(url.query))
+        from psycopg.conninfo import make_conninfo
+
+        conninfo = make_conninfo(
+            host=url.host,
+            port=url.port or 5432,
+            dbname=url.database,
+            user=url.username,
+            password=url.password,
+            **dict(url.query),
+        )
         scoped = make_conninfo(conninfo, options="-c search_path=lernium_ai_graph")
         with ExitStack() as stack:
             # First jobs may start together. Serialize schema/checkpoint migrations,
@@ -29,6 +38,7 @@ def checkpoint_store():
             yield saver
     else:
         from langgraph.checkpoint.sqlite import SqliteSaver
+
         path = settings.AI_CHECKPOINT_SQLITE_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         # Database-bound thread IDs prevent collisions between independent SQLite DBs.

@@ -69,9 +69,7 @@ def test_course_retrieval_prefilters_acl_and_returns_db_citations(
     db_session.add(foreign_course)
     db_session.flush()
     _, owned_chunk = _document(db_session, owned_course, auth_user.id, "owned.txt")
-    _, foreign_chunk = _document(
-        db_session, foreign_course, foreign_user.id, "foreign.txt"
-    )
+    _, foreign_chunk = _document(db_session, foreign_course, foreign_user.id, "foreign.txt")
     db_session.commit()
 
     store = FakeVectorStore(
@@ -136,9 +134,7 @@ def test_course_retrieval_hides_foreign_course(client, db_session, auth_headers)
 def test_faiss_store_prefilters_and_replaces_old_document_version():
     class DummyModel:
         def encode(self, texts):
-            return np.asarray(
-                [[float(len(text)), 0.0] for text in texts], dtype=np.float32
-            )
+            return np.asarray([[float(len(text)), 0.0] for text in texts], dtype=np.float32)
 
     store = FaissVectorStore(lambda: DummyModel())
     base_metadata = {
@@ -177,9 +173,7 @@ def test_faiss_store_prefilters_and_replaces_old_document_version():
 
     matches = store.search(
         "query",
-        VectorSearchFilters(
-            owner_id=1, course_id=20, allowed_chunk_ids=frozenset({100, 101})
-        ),
+        VectorSearchFilters(owner_id=1, course_id=20, allowed_chunk_ids=frozenset({100, 101})),
         5,
     )
 

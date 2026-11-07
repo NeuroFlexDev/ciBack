@@ -1,16 +1,12 @@
+from app.core.security import hash_password
 from app.models.chat import Chat, ChatMessage
 from app.models.user import User
 from app.repositories.chat import ChatRepository
-from app.core.security import hash_password
 from tests.factories import make_course
 
 
-def test_chat_crud_is_persistent_and_owner_isolated(
-    client, db_session, auth_user, auth_headers
-):
-    created = client.post(
-        "/api/chat/", json={"name": "Database chat"}, headers=auth_headers
-    )
+def test_chat_crud_is_persistent_and_owner_isolated(client, db_session, auth_user, auth_headers):
+    created = client.post("/api/chat/", json={"name": "Database chat"}, headers=auth_headers)
     chat_id = created.json()["id"]
     db_session.expire_all()
 
@@ -32,21 +28,25 @@ def test_course_binding_requires_owned_course(client, db_session, auth_headers, 
     owned = make_course(db_session, owner_id=auth_user.id)
     foreign = make_course(db_session, owner_id=None)
 
-    assert client.post(
-        "/api/chat/",
-        json={"name": "Owned", "course_id": owned.id},
-        headers=auth_headers,
-    ).status_code == 200
-    assert client.post(
-        "/api/chat/",
-        json={"name": "Foreign", "course_id": foreign.id},
-        headers=auth_headers,
-    ).status_code == 404
+    assert (
+        client.post(
+            "/api/chat/",
+            json={"name": "Owned", "course_id": owned.id},
+            headers=auth_headers,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/chat/",
+            json={"name": "Foreign", "course_id": foreign.id},
+            headers=auth_headers,
+        ).status_code
+        == 404
+    )
 
 
-def test_archive_hides_chat_and_preserves_messages(
-    client, db_session, auth_user, auth_headers
-):
+def test_archive_hides_chat_and_preserves_messages(client, db_session, auth_user, auth_headers):
     chat = ChatRepository.create_chat(db_session, auth_user.id, "Archive")
     ChatRepository.add_message(db_session, chat.id, "user", "retained")
 
@@ -60,9 +60,7 @@ def test_archive_hides_chat_and_preserves_messages(
     assert client.get(f"/api/chat/{chat.id}/messages", headers=auth_headers).status_code == 404
 
 
-def test_message_history_legacy_shape_and_pagination(
-    client, db_session, auth_user, auth_headers
-):
+def test_message_history_legacy_shape_and_pagination(client, db_session, auth_user, auth_headers):
     chat = ChatRepository.create_chat(db_session, auth_user.id, "Pages")
     for index in range(4):
         ChatRepository.add_message(db_session, chat.id, "user", f"message-{index}")
@@ -75,7 +73,10 @@ def test_message_history_legacy_shape_and_pagination(
     )
 
     assert [item["text"] for item in full.json()] == [
-        "message-0", "message-1", "message-2", "message-3"
+        "message-0",
+        "message-1",
+        "message-2",
+        "message-3",
     ]
     assert [item["text"] for item in page.json()] == ["message-1", "message-2"]
     assert set(page.json()[0]) == {"id", "author", "text", "is_deleted"}
@@ -106,9 +107,7 @@ def test_send_without_chat_id_creates_persistent_chat(
         return {"user_msg_id": user_message.id, "bot_msg_id": bot_message.id}
 
     monkeypatch.setattr("app.routes.chat.chat_generate", fake_generate)
-    response = client.post(
-        "/api/chat/send", json={"text": "hello"}, headers=auth_headers
-    )
+    response = client.post("/api/chat/send", json={"text": "hello"}, headers=auth_headers)
 
     assert response.status_code == 200
     assert [item["author"] for item in response.json()] == ["user", "bot"]

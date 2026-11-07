@@ -12,12 +12,22 @@ from app.ai.evidence import rank_sources, source_batches
 from app.ai.models import model_policy
 from app.models.ai_state import AICall, AIResponseCache
 from app.models.generation_run import GenerationRun
-from app.services.agent_runtime import AgentRuntime, expand_source_refs, _fingerprint
 from app.schemas.agentic_pipeline import QAArtifact
+from app.services.agent_runtime import AgentRuntime, _fingerprint, expand_source_refs
 from tests.factories import make_course
 
-SOURCE = {'id':'src:doc:1:v1:chunk:1','document_id':1,'document_version':1,
-          'document_content_hash':'hash','chunk_id':1,'chunk_index':0,'page':None,'section':None,'quote':'Давление не выше 8 бар.'}
+SOURCE = {
+    "id": "src:doc:1:v1:chunk:1",
+    "document_id": 1,
+    "document_version": 1,
+    "document_content_hash": "hash",
+    "chunk_id": 1,
+    "chunk_index": 0,
+    "page": None,
+    "section": None,
+    "quote": "Давление не выше 8 бар.",
+}
+
 
 class Value(BaseModel):
     value: int
@@ -25,220 +35,349 @@ class Value(BaseModel):
 
 def make_runtime(db, user, generate):
     course = make_course(db, owner_id=user.id)
-    run = GenerationRun(owner_id=user.id,course_id=course.id,run_type='graph_generation',status='running')
-    db.add(run);db.commit()
-    return AgentRuntime(db=db,run_id=run.id,course_id=course.id,generate=generate)
+    run = GenerationRun(
+        owner_id=user.id, course_id=course.id, run_type="graph_generation", status="running"
+    )
+    db.add(run)
+    db.commit()
+    return AgentRuntime(db=db, run_id=run.id, course_id=course.id, generate=generate)
 
 
 def execute(runtime, **kw):
-    return runtime.execute(agent='ingestion',artifact='example',sequence=0,template_name='unused.j2',
-        response_model=Value,prompt_context={'input':'hello'},max_tokens=100,**kw)
+    return runtime.execute(
+        agent="ingestion",
+        artifact="example",
+        sequence=0,
+        template_name="unused.j2",
+        response_model=Value,
+        prompt_context={"input": "hello"},
+        max_tokens=100,
+        **kw,
+    )
 
 
 def test_sources_are_expanded_only_from_trusted_catalog():
-    assert expand_source_refs({'source_refs':[SOURCE['id']]},{SOURCE['id']:SOURCE})['source_refs'] == [SOURCE]
-    with pytest.raises(ValueError,match='Unknown'):
-        expand_source_refs({'source_refs':['src:fake']},{SOURCE['id']:SOURCE})
-    with pytest.raises(ValueError,match='Changed'):
-        expand_source_refs({'source_refs':[{**SOURCE,'quote':'Давление до 100 бар.'}]},{SOURCE['id']:SOURCE})
+    assert expand_source_refs({"source_refs": [SOURCE["id"]]}, {SOURCE["id"]: SOURCE})[
+        "source_refs"
+    ] == [SOURCE]
+    with pytest.raises(ValueError, match="Unknown"):
+        expand_source_refs({"source_refs": ["src:fake"]}, {SOURCE["id"]: SOURCE})
+    with pytest.raises(ValueError, match="Changed"):
+        expand_source_refs(
+            {"source_refs": [{**SOURCE, "quote": "Давление до 100 бар."}]}, {SOURCE["id"]: SOURCE}
+        )
 
 
-@pytest.mark.parametrize('invalid', [123, {'id': []}, None])
+@pytest.mark.parametrize("invalid", [123, {"id": []}, None])
 def test_malformed_source_ids_are_repairable_validation_errors(invalid):
     with pytest.raises(ValueError):
-        expand_source_refs({'source_refs':[invalid]}, {SOURCE['id']:SOURCE})
+        expand_source_refs({"source_refs": [invalid]}, {SOURCE["id"]: SOURCE})
 
 
 def test_competency_indexes_are_derived_only_from_known_evidence():
     from app.ai.curriculum import complete_competency_inventories
-    raw = {'source_refs': [], 'source_knowledge_item_ids': [],
-           'knowledge': [{'id': 'know:limit', 'source_ref_ids': [SOURCE['id']],
-                          'source_knowledge_item_ids': ['kn:limit']}]}
-    result = complete_competency_inventories(raw, sources={SOURCE['id']}, knowledge={'kn:limit'})
-    assert result['source_refs'] == [SOURCE['id']]
-    assert result['source_knowledge_item_ids'] == ['kn:limit']
-    assert raw['source_refs'] == []
-    with pytest.raises(ValueError, match='Unknown'):
-        complete_competency_inventories(raw, sources={SOURCE['id']}, knowledge={'kn:another'})
-    with pytest.raises(ValueError, match='Unknown'):
-        complete_competency_inventories(raw, sources=set(), knowledge={'kn:limit'})
+
+    raw = {
+        "source_refs": [],
+        "source_knowledge_item_ids": [],
+        "knowledge": [
+            {
+                "id": "know:limit",
+                "source_ref_ids": [SOURCE["id"]],
+                "source_knowledge_item_ids": ["kn:limit"],
+            }
+        ],
+    }
+    result = complete_competency_inventories(raw, sources={SOURCE["id"]}, knowledge={"kn:limit"})
+    assert result["source_refs"] == [SOURCE["id"]]
+    assert result["source_knowledge_item_ids"] == ["kn:limit"]
+    assert raw["source_refs"] == []
+    with pytest.raises(ValueError, match="Unknown"):
+        complete_competency_inventories(raw, sources={SOURCE["id"]}, knowledge={"kn:another"})
+    with pytest.raises(ValueError, match="Unknown"):
+        complete_competency_inventories(raw, sources=set(), knowledge={"kn:limit"})
 
 
 def test_sdk_truncation_retains_usage_and_is_retryable(monkeypatch):
     from types import SimpleNamespace
+
     from openai import LengthFinishReasonError
+
     from app.core.config import settings
-    completion = SimpleNamespace(model='model:test', usage=SimpleNamespace(
-        prompt_tokens=120, completion_tokens=40, prompt_tokens_details=None))
+
+    completion = SimpleNamespace(
+        model="model:test",
+        usage=SimpleNamespace(prompt_tokens=120, completion_tokens=40, prompt_tokens_details=None),
+    )
+
     class TruncatedLLM:
-        def __init__(self, **kwargs): pass
-        def bind(self, **kwargs): return self
-        def invoke(self, messages): raise LengthFinishReasonError(completion=completion)
-    monkeypatch.setattr(settings, 'VSELLM_API_KEY', SecretStr('test-only'))
-    monkeypatch.setattr(gateway, 'ChatOpenAI', TruncatedLLM)
+        def __init__(self, **kwargs):
+            pass
+
+        def bind(self, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            raise LengthFinishReasonError(completion=completion)
+
+    monkeypatch.setattr(settings, "VSELLM_API_KEY", SecretStr("test-only"))
+    monkeypatch.setattr(gateway, "ChatOpenAI", TruncatedLLM)
     with pytest.raises(HTTPException) as exc:
-        gateway.invoke_messages('ingestion', [{'role':'user','content':'Test'}], json_mode=True)
-    assert exc.value.ai_usage == {'input_tokens':120,'output_tokens':40,'cached_tokens':0}
+        gateway.invoke_messages("ingestion", [{"role": "user", "content": "Test"}], json_mode=True)
+    assert exc.value.ai_usage == {"input_tokens": 120, "output_tokens": 40, "cached_tokens": 0}
     assert gateway.retryable(exc.value)
 
 
 def test_failed_truncated_call_uses_actual_usage_in_ledger(db_session, auth_user, monkeypatch):
     from app.services import generation_service
-    monkeypatch.setattr(gateway, 'configured', lambda: True)
-    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'prompt')
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(generation_service, "render_prompt", lambda *a, **kw: "prompt")
+
     def generate(*a, **kw):
-        error = HTTPException(502, 'Truncated')
-        error.ai_usage = {'input_tokens':120,'output_tokens':40,'cached_tokens':20}
-        error.ai_model = 'test-model'
+        error = HTTPException(502, "Truncated")
+        error.ai_usage = {"input_tokens": 120, "output_tokens": 40, "cached_tokens": 20}
+        error.ai_model = "test-model"
         raise error
+
     runtime = make_runtime(db_session, auth_user, generate)
     runtime.max_attempts = 1
-    with pytest.raises(HTTPException): execute(runtime)
+    with pytest.raises(HTTPException):
+        execute(runtime)
     call = db_session.query(AICall).one()
-    assert (call.status, call.input_tokens, call.output_tokens, call.cached_tokens) == ('failed',120,40,20)
+    assert (call.status, call.input_tokens, call.output_tokens, call.cached_tokens) == (
+        "failed",
+        120,
+        40,
+        20,
+    )
 
 
 def test_qa_can_reference_real_ingested_knowledge():
-    report = QAArtifact.model_validate({'source_refs':[SOURCE], 'checked_artifact_ids':['kn:pressure_limit'],
-        'issues':[], 'verdict':'pass', 'coverage_score':1, 'grounding_score':1,
-        'difficulty_score':1,'assessment_quality_score':1,'summary':'All claims checked'})
-    assert report.checked_artifact_ids == ['kn:pressure_limit']
+    report = QAArtifact.model_validate(
+        {
+            "source_refs": [SOURCE],
+            "checked_artifact_ids": ["kn:pressure_limit"],
+            "issues": [],
+            "verdict": "pass",
+            "coverage_score": 1,
+            "grounding_score": 1,
+            "difficulty_score": 1,
+            "assessment_quality_score": 1,
+            "summary": "All claims checked",
+        }
+    )
+    assert report.checked_artifact_ids == ["kn:pressure_limit"]
 
 
 def test_rubric_cannot_require_more_than_its_weighted_maximum():
     from app.schemas.agentic_pipeline import AssessmentRubric
-    criteria = [{'id':f'criterion:c{i}', 'title':'Check', 'description':'Check procedure', 'weight':0.5,
-        'levels':[{'id':'level:no','title':'Missing','description':'Missing step','score':0},
-                  {'id':'level:yes','title':'Complete','description':'All steps','score':1}]} for i in range(2)]
-    with pytest.raises(ValidationError, match='exceeds maximum'):
-        AssessmentRubric.model_validate({'id':'rubric:check','title':'Check','objective_ids':['obj:check'],
-            'competency_ids':['cmp:check'],'source_ref_ids':[SOURCE['id']], 'criteria':criteria,'passing_score':1.5})
+
+    criteria = [
+        {
+            "id": f"criterion:c{i}",
+            "title": "Check",
+            "description": "Check procedure",
+            "weight": 0.5,
+            "levels": [
+                {"id": "level:no", "title": "Missing", "description": "Missing step", "score": 0},
+                {"id": "level:yes", "title": "Complete", "description": "All steps", "score": 1},
+            ],
+        }
+        for i in range(2)
+    ]
+    with pytest.raises(ValidationError, match="exceeds maximum"):
+        AssessmentRubric.model_validate(
+            {
+                "id": "rubric:check",
+                "title": "Check",
+                "objective_ids": ["obj:check"],
+                "competency_ids": ["cmp:check"],
+                "source_ref_ids": [SOURCE["id"]],
+                "criteria": criteria,
+                "passing_score": 1.5,
+            }
+        )
 
 
-def test_worker_unknown_provider_failure_is_not_automatically_rebilled(db_session, auth_user, monkeypatch):
+def test_worker_unknown_provider_failure_is_not_automatically_rebilled(
+    db_session, auth_user, monkeypatch
+):
     from types import SimpleNamespace
-    from app.workers import generation
+
     from app.services.pipeline_service import PipelineRunFailed
+    from app.workers import generation
+
     runtime = make_runtime(db_session, auth_user, lambda: None)
-    monkeypatch.setattr(generation, 'SessionLocal', lambda: db_session)
-    monkeypatch.setattr(db_session, 'close', lambda: None)
-    monkeypatch.setattr('rq.get_current_job', lambda: SimpleNamespace(retries_left=1))
+    monkeypatch.setattr(generation, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr("rq.get_current_job", lambda: SimpleNamespace(retries_left=1))
+
     def fail(*args, **kwargs):
         run = db_session.get(GenerationRun, runtime.run_id)
-        run.status = 'failed'; db_session.commit()
-        raise PipelineRunFailed(run.id, 'TimeoutError') from TimeoutError()
-    monkeypatch.setattr(generation.PipelineService, 'generate_graph', fail)
+        run.status = "failed"
+        db_session.commit()
+        raise PipelineRunFailed(run.id, "TimeoutError") from TimeoutError()
+
+    monkeypatch.setattr(generation.PipelineService, "generate_graph", fail)
     generation.execute_generation_run(runtime.run_id)
-    assert db_session.get(GenerationRun, runtime.run_id).status == 'failed'
+    assert db_session.get(GenerationRun, runtime.run_id).status == "failed"
     from app.models.ai_resources import AIResourceUsage
-    assert db_session.query(AIResourceUsage).filter_by(key=f"generation:{runtime.run_id}").one().status == "unknown"
+
+    assert (
+        db_session.query(AIResourceUsage).filter_by(key=f"generation:{runtime.run_id}").one().status
+        == "unknown"
+    )
 
 
 def test_ingestion_batches_cover_tail_of_every_document():
-    catalog = [{**SOURCE,'id':f'src:doc:1:v1:chunk:{i}','quote':'x'*2000} for i in range(100)]
-    batches = source_batches(catalog,10000)
+    catalog = [{**SOURCE, "id": f"src:doc:1:v1:chunk:{i}", "quote": "x" * 2000} for i in range(100)]
+    batches = source_batches(catalog, 10000)
     assert len(batches) == 20
-    assert [s['id'] for batch in batches for s in batch] == [s['id'] for s in catalog]
+    assert [s["id"] for batch in batches for s in batch] == [s["id"] for s in catalog]
 
 
 def test_retrieval_finds_relevant_tail_not_only_first_chunks():
-    sources = [{'id':i,'quote':'Общие сведения о компании'} for i in range(20)]
-    sources.append({'id':99,'quote':'При утечке оператор выполняет аварийную остановку'})
-    assert rank_sources('аварийная остановка при утечке',sources)[0]['id'] == 99
+    sources = [{"id": i, "quote": "Общие сведения о компании"} for i in range(20)]
+    sources.append({"id": 99, "quote": "При утечке оператор выполняет аварийную остановку"})
+    assert rank_sources("аварийная остановка при утечке", sources)[0]["id"] == 99
 
 
 def test_low_scores_cannot_pass_quality_gate():
-    with pytest.raises(ValidationError,match='minimum'):
-        QAArtifact.model_validate({'source_refs':[SOURCE],'checked_artifact_ids':['lesson:one'],
-            'issues':[],'verdict':'pass','coverage_score':0,'grounding_score':0,
-            'difficulty_score':1,'assessment_quality_score':1,'revision_required_for':[],'summary':'ok'})
+    with pytest.raises(ValidationError, match="minimum"):
+        QAArtifact.model_validate(
+            {
+                "source_refs": [SOURCE],
+                "checked_artifact_ids": ["lesson:one"],
+                "issues": [],
+                "verdict": "pass",
+                "coverage_score": 0,
+                "grounding_score": 0,
+                "difficulty_score": 1,
+                "assessment_quality_score": 1,
+                "revision_required_for": [],
+                "summary": "ok",
+            }
+        )
 
 
-def test_retry_contains_validation_feedback(db_session,auth_user):
-    calls=[]
-    def generate(*args,**kwargs):
+def test_retry_contains_validation_feedback(db_session, auth_user):
+    calls = []
+
+    def generate(*args, **kwargs):
         calls.append(kwargs)
-        return {'value':'invalid'} if len(calls)==1 else {'value':2}
-    runtime=make_runtime(db_session,auth_user,generate)
+        return {"value": "invalid"} if len(calls) == 1 else {"value": 2}
+
+    runtime = make_runtime(db_session, auth_user, generate)
     assert execute(runtime).value == 2
-    assert 'value' in calls[1]['repair_feedback']
+    assert "value" in calls[1]["repair_feedback"]
 
 
 def test_contract_diagnostics_exclude_raw_model_input(db_session, auth_user, monkeypatch):
     from app.services import generation_service
-    monkeypatch.setattr(gateway, 'configured', lambda: True)
-    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'prompt')
-    runtime = make_runtime(db_session, auth_user, lambda *a, **kw: {'value': 'SENSITIVE_SOURCE_TEXT'})
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(generation_service, "render_prompt", lambda *a, **kw: "prompt")
+    runtime = make_runtime(
+        db_session, auth_user, lambda *a, **kw: {"value": "SENSITIVE_SOURCE_TEXT"}
+    )
     runtime.max_attempts = 1
     with pytest.raises(ValidationError):
         execute(runtime)
-    diagnostic = db_session.query(AICall).one().routing['validation_errors']
-    assert diagnostic[0]['loc'] == ['value']
-    assert diagnostic[0]['type'] == 'int_parsing'
-    assert 'SENSITIVE_SOURCE_TEXT' not in json.dumps(diagnostic)
+    diagnostic = db_session.query(AICall).one().routing["validation_errors"]
+    assert diagnostic[0]["loc"] == ["value"]
+    assert diagnostic[0]["type"] == "int_parsing"
+    assert "SENSITIVE_SOURCE_TEXT" not in json.dumps(diagnostic)
 
 
-def test_semantic_validator_retries_before_persisting_success(db_session,auth_user):
-    calls=[]
-    def generate(*args,**kwargs):
+def test_semantic_validator_retries_before_persisting_success(db_session, auth_user):
+    calls = []
+
+    def generate(*args, **kwargs):
         calls.append(kwargs)
-        return {'value':len(calls)}
-    runtime=make_runtime(db_session,auth_user,generate)
+        return {"value": len(calls)}
+
+    runtime = make_runtime(db_session, auth_user, generate)
+
     def validator(value):
-        if value.value < 2: raise ValueError('must be at least 2')
-    assert execute(runtime,validator=validator).value == 2
-    assert 'at least 2' in calls[1]['repair_feedback']
+        if value.value < 2:
+            raise ValueError("must be at least 2")
+
+    assert execute(runtime, validator=validator).value == 2
+    assert "at least 2" in calls[1]["repair_feedback"]
 
 
 def test_token_guard_has_no_network_dependency():
-    with patch('urllib.request.urlopen',side_effect=AssertionError('network')):
-        assert gateway.token_count('Привет') >= 6
+    with patch("urllib.request.urlopen", side_effect=AssertionError("network")):
+        assert gateway.token_count("Привет") >= 6
 
 
 def test_lc_engine_preserves_history(monkeypatch):
     from app.chat_engine import lc_engine
-    seen=[]
-    monkeypatch.setattr(lc_engine,'get_llm',lambda **kw: RunnableLambda(lambda x: seen.append(str(x)) or 'ok'))
-    lc_engine.LangChainEngine().generate([{'role':'user','content':'earlier-constraint'},
-                                       {'role':'assistant','content':'previous-answer'},
-                                       {'role':'user','content':'continue'}])
-    assert 'earlier-constraint' in seen[0] and 'previous-answer' in seen[0]
+
+    seen = []
+    monkeypatch.setattr(
+        lc_engine, "get_llm", lambda **kw: RunnableLambda(lambda x: seen.append(str(x)) or "ok")
+    )
+    lc_engine.LangChainEngine().generate(
+        [
+            {"role": "user", "content": "earlier-constraint"},
+            {"role": "assistant", "content": "previous-answer"},
+            {"role": "user", "content": "continue"},
+        ]
+    )
+    assert "earlier-constraint" in seen[0] and "previous-answer" in seen[0]
 
 
 def test_cache_fingerprint_changes_when_schema_or_model_changes():
-    assert _fingerprint('unused',Value,{'model':'a'}) != _fingerprint('unused',Value,{'model':'b'})
+    assert _fingerprint("unused", Value, {"model": "a"}) != _fingerprint(
+        "unused", Value, {"model": "b"}
+    )
 
 
 def test_raw_giga_uses_valid_client_signature(monkeypatch):
     from app.chat_engine import giga_engine
+
     class Client:
-        def generate(self,prompt,max_tokens=1024):
-            assert 'earlier' in prompt
-            return 'ok'
-    monkeypatch.setattr(giga_engine,'get_gigachat_client',lambda m:(Client(),'test'))
-    assert giga_engine.GigaEngine().generate([{'role':'user','content':'earlier'}])['text'] == 'ok'
+        def generate(self, prompt, max_tokens=1024):
+            assert "earlier" in prompt
+            return "ok"
+
+    monkeypatch.setattr(giga_engine, "get_gigachat_client", lambda m: (Client(), "test"))
+    assert (
+        giga_engine.GigaEngine().generate([{"role": "user", "content": "earlier"}])["text"] == "ok"
+    )
 
 
-def test_live_budget_stops_before_provider_call(db_session,auth_user,monkeypatch):
+def test_live_budget_stops_before_provider_call(db_session, auth_user, monkeypatch):
     from app.core.config import settings
     from app.services import generation_service
-    monkeypatch.setattr(gateway,'configured',lambda:True)
-    monkeypatch.setattr(generation_service,'render_prompt',lambda *a,**kw:'prompt')
-    monkeypatch.setattr(settings,'AI_MAX_TOKENS_PER_RUN',1)
-    calls=[]
-    runtime=make_runtime(db_session,auth_user,lambda *a,**kw:calls.append(1) or {'value':1})
-    with pytest.raises(HTTPException) as exc: execute(runtime)
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(generation_service, "render_prompt", lambda *a, **kw: "prompt")
+    monkeypatch.setattr(settings, "AI_MAX_TOKENS_PER_RUN", 1)
+    calls = []
+    runtime = make_runtime(db_session, auth_user, lambda *a, **kw: calls.append(1) or {"value": 1})
+    with pytest.raises(HTTPException) as exc:
+        execute(runtime)
     assert exc.value.status_code == 402
     assert calls == []
 
 
-def test_oversized_context_is_rejected_before_creating_a_billable_call(db_session, auth_user, monkeypatch):
+def test_oversized_context_is_rejected_before_creating_a_billable_call(
+    db_session, auth_user, monkeypatch
+):
     from app.core.config import settings
     from app.services import generation_service
-    monkeypatch.setattr(gateway, 'configured', lambda: True)
-    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'различимые данные источника ' * 2000)
-    monkeypatch.setattr(settings, 'AI_MAX_INPUT_TOKENS', 1000)
-    runtime = make_runtime(db_session, auth_user, lambda *a, **kw: pytest.fail('must not call provider'))
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(
+        generation_service, "render_prompt", lambda *a, **kw: "различимые данные источника " * 2000
+    )
+    monkeypatch.setattr(settings, "AI_MAX_INPUT_TOKENS", 1000)
+    runtime = make_runtime(
+        db_session, auth_user, lambda *a, **kw: pytest.fail("must not call provider")
+    )
     with pytest.raises(HTTPException) as exc:
         execute(runtime)
     assert exc.value.status_code == 413
@@ -247,108 +386,183 @@ def test_oversized_context_is_rejected_before_creating_a_billable_call(db_sessio
 
 def test_qa_splits_oversized_pairs_without_omitting_lessons(monkeypatch):
     from types import SimpleNamespace
+
     from app.ai import curriculum
     from app.services.agentic_course_pipeline import AgenticCoursePipeline
-    lessons = [SimpleNamespace(id=f'lesson:item{i}') for i in range(3)]
+
+    lessons = [SimpleNamespace(id=f"lesson:item{i}") for i in range(3)]
     writer = SimpleNamespace(lessons=lessons)
+
     def sliced(plan, drafts, ids):
         return None, SimpleNamespace(lessons=[l for l in drafts.lessons if l.id in ids])
-    monkeypatch.setattr(curriculum, 'slice_curriculum', sliced)
-    monkeypatch.setattr(curriculum, 'assessment_excerpt', lambda *a: None)
+
+    monkeypatch.setattr(curriculum, "slice_curriculum", sliced)
+    monkeypatch.setattr(curriculum, "assessment_excerpt", lambda *a: None)
     pipeline = AgenticCoursePipeline(runtime=None, checkpoint=lambda *a: None)
     attempts = []
+
     def review(**kwargs):
-        ids = [l.id for l in kwargs['writer'].lessons]
+        ids = [l.id for l in kwargs["writer"].lessons]
         attempts.append(ids)
         if len(ids) > 1:
-            raise HTTPException(413, 'Too much evidence')
-        return QAArtifact.model_validate({'source_refs':[SOURCE], 'checked_artifact_ids':ids,
-            'issues':[], 'verdict':'pass','coverage_score':1,'grounding_score':1,
-            'difficulty_score':1,'assessment_quality_score':1,'summary':'Checked'})
-    monkeypatch.setattr(pipeline, '_review_batch', review)
-    result = pipeline._review(common={}, ingestion=None, competency_map=None,
-        course_plan=None, writer=writer, assessment=None, revision=0)
+            raise HTTPException(413, "Too much evidence")
+        return QAArtifact.model_validate(
+            {
+                "source_refs": [SOURCE],
+                "checked_artifact_ids": ids,
+                "issues": [],
+                "verdict": "pass",
+                "coverage_score": 1,
+                "grounding_score": 1,
+                "difficulty_score": 1,
+                "assessment_quality_score": 1,
+                "summary": "Checked",
+            }
+        )
+
+    monkeypatch.setattr(pipeline, "_review_batch", review)
+    result = pipeline._review(
+        common={},
+        ingestion=None,
+        competency_map=None,
+        course_plan=None,
+        writer=writer,
+        assessment=None,
+        revision=0,
+    )
     assert result.checked_artifact_ids == [l.id for l in lessons]
-    assert attempts == [['lesson:item0','lesson:item1'], ['lesson:item0'], ['lesson:item1'], ['lesson:item2']]
+    assert attempts == [
+        ["lesson:item0", "lesson:item1"],
+        ["lesson:item0"],
+        ["lesson:item1"],
+        ["lesson:item2"],
+    ]
 
 
 def test_learner_text_hides_only_declared_citation_markers():
     from app.ai.evidence import learner_markdown
-    assert learner_markdown(f'Правило. [{SOURCE["id"]}]', {SOURCE['id']}) == 'Правило.'
-    with pytest.raises(ValueError, match='not declared'):
-        learner_markdown('Правило. [src:unknown]', {SOURCE['id']})
+
+    assert learner_markdown(f"Правило. [{SOURCE['id']}]", {SOURCE["id"]}) == "Правило."
+    with pytest.raises(ValueError, match="not declared"):
+        learner_markdown("Правило. [src:unknown]", {SOURCE["id"]})
 
 
-def test_cache_is_scoped_to_course_and_owner(db_session,auth_user,monkeypatch):
+def test_cache_is_scoped_to_course_and_owner(db_session, auth_user, monkeypatch):
     from app.services import generation_service
-    monkeypatch.setattr(gateway,'configured',lambda:True)
-    monkeypatch.setattr(generation_service,'render_prompt',lambda *a,**kw:'prompt')
-    calls=[]
-    def generate(*a,**kw):
-        calls.append(1);return {'value':1,'_model':'test','_usage':{'input_tokens':1,'output_tokens':1}}
-    runtime=make_runtime(db_session,auth_user,generate)
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(generation_service, "render_prompt", lambda *a, **kw: "prompt")
+    calls = []
+
+    def generate(*a, **kw):
+        calls.append(1)
+        return {"value": 1, "_model": "test", "_usage": {"input_tokens": 1, "output_tokens": 1}}
+
+    runtime = make_runtime(db_session, auth_user, generate)
     execute(runtime)
     # Retry in the SAME course reuses the validated cache.
-    prior=db_session.get(GenerationRun,runtime.run_id);prior.status='failed';db_session.commit()
-    run=GenerationRun(owner_id=auth_user.id,course_id=runtime.course_id,run_type='graph_generation',status='running')
-    db_session.add(run);db_session.commit()
-    execute(AgentRuntime(db=db_session,run_id=run.id,course_id=runtime.course_id,generate=generate))
-    assert len(calls)==1
-    execute(make_runtime(db_session,auth_user,generate))
-    assert len(calls)==2
-    assert db_session.query(AIResponseCache).count()==2
+    prior = db_session.get(GenerationRun, runtime.run_id)
+    prior.status = "failed"
+    db_session.commit()
+    run = GenerationRun(
+        owner_id=auth_user.id,
+        course_id=runtime.course_id,
+        run_type="graph_generation",
+        status="running",
+    )
+    db_session.add(run)
+    db_session.commit()
+    execute(
+        AgentRuntime(db=db_session, run_id=run.id, course_id=runtime.course_id, generate=generate)
+    )
+    assert len(calls) == 1
+    execute(make_runtime(db_session, auth_user, generate))
+    assert len(calls) == 2
+    assert db_session.query(AIResponseCache).count() == 2
 
 
-def test_confirmed_output_truncation_increases_reserved_response_and_preserves_spend(db_session, auth_user, monkeypatch):
+def test_confirmed_output_truncation_increases_reserved_response_and_preserves_spend(
+    db_session, auth_user, monkeypatch
+):
     from app.services import generation_service
-    monkeypatch.setattr(gateway, 'configured', lambda: True)
-    monkeypatch.setattr(generation_service, 'render_prompt', lambda *a, **kw: 'prompt')
-    limits=[]
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(generation_service, "render_prompt", lambda *a, **kw: "prompt")
+    limits = []
+
     def generate(*args, **kwargs):
-        limits.append(kwargs['max_tokens'])
-        if len(limits)==1:
-            error=HTTPException(502,'Truncated')
-            error.ai_failure_kind='truncated'
-            error.ai_usage={'input_tokens':120,'output_tokens':6000,'cached_tokens':0}
+        limits.append(kwargs["max_tokens"])
+        if len(limits) == 1:
+            error = HTTPException(502, "Truncated")
+            error.ai_failure_kind = "truncated"
+            error.ai_usage = {"input_tokens": 120, "output_tokens": 6000, "cached_tokens": 0}
             raise error
-        return {'value':7,'_usage':{'input_tokens':130,'output_tokens':30},'_usage_reported':True}
-    runtime=make_runtime(db_session,auth_user,generate)
-    assert execute(runtime).value==7
-    assert limits==[6000,12000]
-    calls=db_session.query(AICall).order_by(AICall.id).all()
-    assert calls[0].error_code=='ai_output_truncated' and calls[0].output_tokens==6000
-    assert calls[0].routing['outcome']=='output_truncated'
-    assert calls[1].routing['observation']['max_output_tokens']==12000
+        return {
+            "value": 7,
+            "_usage": {"input_tokens": 130, "output_tokens": 30},
+            "_usage_reported": True,
+        }
+
+    runtime = make_runtime(db_session, auth_user, generate)
+    assert execute(runtime).value == 7
+    assert limits == [6000, 12000]
+    calls = db_session.query(AICall).order_by(AICall.id).all()
+    assert calls[0].error_code == "ai_output_truncated" and calls[0].output_tokens == 6000
+    assert calls[0].routing["outcome"] == "output_truncated"
+    assert calls[1].routing["observation"]["max_output_tokens"] == 12000
 
 
 def test_checkpoint_retry_remembers_confirmed_output_truncation(db_session, auth_user, monkeypatch):
     from app.services import generation_service
-    monkeypatch.setattr(gateway,'configured',lambda:True)
-    monkeypatch.setattr(generation_service,'render_prompt',lambda *a,**kw:'prompt')
-    seen=[]
-    def truncated(*args,**kwargs):
-        seen.append(kwargs['max_tokens'])
-        error=HTTPException(502,'Truncated');error.ai_failure_kind='truncated'
-        error.ai_usage={'input_tokens':100,'output_tokens':kwargs['max_tokens'],'cached_tokens':0}
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(generation_service, "render_prompt", lambda *a, **kw: "prompt")
+    seen = []
+
+    def truncated(*args, **kwargs):
+        seen.append(kwargs["max_tokens"])
+        error = HTTPException(502, "Truncated")
+        error.ai_failure_kind = "truncated"
+        error.ai_usage = {
+            "input_tokens": 100,
+            "output_tokens": kwargs["max_tokens"],
+            "cached_tokens": 0,
+        }
         raise error
-    runtime=make_runtime(db_session,auth_user,truncated);runtime.max_attempts=1
-    with pytest.raises(HTTPException):execute(runtime)
-    def success(*args,**kwargs):
-        seen.append(kwargs['max_tokens']);return {'value':9}
-    runtime.generate=success
-    assert execute(runtime).value==9 and seen==[6000,12000]
+
+    runtime = make_runtime(db_session, auth_user, truncated)
+    runtime.max_attempts = 1
+    with pytest.raises(HTTPException):
+        execute(runtime)
+
+    def success(*args, **kwargs):
+        seen.append(kwargs["max_tokens"])
+        return {"value": 9}
+
+    runtime.generate = success
+    assert execute(runtime).value == 9 and seen == [6000, 12000]
 
 
 def test_output_recovery_stops_at_its_bounded_ceiling(db_session, auth_user, monkeypatch):
     from app.services import generation_service
-    monkeypatch.setattr(gateway,'configured',lambda:True)
-    monkeypatch.setattr(generation_service,'render_prompt',lambda *a,**kw:'prompt')
-    seen=[]
-    def truncated(*args,**kwargs):
-        seen.append(kwargs['max_tokens'])
-        error=HTTPException(502,'Truncated');error.ai_failure_kind='truncated'
-        error.ai_usage={'input_tokens':100,'output_tokens':kwargs['max_tokens'],'cached_tokens':0}
+
+    monkeypatch.setattr(gateway, "configured", lambda: True)
+    monkeypatch.setattr(generation_service, "render_prompt", lambda *a, **kw: "prompt")
+    seen = []
+
+    def truncated(*args, **kwargs):
+        seen.append(kwargs["max_tokens"])
+        error = HTTPException(502, "Truncated")
+        error.ai_failure_kind = "truncated"
+        error.ai_usage = {
+            "input_tokens": 100,
+            "output_tokens": kwargs["max_tokens"],
+            "cached_tokens": 0,
+        }
         raise error
-    runtime=make_runtime(db_session,auth_user,truncated);runtime.max_attempts=8
-    with pytest.raises(HTTPException):execute(runtime)
-    assert seen==[6000,12000,24000]
+
+    runtime = make_runtime(db_session, auth_user, truncated)
+    runtime.max_attempts = 8
+    with pytest.raises(HTTPException):
+        execute(runtime)
+    assert seen == [6000, 12000, 24000]

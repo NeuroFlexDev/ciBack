@@ -1,6 +1,7 @@
 .git
 .github
 .venv
+.venv-security
 **/node_modules
 venv
 env
@@ -9,6 +10,8 @@ __pycache__
 *.py[cod]
 .pytest_cache
 .mypy_cache
+.lint-tools
+lint-reports
 .ruff_cache
 .coverage
 htmlcov

@@ -1,11 +1,11 @@
 from __future__ import annotations
-from app.ai import control as ai_control
 
 import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.ai import control as ai_control
 from app.chat_engine import get_chat_engine
 from app.core.config import settings
 from app.models.chat import ChatMessage
@@ -54,16 +54,24 @@ def _usage_from_response(response: dict[str, Any]) -> dict[str, int | None]:
 
 
 def chat_generate(
-    *, chat_id: int, user_id: int, text: str, db: Session,
-    engine_name: str | None = None, model: str | None = None,
-    expect_json: bool = False, max_tokens: int = 1024,
+    *,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    db: Session,
+    engine_name: str | None = None,
+    model: str | None = None,
+    expect_json: bool = False,
+    max_tokens: int = 1024,
     existing_user_message: ChatMessage | None = None,
 ) -> dict[str, Any]:
     from app.ai import gateway
-    from app.services.feature_access import require_feature
     from app.models.user import User
+    from app.services.feature_access import require_feature
+
     require_feature(db, db.get(User, user_id).organization_id, "assistant")
     from app.services.ai_access_boundary import principal_stamp
+
     stamp = principal_stamp(db.get(User, user_id))
     chat = ChatRepository._active_chat(db, chat_id, user_id)
     engine_name = engine_name or chat.engine or "vsellm"
@@ -71,11 +79,22 @@ def chat_generate(
         engine_name = "vsellm"  # Only the approved local-provider registry may dispatch.
     model = model or chat.model
     from fastapi import HTTPException
+
     from app.ai.providers import AIUnavailable
-    from app.services.assistant_context import build_context, verify_context, resolve_references, local_answer
+    from app.services.assistant_context import (
+        build_context,
+        local_answer,
+        resolve_references,
+        verify_context,
+    )
+
     user = db.get(User, user_id)
     previous = ChatRepository.get_recent_history(db, chat_id, user_id, 6)
-    recent_questions = [m.content[:800] for m in previous if m.role == "user" and (not existing_user_message or m.id != existing_user_message.id)]
+    recent_questions = [
+        m.content[:800]
+        for m in previous
+        if m.role == "user" and (not existing_user_message or m.id != existing_user_message.id)
+    ]
     retrieval_query = "\n".join([*recent_questions[-2:], text])
     library = build_context(db, user, retrieval_query, course_id=chat.course_id)
     system = (
@@ -93,10 +112,25 @@ def chat_generate(
     ) + library.prompt()
     if engine_name == "vsellm":
         from app.ai.memory import conversation_context
+
         try:
-            context = conversation_context(db, chat_id, user_id, text, exclude_message_id=existing_user_message.id if existing_user_message else None)
+            context = conversation_context(
+                db,
+                chat_id,
+                user_id,
+                text,
+                exclude_message_id=existing_user_message.id if existing_user_message else None,
+            )
             from app.services.scoped_ai import tracked_completion
-            response = tracked_completion(db, user_id, chat.course_id, "chat", [{"role": "system", "content": system}, *context], model=model)
+
+            response = tracked_completion(
+                db,
+                user_id,
+                chat.course_id,
+                "chat",
+                [{"role": "system", "content": system}, *context],
+                model=model,
+            )
         except (AIUnavailable, ValueError):
             response = local_answer(text, library)
         except HTTPException as exc:
@@ -111,29 +145,55 @@ def chat_generate(
             except ValueError:
                 response = local_answer(text, library)
         usage = _usage_from_response(response)
-        user_message = existing_user_message or ChatMessage(chat_id=chat_id, role="user", content=text)
-        assistant_message = ChatMessage(chat_id=chat_id, role="assistant", content=response["text"],
-            model=response["model"], message_metadata={"engine": "routed",
-                "provider": response.get("provider"), "degraded": response.get("degraded", False)}, **usage)
+        user_message = existing_user_message or ChatMessage(
+            chat_id=chat_id, role="user", content=text
+        )
+        assistant_message = ChatMessage(
+            chat_id=chat_id,
+            role="assistant",
+            content=response["text"],
+            model=response["model"],
+            message_metadata={
+                "engine": "routed",
+                "provider": response.get("provider"),
+                "degraded": response.get("degraded", False),
+            },
+            **usage,
+        )
         db.add_all([user_message, assistant_message])
         db.commit()
-        return {"answer": response["text"], "raw": response, "user_msg_id": user_message.id, "bot_msg_id": assistant_message.id}
+        return {
+            "answer": response["text"],
+            "raw": response,
+            "user_msg_id": user_message.id,
+            "bot_msg_id": assistant_message.id,
+        }
     history = ChatRepository.get_recent_history(
         db, chat_id, user_id, settings.CHAT_HISTORY_MESSAGES
     )
     if existing_user_message:
         history = [message for message in history if message.id != existing_user_message.id]
     user_message = existing_user_message or ChatRepository.add_message(db, chat_id, "user", text)
-    llm_history = [{"role": "system", "content": system}, *[
-        {"role": message.role, "content": message.content} for message in history
-    ]]
+    llm_history = [
+        {"role": "system", "content": system},
+        *[{"role": message.role, "content": message.content} for message in history],
+    ]
     llm_history.append({"role": "user", "content": text})
 
     try:
         from app.services.scoped_ai import tracked_completion
-        response = tracked_completion(db, user_id, chat.course_id, "chat", llm_history,
-            max_tokens=max_tokens, invoke=lambda _role, messages, **_kwargs: get_chat_engine(engine_name, model).generate(
-                messages, model=model, expect_json=expect_json))
+
+        response = tracked_completion(
+            db,
+            user_id,
+            chat.course_id,
+            "chat",
+            llm_history,
+            max_tokens=max_tokens,
+            invoke=lambda _role, messages, **_kwargs: get_chat_engine(engine_name, model).generate(
+                messages, model=model, expect_json=expect_json
+            ),
+        )
     except Exception:
         response = local_answer(text, library)
     verify_context(db, user_id, stamp, library)
@@ -148,9 +208,13 @@ def chat_generate(
     response_model = response.get("model")
     usage = _usage_from_response(response)
     assistant_message = ChatRepository.add_message(
-        db, chat_id, "assistant", answer,
+        db,
+        chat_id,
+        "assistant",
+        answer,
         model=response_model if isinstance(response_model, str) else model,
-        metadata={"engine": engine_name, "degraded": response.get("degraded", False)}, **usage,
+        metadata={"engine": engine_name, "degraded": response.get("degraded", False)},
+        **usage,
     )
     return {
         "answer": answer,

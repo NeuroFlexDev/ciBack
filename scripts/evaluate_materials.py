@@ -3,17 +3,19 @@
 No production database is used. Credentials come from .env or --credentials.
 Page numbers are one-based PDF pages, preserved in every source citation.
 """
+
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, replace
-from datetime import datetime
 import hashlib
 import json
 import os
-from pathlib import Path
+import secrets
 import sys
 import time
+from dataclasses import asdict, replace
+from datetime import datetime
+from pathlib import Path
 
 
 def dump(path, data):
@@ -32,8 +34,12 @@ def main():
     parser.add_argument("--lessons", type=int, default=6)
     parser.add_argument("--max-calls", type=int, default=60)
     parser.add_argument("--max-tokens", type=int, default=600000)
-    parser.add_argument("--max-rubles", type=float, default=150,
-                        help="Conservative text-generation reservation cap for this isolated evaluation")
+    parser.add_argument(
+        "--max-rubles",
+        type=float,
+        default=150,
+        help="Conservative text-generation reservation cap for this isolated evaluation",
+    )
     args = parser.parse_args()
     if not 1 <= args.lessons <= 100:
         parser.error("--lessons must be between 1 and 100")
@@ -44,35 +50,44 @@ def main():
     out = args.output_dir.resolve()
     out.mkdir(parents=True, exist_ok=True)
     os.environ.update(
-        DATABASE_URL="sqlite:///" + str(out / "evaluation.sqlite"), DEBUG="false", ENV="evaluation",
-        JWT_SECRET="isolated-material-evaluation-secret-at-least-32-bytes",
+        DATABASE_URL="sqlite:///" + str(out / "evaluation.sqlite"),
+        DEBUG="false",
+        ENV="evaluation",
+        JWT_SECRET=secrets.token_urlsafe(48),
         AI_CHECKPOINT_SQLITE_PATH=str(out / "checkpoints.sqlite"),
-        AI_MAX_CALLS_PER_RUN=str(args.max_calls), AI_MAX_TOKENS_PER_RUN=str(args.max_tokens),
+        AI_MAX_CALLS_PER_RUN=str(args.max_calls),
+        AI_MAX_TOKENS_PER_RUN=str(args.max_tokens),
     )
     from dotenv import dotenv_values
-    key = args.credentials.read_text().strip() if args.credentials else dotenv_values(root / ".env").get("VSELLM_API_KEY")
+
+    key = (
+        args.credentials.read_text().strip()
+        if args.credentials
+        else dotenv_values(root / ".env").get("VSELLM_API_KEY")
+    )
     if key:
         os.environ["VSELLM_API_KEY"] = key
     if (out / "tessdata").is_dir():
         os.environ.setdefault("TESSDATA_PREFIX", str(out / "tessdata"))
 
     import pymupdf
+
     import app.models  # noqa: F401
+    from app.ai.retrieval import PersistentVectorStore, persist_embeddings
     from app.core.config import settings
-    from app.database.db import Base, engine, SessionLocal
-    from app.models.user import User
+    from app.database.db import Base, SessionLocal, engine
+    from app.models.agent_artifact import AgentArtifact
+    from app.models.ai_state import AICall
     from app.models.course import Course
     from app.models.document import Document, DocumentChunk
     from app.models.generation_run import GenerationRun
-    from app.models.agent_artifact import AgentArtifact
-    from app.models.ai_state import AICall
-    from app.services.document_processing import extract_blocks, chunk_blocks
-    from app.services.source_catalog_service import build_source_catalog, graph_source_links
-    from app.ai.retrieval import persist_embeddings, PersistentVectorStore
-    from app.services.retrieval_service import RetrievalService
+    from app.models.user import User
     from app.services.agent_runtime import AgentRuntime
-    from app.services.generation_service import generate_from_prompt, render_prompt
     from app.services.agentic_course_pipeline import AgenticCoursePipeline
+    from app.services.document_processing import chunk_blocks, extract_blocks
+    from app.services.generation_service import generate_from_prompt, render_prompt
+    from app.services.retrieval_service import RetrievalService
+    from app.services.source_catalog_service import build_source_catalog, graph_source_links
 
     content = args.pdf.read_bytes()
     file_hash = hashlib.sha256(content).hexdigest()
@@ -85,8 +100,15 @@ def main():
             raise ValueError
     except ValueError:
         parser.error("--pages must be an inclusive range within the PDF")
-    snapshot = dict(goal=args.goal, target_audience=args.audience, difficulty="basic", language="ru",
-                    lesson_count=args.lessons, module_tests_enabled=True, final_test_enabled=True)
+    snapshot = dict(
+        goal=args.goal,
+        target_audience=args.audience,
+        difficulty="basic",
+        language="ru",
+        lesson_count=args.lessons,
+        module_tests_enabled=True,
+        final_test_enabled=True,
+    )
     identity = dict(sha256=file_hash, pdf_pages=[first, last], title=args.title, settings=snapshot)
     manifest = out / "manifest.json"
     if manifest.exists() and json.loads(manifest.read_text()) != identity:
@@ -99,15 +121,33 @@ def main():
     previous_report = out / "report.json"
     # Reservations survive process restarts; reusing an output directory must
     # not silently grant another paid budget. This evaluator is sequential.
-    previous_budget = (json.loads(budget_path.read_text()).get("reserved_rub", "0") if budget_path.exists()
-                       else json.loads(previous_report.read_text()).get("text_budget_reserved_rub", "0")
-                       if previous_report.exists() else "0")
+    previous_budget = (
+        json.loads(budget_path.read_text()).get("reserved_rub", "0")
+        if budget_path.exists()
+        else json.loads(previous_report.read_text()).get("text_budget_reserved_rub", "0")
+        if previous_report.exists()
+        else "0"
+    )
     report["text_budget_reserved_rub"] = previous_budget
     from app.ai.models import model_policy
-    report["model_policy"] = {role: asdict(model_policy(role)) for role in (
-        "ingestion", "competency_mapper", "course_architect", "lesson_writer", "assessment", "critic_qa")}
-    report["limits"] = dict(calls=args.max_calls, budget_tokens=args.max_tokens,
-                           context_budget=settings.AI_MAX_INPUT_TOKENS, revisions=settings.AI_MAX_REVISIONS)
+
+    report["model_policy"] = {
+        role: asdict(model_policy(role))
+        for role in (
+            "ingestion",
+            "competency_mapper",
+            "course_architect",
+            "lesson_writer",
+            "assessment",
+            "critic_qa",
+        )
+    }
+    report["limits"] = dict(
+        calls=args.max_calls,
+        budget_tokens=args.max_tokens,
+        context_budget=settings.AI_MAX_INPUT_TOKENS,
+        revisions=settings.AI_MAX_REVISIONS,
+    )
     started = time.monotonic()
     run = None
 
@@ -122,35 +162,56 @@ def main():
 
     def tracked_generate(*a, **kw):
         from fastapi import HTTPException
+
         def stop_before_request(message):
             error = HTTPException(402, message)
             error.request_sent = False
             raise error
+
         role = kw.get("agent_role")
         # Evaluation-only budget, sequential calls. Prices are an explicit
         # snapshot; unknown models stop rather than silently bypassing the cap.
         from decimal import Decimal
+
         from app.ai import gateway
         from app.services.generation_service import agent_messages
-        prices = {"openai/gpt-5.4-mini": (83, 497), "anthropic/claude-sonnet-4.6": (332, 1658),
-                  "google/gemini-2.5-flash": (33, 276)}
-        chosen = kw.get("model") or (model_policy(role).fallback if kw.get("fallback_model") else model_policy(role).model)
+
+        prices = {
+            "openai/gpt-5.4-mini": (83, 497),
+            "anthropic/claude-sonnet-4.6": (332, 1658),
+            "google/gemini-2.5-flash": (33, 276),
+        }
+        chosen = kw.get("model") or (
+            model_policy(role).fallback if kw.get("fallback_model") else model_policy(role).model
+        )
         if chosen not in prices or kw.get("provider", "vsellm") != "vsellm":
             stop_before_request("Evaluation price snapshot missing for selected provider/model")
         rate_in, rate_out = prices[chosen]
-        estimated_in = gateway.token_count(agent_messages(render_prompt(a[0], **kw), expect_json=True,
-                                                         repair_feedback=kw.get("repair_feedback", "")))
+        estimated_in = gateway.token_count(
+            agent_messages(
+                render_prompt(a[0], **kw),
+                expect_json=True,
+                repair_feedback=kw.get("repair_feedback", ""),
+            )
+        )
         reservation = Decimal(estimated_in * rate_in + kw["max_tokens"] * rate_out) / 1_000_000
         consumed = Decimal(str(report.get("text_budget_reserved_rub", "0")))
         if consumed + reservation > Decimal(str(args.max_rubles)):
             stop_before_request("Isolated evaluation text budget reached")
         report["text_budget_reserved_rub"] = str(consumed + reservation)
         dump(budget_path, {"reserved_rub": report["text_budget_reserved_rub"]})
-        report["prompt_sizes"].append(dict(agent=role, bytes=len(render_prompt(a[0], **kw).encode())))
+        report["prompt_sizes"].append(
+            dict(agent=role, bytes=len(render_prompt(a[0], **kw).encode()))
+        )
         if kw.get("repair_feedback"):
             report["repairs"].append(dict(agent=role, diagnostic=kw["repair_feedback"][:3000]))
         dump(out / "progress.json", {k: report[k] for k in ("stages", "repairs", "prompt_sizes")})
-        print(json.dumps(dict(request=role, repair=bool(kw.get("repair_feedback"))), ensure_ascii=False), flush=True)
+        print(
+            json.dumps(
+                dict(request=role, repair=bool(kw.get("repair_feedback"))), ensure_ascii=False
+            ),
+            flush=True,
+        )
         response = generate_from_prompt(*a, **kw)
         raw_dir = out / "raw-responses"
         raw_dir.mkdir(exist_ok=True)
@@ -164,41 +225,73 @@ def main():
         blocks_path = out / "blocks.json"
         if blocks_path.exists():
             from app.services.document_processing import ExtractedBlock
+
             blocks = [ExtractedBlock(**b) for b in json.loads(blocks_path.read_text())]
         else:
             # OCR only the requested pages, preserving original page numbers.
             # Extracting the whole textbook can require OCR on unrelated covers.
-            with pymupdf.open(stream=content, filetype="pdf") as pdf, pymupdf.open() as selected_pdf:
+            with (
+                pymupdf.open(stream=content, filetype="pdf") as pdf,
+                pymupdf.open() as selected_pdf,
+            ):
                 selected_pdf.insert_pdf(pdf, from_page=first - 1, to_page=last - 1)
-                blocks = [replace(block, page=block.page + first - 1 if block.page is not None else None)
-                          for block in extract_blocks(selected_pdf.tobytes(), "application/pdf")]
+                blocks = [
+                    replace(block, page=block.page + first - 1 if block.page is not None else None)
+                    for block in extract_blocks(selected_pdf.tobytes(), "application/pdf")
+                ]
             dump(blocks_path, [asdict(b) for b in blocks])
         selected = [b for b in blocks if first <= b.page <= last]
-        chunks_data = chunk_blocks(selected, max_chars=settings.DOCUMENT_CHUNK_CHARS,
-                                   overlap_chars=settings.DOCUMENT_CHUNK_OVERLAP_CHARS)
+        chunks_data = chunk_blocks(
+            selected,
+            max_chars=settings.DOCUMENT_CHUNK_CHARS,
+            overlap_chars=settings.DOCUMENT_CHUNK_OVERLAP_CHARS,
+        )
         full_size = full_text_size
         selected_size = sum(len(c["text"]) for c in chunks_data)
-        report["extraction"] = dict(pdf_pages=page_count, full_characters=full_size,
+        report["extraction"] = dict(
+            pdf_pages=page_count,
+            full_characters=full_size,
             full_book_over_limit=full_size > settings.AI_MAX_SOURCE_CHARS,
-            selected_pages=[first, last], selected_characters=selected_size, chunks=len(chunks_data),
-            source_character_limit=settings.AI_MAX_SOURCE_CHARS)
+            selected_pages=[first, last],
+            selected_characters=selected_size,
+            chunks=len(chunks_data),
+            source_character_limit=settings.AI_MAX_SOURCE_CHARS,
+        )
         if not chunks_data:
             raise ValueError("No text was extracted in the selected page range")
         if selected_size > settings.AI_MAX_SOURCE_CHARS:
-            raise ValueError("Selected source corpus exceeds AI_MAX_SOURCE_CHARS; choose an explicit chapter range")
+            raise ValueError(
+                "Selected source corpus exceeds AI_MAX_SOURCE_CHARS; choose an explicit chapter range"
+            )
         user = session.query(User).first()
         if user is None:
             user = User(email="materials-evaluation@example.invalid", password_hash="unused")
-            session.add(user); session.flush()
+            session.add(user)
+            session.flush()
             course = Course(owner_id=user.id, name=args.title, status="ready")
-            session.add(course); session.flush()
-            run = GenerationRun(owner_id=user.id, course_id=course.id, run_type="graph_generation", status="running")
+            session.add(course)
+            session.flush()
+            run = GenerationRun(
+                owner_id=user.id, course_id=course.id, run_type="graph_generation", status="running"
+            )
             session.add(run)
-            doc = Document(owner_id=user.id, course_id=course.id, storage_key=str(args.pdf.resolve()),
-                version=1, status="indexed", content_hash=file_hash, source_type="upload",
-                original_filename=args.pdf.name, mime_type="application/pdf", size_bytes=len(content))
-            session.add(doc); session.flush()
-            session.add_all([DocumentChunk(document_id=doc.id, document_version=1, **c) for c in chunks_data])
+            doc = Document(
+                owner_id=user.id,
+                course_id=course.id,
+                storage_key=str(args.pdf.resolve()),
+                version=1,
+                status="indexed",
+                content_hash=file_hash,
+                source_type="upload",
+                original_filename=args.pdf.name,
+                mime_type="application/pdf",
+                size_bytes=len(content),
+            )
+            session.add(doc)
+            session.flush()
+            session.add_all(
+                [DocumentChunk(document_id=doc.id, document_version=1, **c) for c in chunks_data]
+            )
             session.commit()
         course = session.query(Course).one()
         run = session.query(GenerationRun).one()
@@ -219,40 +312,88 @@ def main():
             chunk.embedding_id = embedding_id
         session.commit()
         report["retrieval"] = []
-        for query in ("Что такое подмножество?", "Как найти дополнение множества?", "Как доказать тождество методом двух включений?"):
-            found = RetrievalService.search_course(session, course_id=course.id, owner_id=user.id,
-                query=query, limit=3, vector_store=PersistentVectorStore(session))
+        for query in (
+            "Что такое подмножество?",
+            "Как найти дополнение множества?",
+            "Как доказать тождество методом двух включений?",
+        ):
+            found = RetrievalService.search_course(
+                session,
+                course_id=course.id,
+                owner_id=user.id,
+                query=query,
+                limit=3,
+                vector_store=PersistentVectorStore(session),
+            )
             report["retrieval"].append(found.model_dump(mode="json"))
-        pipeline = AgenticCoursePipeline(runtime=AgentRuntime(db=session, run_id=run.id,
-            course_id=course.id, generate=tracked_generate), checkpoint=progress)
-        result = pipeline.run(course_title=course.name, settings_snapshot=snapshot, source_catalog=sources)
-        report.update(qa=result.qa_summary, artifacts=result.result.model_dump(mode="json"),
-                      nodes=result.nodes, edges=result.edges)
-        from app.services.course_materialization_service import CourseMaterializationService
-        from app.services.course_publication_service import CoursePublicationService
+        pipeline = AgenticCoursePipeline(
+            runtime=AgentRuntime(
+                db=session, run_id=run.id, course_id=course.id, generate=tracked_generate
+            ),
+            checkpoint=progress,
+        )
+        result = pipeline.run(
+            course_title=course.name, settings_snapshot=snapshot, source_catalog=sources
+        )
+        report.update(
+            qa=result.qa_summary,
+            artifacts=result.result.model_dump(mode="json"),
+            nodes=result.nodes,
+            edges=result.edges,
+        )
         from app.models.course_graph import CourseGraph
         from app.models.course_source_link import CourseSourceLink
+        from app.services.course_materialization_service import CourseMaterializationService
+        from app.services.course_publication_service import CoursePublicationService
+
         if course.current_graph is None:
-            graph = CourseGraph(course_id=course.id, version=1, nodes=[], edges=[], created_by=user.id, status="draft")
-            session.add(graph); session.flush(); course.current_graph = graph
-            materialized = CourseMaterializationService.materialize(session, course=course, nodes=result.nodes, edges=result.edges)
-            graph.nodes = materialized.pop("canvas_nodes"); graph.edges = materialized.pop("canvas_edges")
+            graph = CourseGraph(
+                course_id=course.id,
+                version=1,
+                nodes=[],
+                edges=[],
+                created_by=user.id,
+                status="draft",
+            )
+            session.add(graph)
+            session.flush()
+            course.current_graph = graph
+            materialized = CourseMaterializationService.materialize(
+                session, course=course, nodes=result.nodes, edges=result.edges
+            )
+            graph.nodes = materialized.pop("canvas_nodes")
+            graph.edges = materialized.pop("canvas_edges")
             report["materialized"] = materialized
-            report["learning_map"] = CourseMaterializationService.materialize_learning_map(session, course=course, result=result.result)
+            report["learning_map"] = CourseMaterializationService.materialize_learning_map(
+                session, course=course, result=result.result
+            )
             links = graph_source_links(graph.nodes, sources)
-            session.add_all([CourseSourceLink(course_id=course.id, graph_id=graph.id, run_id=run.id, **link) for link in links])
+            session.add_all(
+                [
+                    CourseSourceLink(course_id=course.id, graph_id=graph.id, run_id=run.id, **link)
+                    for link in links
+                ]
+            )
             report["source_links"] = len(links)
-            run.status = "completed"; course.status = "ready"; session.commit()
+            run.status = "completed"
+            course.status = "ready"
+            session.commit()
             report["publication"] = CoursePublicationService.publish(session, course.id, user.id)
         before = session.query(AICall).count()
         cache_start = time.monotonic()
-        resumed = pipeline.run(course_title=course.name, settings_snapshot=snapshot, source_catalog=sources)
-        report["checkpoint_replay"] = dict(additional_llm_calls=session.query(AICall).count() - before,
-            seconds=round(time.monotonic() - cache_start, 3), same_artifacts=resumed.result == result.result)
+        resumed = pipeline.run(
+            course_title=course.name, settings_snapshot=snapshot, source_catalog=sources
+        )
+        report["checkpoint_replay"] = dict(
+            additional_llm_calls=session.query(AICall).count() - before,
+            seconds=round(time.monotonic() - cache_start, 3),
+            same_artifacts=resumed.result == result.result,
+        )
         report["success"] = True
     except Exception as exc:
         from fastapi import HTTPException
         from pydantic import ValidationError
+
         report["error_type"] = type(exc).__name__
         if isinstance(exc, ValidationError):
             report["error"] = exc.errors(include_input=False, include_url=False)
@@ -266,18 +407,44 @@ def main():
         if run is not None:
             run.status = "completed" if report["success"] else "failed"
             run.error_code = None if report["success"] else "evaluation_failed"
-            run.error_message = None if report["success"] else str(report.get("error", report.get("error_type")))[:2000]
+            run.error_message = (
+                None
+                if report["success"]
+                else str(report.get("error", report.get("error_type")))[:2000]
+            )
             run.finished_at = datetime.utcnow()
             run.latency_ms = int(report["seconds"] * 1000)
             if not report["success"] and course.current_graph is None:
                 course.status = "generation_failed"
             session.commit()
-        report["calls"] = [dict(id=c.id, agent=c.agent, model=c.model, status=c.status, input_tokens=c.input_tokens,
-            output_tokens=c.output_tokens, cached_tokens=c.cached_tokens, latency_ms=c.latency_ms, error_code=c.error_code,
-            routing=c.routing)
-            for c in session.query(AICall).order_by(AICall.id).all()]
-        dump(out / "agent-artifacts.json", [dict(agent=a.agent, sequence=a.sequence, status=a.status,
-            payload=a.payload, error=a.error) for a in session.query(AgentArtifact).all()])
+        report["calls"] = [
+            dict(
+                id=c.id,
+                agent=c.agent,
+                model=c.model,
+                status=c.status,
+                input_tokens=c.input_tokens,
+                output_tokens=c.output_tokens,
+                cached_tokens=c.cached_tokens,
+                latency_ms=c.latency_ms,
+                error_code=c.error_code,
+                routing=c.routing,
+            )
+            for c in session.query(AICall).order_by(AICall.id).all()
+        ]
+        dump(
+            out / "agent-artifacts.json",
+            [
+                dict(
+                    agent=a.agent,
+                    sequence=a.sequence,
+                    status=a.status,
+                    payload=a.payload,
+                    error=a.error,
+                )
+                for a in session.query(AgentArtifact).all()
+            ],
+        )
         path = out / "report.json"
         if path.exists():
             path.rename(out / f"report-{time.time_ns()}.json")
@@ -286,17 +453,47 @@ def main():
         if not report["success"] and (out / "checkpoints.sqlite").exists():
             from app.ai.checkpoints import checkpoint_store
             from app.schemas.agentic_pipeline import AgenticPipelineResult
+
             try:
                 with checkpoint_store() as saver:
                     checkpoint = next(saver.list(None, limit=1), None)
                 values = checkpoint.checkpoint["channel_values"] if checkpoint else {}
-                candidate = AgenticPipelineResult.model_validate({k: values[k] for k in (
-                    "ingestion", "competency_map", "course_plan", "writer", "assessment", "qa")})
-                dump(out / "course-candidate.json", {**report, "candidate_only": True,
-                    "artifacts": candidate.model_dump(mode="json"), "checkpoint_revision": values.get("revision")})
+                candidate = AgenticPipelineResult.model_validate(
+                    {
+                        k: values[k]
+                        for k in (
+                            "ingestion",
+                            "competency_map",
+                            "course_plan",
+                            "writer",
+                            "assessment",
+                            "qa",
+                        )
+                    }
+                )
+                dump(
+                    out / "course-candidate.json",
+                    {
+                        **report,
+                        "candidate_only": True,
+                        "artifacts": candidate.model_dump(mode="json"),
+                        "checkpoint_revision": values.get("revision"),
+                    },
+                )
             except (KeyError, ValueError):
                 pass  # An earlier failure may not yet have a structurally complete draft.
-        print(json.dumps({k: v for k, v in report.items() if k in {"success", "error", "error_type", "seconds", "qa", "checkpoint_replay"}}, ensure_ascii=False, default=str), flush=True)
+        print(
+            json.dumps(
+                {
+                    k: v
+                    for k, v in report.items()
+                    if k in {"success", "error", "error_type", "seconds", "qa", "checkpoint_replay"}
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            flush=True,
+        )
         session.close()
     return 0 if report["success"] else 1
 

@@ -1,4 +1,5 @@
 """Operator-only settings for outbound integrations; never exposed by settings APIs."""
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

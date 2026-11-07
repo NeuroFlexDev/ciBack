@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field
 from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class ChatCreate(BaseModel):
@@ -35,7 +36,9 @@ class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=12000)
     engine: Literal["vsellm", "lc_giga", "lc_hf", "raw_giga", "raw_hf"] | None = None
     model: str | None = None
-    request_id: str | None = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    request_id: str | None = Field(
+        default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
 
 class ModelPatch(BaseModel):

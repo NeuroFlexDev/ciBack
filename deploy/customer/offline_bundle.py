@@ -3,18 +3,44 @@
 The manifest records bytes and declared licensing, not hardware acceptance or
 permission to redistribute. Keep a trusted copy of manifest.sha256 separately.
 """
+
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tarfile
+from pathlib import Path
 
-REQUIRED = {"backend", "frontend", "postgres", "redis", "caddy", "text_model", "embedding_model",
-            "image_model", "text_runtime", "embedding_runtime", "image_runtime", "tokenizers", "ocr_rus", "ocr_eng", "fonts", "dependencies"}
-IMAGE_ROLES = {"backend", "frontend", "postgres", "redis", "caddy", "text_runtime", "embedding_runtime", "image_runtime"}
+REQUIRED = {
+    "backend",
+    "frontend",
+    "postgres",
+    "redis",
+    "caddy",
+    "text_model",
+    "embedding_model",
+    "image_model",
+    "text_runtime",
+    "embedding_runtime",
+    "image_runtime",
+    "tokenizers",
+    "ocr_rus",
+    "ocr_eng",
+    "fonts",
+    "dependencies",
+}
+IMAGE_ROLES = {
+    "backend",
+    "frontend",
+    "postgres",
+    "redis",
+    "caddy",
+    "text_runtime",
+    "embedding_runtime",
+    "image_runtime",
+}
 
 
 def digest(path):
@@ -29,7 +55,9 @@ def inside(root, relative):
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
         raise ValueError("Artifact paths must be relative")
     candidate = root / relative
-    if candidate.is_symlink() or any(parent.is_symlink() for parent in candidate.parents if parent != root):
+    if candidate.is_symlink() or any(
+        parent.is_symlink() for parent in candidate.parents if parent != root
+    ):
         raise ValueError("Symlink artifacts are not allowed")
     path = candidate.resolve()
     if not path.is_relative_to(root.resolve()) or not path.is_file():
@@ -38,12 +66,20 @@ def inside(root, relative):
 
 
 def validate_manifest(manifest):
-    if manifest.get("schema") != 1 or not isinstance(manifest.get("bundle_id"), str) or not manifest["bundle_id"].strip():
+    if (
+        manifest.get("schema") != 1
+        or not isinstance(manifest.get("bundle_id"), str)
+        or not manifest["bundle_id"].strip()
+    ):
         raise ValueError("Invalid bundle metadata")
     components = manifest.get("components", [])
     ids, roles = set(), set()
     for item in components:
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", item.get("id", "")) or item["id"] in ids or not item.get("version"):
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", item.get("id", ""))
+            or item["id"] in ids
+            or not item.get("version")
+        ):
             raise ValueError("Every component needs a unique ID and version")
         ids.add(item["id"])
         selected = set(item.get("roles", []))
@@ -51,15 +87,25 @@ def validate_manifest(manifest):
             raise ValueError("Missing, unknown or duplicate component roles")
         roles |= selected
         if selected & IMAGE_ROLES:
-            if not re.fullmatch(r"[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}", item.get("image_ref", "")) or not re.fullmatch(r"sha256:[a-f0-9]{64}", item.get("image_id", "")):
+            if not re.fullmatch(
+                r"[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}", item.get("image_ref", "")
+            ) or not re.fullmatch(r"sha256:[a-f0-9]{64}", item.get("image_id", "")):
                 raise ValueError("Container archives require a pinned image_ref and image_id")
             if len(item.get("files", [])) != 1:
-                raise ValueError("A container component must contain exactly one docker-save archive")
+                raise ValueError(
+                    "A container component must contain exactly one docker-save archive"
+                )
         license_info = item.get("license", {})
-        if not license_info.get("identifier") or not isinstance(license_info.get("redistribution_review"), str) or not license_info["redistribution_review"].strip():
+        if (
+            not license_info.get("identifier")
+            or not isinstance(license_info.get("redistribution_review"), str)
+            or not license_info["redistribution_review"].strip()
+        ):
             raise ValueError("Record license identifier and actual redistribution review reference")
         for artifact in [license_info] + item.get("files", []):
-            if not re.fullmatch(r"[a-f0-9]{64}", artifact.get("sha256", "")) or not artifact.get("path"):
+            if not re.fullmatch(r"[a-f0-9]{64}", artifact.get("sha256", "")) or not artifact.get(
+                "path"
+            ):
                 raise ValueError("Every file and license needs a pinned SHA-256 and path")
         if not item.get("files"):
             raise ValueError("An empty component is not an offline artifact")
@@ -78,14 +124,20 @@ def verify_image_archive(path, expected_id):
                 if index >= 100000 or member.name in entries:
                     raise ValueError("Invalid or excessive archive entries")
                 entries[member.name] = member
+
             def read(name, maximum):
                 member = entries.get(name)
                 if member is None or not member.isfile() or not 0 < member.size <= maximum:
                     raise ValueError("Missing or excessive container metadata")
                 with archive.extractfile(member) as stream:
                     return stream.read(maximum + 1)
+
             manifests = json.loads(read("manifest.json", 1024 * 1024))
-            if not isinstance(manifests, list) or len(manifests) != 1 or not isinstance(manifests[0], dict):
+            if (
+                not isinstance(manifests, list)
+                or len(manifests) != 1
+                or not isinstance(manifests[0], dict)
+            ):
                 raise ValueError("Each component must export exactly one Docker image")
             config_name = manifests[0].get("Config")
             if not isinstance(config_name, str):
@@ -111,7 +163,9 @@ def assemble(spec_path, destination):
                 raise ValueError("Source checksum mismatch: " + artifact["path"])
             sources.append((artifact, source))
         if set(item["roles"]) & IMAGE_ROLES:
-            verify_image_archive(inside(spec_path.parent, item["files"][0]["path"]), item["image_id"])
+            verify_image_archive(
+                inside(spec_path.parent, item["files"][0]["path"]), item["image_id"]
+            )
     destination = Path(destination).resolve()
     destination.mkdir(exist_ok=False)
     (destination / "objects").mkdir()
@@ -123,7 +177,9 @@ def assemble(spec_path, destination):
         artifact["path"], artifact["size_bytes"] = relative, target.stat().st_size
     content = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode()
     (destination / "manifest.json").write_bytes(content)
-    (destination / "manifest.sha256").write_text(hashlib.sha256(content).hexdigest() + "\n", encoding="ascii")
+    (destination / "manifest.sha256").write_text(
+        hashlib.sha256(content).hexdigest() + "\n", encoding="ascii"
+    )
     return verify(destination)
 
 
@@ -131,7 +187,9 @@ def verify(directory, expected_manifest=None):
     root = Path(directory).resolve()
     manifest_path = inside(root, "manifest.json")
     actual = digest(manifest_path)
-    trusted = expected_manifest or inside(root, "manifest.sha256").read_text(encoding="ascii").strip()
+    trusted = (
+        expected_manifest or inside(root, "manifest.sha256").read_text(encoding="ascii").strip()
+    )
     if not re.fullmatch(r"[a-f0-9]{64}", trusted) or actual != trusted:
         raise ValueError("Manifest digest mismatch")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -140,7 +198,11 @@ def verify(directory, expected_manifest=None):
     for item in manifest["components"]:
         for artifact in [item["license"]] + item["files"]:
             file = inside(root, artifact["path"])
-            if file.stat().st_size == 0 or file.stat().st_size != artifact["size_bytes"] or digest(file) != artifact["sha256"]:
+            if (
+                file.stat().st_size == 0
+                or file.stat().st_size != artifact["size_bytes"]
+                or digest(file) != artifact["sha256"]
+            ):
                 raise ValueError("Bundle checksum mismatch: " + artifact["path"])
             expected.add(artifact["path"])
         if set(item["roles"]) & IMAGE_ROLES:
@@ -148,8 +210,13 @@ def verify(directory, expected_manifest=None):
     actual_files = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     if actual_files != expected:
         raise ValueError("Bundle contains unlisted files")
-    return {"manifest_sha256": actual, "components": len(manifest["components"]), "files": len(expected) - 2,
-        "bytes_verified": True, "hardware_or_egress_acceptance": False}
+    return {
+        "manifest_sha256": actual,
+        "components": len(manifest["components"]),
+        "files": len(expected) - 2,
+        "bytes_verified": True,
+        "hardware_or_egress_acceptance": False,
+    }
 
 
 def import_images(directory, expected_manifest, override_path):
@@ -166,33 +233,63 @@ def import_images(directory, expected_manifest, override_path):
     images = {}
     for item in manifest["components"]:
         if set(item["roles"]) & IMAGE_ROLES:
-            subprocess.run(["docker", "load", "--input", str(inside(root, item["files"][0]["path"]))], check=True)
-            loaded = json.loads(subprocess.check_output(["docker", "image", "inspect", item["image_id"]], text=True))
+            subprocess.run(
+                ["docker", "load", "--input", str(inside(root, item["files"][0]["path"]))],
+                check=True,
+            )
+            loaded = json.loads(
+                subprocess.check_output(["docker", "image", "inspect", item["image_id"]], text=True)
+            )
             if len(loaded) != 1 or loaded[0]["Id"] != item["image_id"]:
                 raise ValueError("Imported image identity mismatch")
             images.update({role: item["image_id"] for role in set(item["roles"]) & IMAGE_ROLES})
     # Docker save/load can lose repository digests. Exact local image IDs avoid
     # a hidden pull during offline startup. Provider runtimes remain explicitly
     # configured by the operator for their model/GPU; no guessed launch command.
-    mapping = {"backend": "backend", "frontend": "frontend", "db": "postgres", "redis": "redis", "edge": "caddy",
-        "migrate": "backend", "worker": "backend", "outbox": "backend", "maintenance": "backend"}
-    services = {service: {"image": images[role], "pull_policy": "never"} for service, role in mapping.items()}
+    mapping = {
+        "backend": "backend",
+        "frontend": "frontend",
+        "db": "postgres",
+        "redis": "redis",
+        "edge": "caddy",
+        "migrate": "backend",
+        "worker": "backend",
+        "outbox": "backend",
+        "maintenance": "backend",
+    }
+    services = {
+        service: {"image": images[role], "pull_policy": "never"}
+        for service, role in mapping.items()
+    }
     with destination.open("x", encoding="utf-8") as stream:
         json.dump({"services": services}, stream, indent=2)
-    return result | {"compose_override": str(destination), "model_runtimes": {role: images[role] for role in ("text_runtime", "embedding_runtime", "image_runtime")}}
+    return result | {
+        "compose_override": str(destination),
+        "model_runtimes": {
+            role: images[role] for role in ("text_runtime", "embedding_runtime", "image_runtime")
+        },
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    create = sub.add_parser("assemble"); create.add_argument("--spec", required=True); create.add_argument("--destination", required=True)
+    create = sub.add_parser("assemble")
+    create.add_argument("--spec", required=True)
+    create.add_argument("--destination", required=True)
     for command in ("verify", "import-images"):
-        child = sub.add_parser(command); child.add_argument("--directory", required=True); child.add_argument("--manifest-sha256", required=command == "import-images")
-        if command == "import-images": child.add_argument("--compose-override", required=True)
+        child = sub.add_parser(command)
+        child.add_argument("--directory", required=True)
+        child.add_argument("--manifest-sha256", required=command == "import-images")
+        if command == "import-images":
+            child.add_argument("--compose-override", required=True)
     args = parser.parse_args()
-    if args.command == "assemble": result = assemble(args.spec, args.destination)
-    elif args.command == "verify": result = verify(args.directory, args.manifest_sha256)
-    else: result = import_images(args.directory, args.manifest_sha256, args.compose_override)
+    if args.command == "assemble":
+        result = assemble(args.spec, args.destination)
+    elif args.command == "verify":
+        result = verify(args.directory, args.manifest_sha256)
+    else:
+        result = import_images(args.directory, args.manifest_sha256, args.compose_override)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

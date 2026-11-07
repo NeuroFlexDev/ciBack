@@ -1,5 +1,4 @@
 from __future__ import annotations
-from app.ai import control as ai_control
 
 import inspect
 import json
@@ -7,21 +6,21 @@ import logging
 import re
 from collections.abc import Callable
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy.orm import Session
 
+from app.ai import control as ai_control
+from app.ai import gateway
 from app.services.external_sources import aggregated_search
 from app.services.feedback_service import get_feedback_summary
 from app.services.gigachat_service import get_gigachat_client
 from app.services.hf_infer_service import get_hf_client
 from app.services.llm_types import LLMClient
-from app.ai import gateway
 
-
-from pathlib import Path
 env = Environment(loader=FileSystemLoader(Path(__file__).resolve().parents[1] / "prompts"))
 logger = logging.getLogger(__name__)
 
@@ -53,24 +52,28 @@ _JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n(.*)\r?\n```\Z", re.IGNORECA
 @lru_cache(maxsize=128)
 def get_cached_external_context(query: str, lang: str = "ru") -> str:
     from app.core.config import settings
+
     if ai_control.policy()["local_only"]:
         return ""
     try:
         results = aggregated_search(query=query, source="all", lang=lang)
         return "\n\n".join(results)
     except Exception as exc:
-        logger.warning(
-            "External context fetch failed error=%s", exc.__class__.__name__
-        )
+        logger.warning("External context fetch failed error=%s", exc.__class__.__name__)
         return ""
 
 
 def render_prompt(template_name: str, **kwargs: Any) -> str:
     """Render a configured Jinja prompt template."""
     template = env.get_template(template_name)
-    from app.services.organization_ai_context import context_text
     from app.services.business_service import position_prompt
-    return template.render(**kwargs) + context_text(kwargs.get("organization_context")) + position_prompt(kwargs.get("position_context"))
+    from app.services.organization_ai_context import context_text
+
+    return (
+        template.render(**kwargs)
+        + context_text(kwargs.get("organization_context"))
+        + position_prompt(kwargs.get("position_context"))
+    )
 
 
 def agent_messages(prompt: str, *, expect_json: bool, repair_feedback: str = "") -> list[dict]:
@@ -81,10 +84,13 @@ def agent_messages(prompt: str, *, expect_json: bool, repair_feedback: str = "")
         "In source_refs return ONLY source ID strings; the server attaches immutable source objects. "
         "Keep all other fields exactly as specified. Output valid JSON only."
         " All logical IDs use ASCII lowercase Latin slugs; copy existing IDs verbatim."
-        if expect_json else "You are Lernium's learning assistant. Preserve dialogue context."
+        if expect_json
+        else "You are Lernium's learning assistant. Preserve dialogue context."
     )
     if repair_feedback:
-        system += "\nThe previous response failed validation. Correct these errors: " + repair_feedback
+        system += (
+            "\nThe previous response failed validation. Correct these errors: " + repair_feedback
+        )
     return [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
 
 
@@ -106,9 +112,7 @@ def _call_factory(factory: Callable[..., Any], model: str | None) -> Any:
             try:
                 signature.bind()
             except TypeError as exc:
-                raise TypeError(
-                    "LLM factory must accept either model or no arguments"
-                ) from exc
+                raise TypeError("LLM factory must accept either model or no arguments") from exc
             return factory()
         return factory(model=model)
     return factory(model)
@@ -131,9 +135,7 @@ def _get_factory(engine: str, resolved_engine: str) -> Callable[..., Any] | None
     return SUPPORTED_ENGINES.get(resolved_engine)
 
 
-def _create_client(
-    factory: Callable[..., Any], model: str | None
-) -> tuple[LLMClient, str | None]:
+def _create_client(factory: Callable[..., Any], model: str | None) -> tuple[LLMClient, str | None]:
     created = _call_factory(factory, model)
     if isinstance(created, tuple):
         if len(created) != 2:
@@ -198,7 +200,10 @@ def generate_from_prompt(
     resolved_engine = ENGINE_ALIASES.get(engine, engine)
     factory = _get_factory(engine, resolved_engine)
     from app.core.config import settings
-    use_vsellm = engine == "vsellm" or (engine == DEFAULT_ENGINE and (gateway.configured() or settings.ENV != "test"))
+
+    use_vsellm = engine == "vsellm" or (
+        engine == DEFAULT_ENGINE and (gateway.configured() or settings.ENV != "test")
+    )
     if ai_control.policy()["local_only"]:
         use_vsellm = True
     if factory is None and not use_vsellm:
@@ -208,9 +213,7 @@ def generate_from_prompt(
         if include_external_context:
             context_query = kwargs.get("course_name") or kwargs.get("lesson_title")
             kwargs["external_context"] = (
-                get_cached_external_context(context_query, lang=lang)
-                if context_query
-                else ""
+                get_cached_external_context(context_query, lang=lang) if context_query else ""
             )
         else:
             kwargs["external_context"] = ""
@@ -226,10 +229,15 @@ def generate_from_prompt(
         raise HTTPException(400, "Нужно передать template_name или prompt")
 
     if use_vsellm:
-        response = gateway.invoke_messages(agent_role, agent_messages(final_prompt,
-            expect_json=expect_json, repair_feedback=repair_feedback),
-            model=model, max_tokens=max_tokens, json_mode=expect_json, fallback=fallback_model,
-            **({"provider": provider} if provider else {}))
+        response = gateway.invoke_messages(
+            agent_role,
+            agent_messages(final_prompt, expect_json=expect_json, repair_feedback=repair_feedback),
+            model=model,
+            max_tokens=max_tokens,
+            json_mode=expect_json,
+            fallback=fallback_model,
+            **({"provider": provider} if provider else {}),
+        )
         try:
             parsed = _json_object(response["text"]) if expect_json else {"text": response["text"]}
         except HTTPException as exc:

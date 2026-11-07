@@ -1,5 +1,6 @@
-from fastapi.testclient import TestClient
 import importlib
+
+from fastapi.testclient import TestClient
 
 app_mod = importlib.import_module("main")
 client = TestClient(app_mod.app)
@@ -22,4 +23,3 @@ def test_readiness(client):
     body = r.json()
     assert body.get("ok") is True
     assert body.get("db") == "up"
-    

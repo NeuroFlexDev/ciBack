@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
 
 from app.models.course import Course
-from app.services.course_access import course_access_filter
 from app.models.course_generation_settings import CourseGenerationSettings
+from app.services.course_access import course_access_filter
 
 
 class CourseGenerationSettingsRepository:

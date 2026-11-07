@@ -7,9 +7,8 @@ Create Date: 2026-07-31
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260731_0006"
 down_revision: str | None = "20260729_0005"
@@ -34,9 +33,7 @@ def upgrade() -> None:
 
     with op.batch_alter_table("courses") as batch_op:
         batch_op.alter_column("name", existing_type=sa.String(), nullable=True)
-        batch_op.alter_column(
-            "status", existing_type=sa.String(length=32), nullable=False
-        )
+        batch_op.alter_column("status", existing_type=sa.String(length=32), nullable=False)
         batch_op.alter_column("created_at", existing_type=sa.DateTime(), nullable=False)
         batch_op.alter_column("updated_at", existing_type=sa.DateTime(), nullable=False)
         batch_op.alter_column("is_deleted", existing_type=sa.Boolean(), nullable=False)
@@ -48,9 +45,7 @@ def upgrade() -> None:
             "ck_courses_non_draft_name", "status = 'draft' OR name IS NOT NULL"
         )
         batch_op.create_index("ix_courses_status", ["status"], unique=False)
-        batch_op.create_index(
-            "ix_courses_owner_status", ["owner_id", "status"], unique=False
-        )
+        batch_op.create_index("ix_courses_owner_status", ["owner_id", "status"], unique=False)
 
 
 def downgrade() -> None:

@@ -1,11 +1,10 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import JSON, CheckConstraint, Column, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.database.db import Base
 from app.models.base import BaseModelMixin
 from app.models.domain_enums import ApprovalDecision
-
 
 JSON_PAYLOAD = JSON().with_variant(JSONB, "postgresql")
 
@@ -28,9 +27,7 @@ class Approval(Base, BaseModelMixin):
     )
     reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     diff = Column(JSON_PAYLOAD, nullable=False, default=dict)
-    decision = Column(
-        String(32), nullable=False, default=ApprovalDecision.PENDING.value
-    )
+    decision = Column(String(32), nullable=False, default=ApprovalDecision.PENDING.value)
     comment = Column(Text, nullable=True)
 
     course_graph = relationship("CourseGraph", back_populates="approvals")

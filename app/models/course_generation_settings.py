@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Column,
@@ -6,7 +7,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    JSON,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship

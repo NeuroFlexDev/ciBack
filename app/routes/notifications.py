@@ -1,20 +1,24 @@
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+
 from app.database.db import get_db
-from app.models.notifications import UserNotification
 from app.models.integrations import MobilePushPreference
+from app.models.notifications import UserNotification
 from app.services.auth_service import get_current_user
 
 router = APIRouter(prefix="/notifications")
 
 
 def inbox(db, user):
-    return db.query(UserNotification).filter_by(user_id=user.id, organization_id=user.organization_id)
+    return db.query(UserNotification).filter_by(
+        user_id=user.id, organization_id=user.organization_id
+    )
 
 
 class Preferences(BaseModel):
@@ -47,13 +51,30 @@ class ReadAll(BaseModel):
 
 
 def serialize(row):
-    return {key: getattr(row, key) for key in ("id", "category", "title", "body", "resource_type", "resource_id", "created_at", "read_at")}
+    return {
+        key: getattr(row, key)
+        for key in (
+            "id",
+            "category",
+            "title",
+            "body",
+            "resource_type",
+            "resource_id",
+            "created_at",
+            "read_at",
+        )
+    }
 
 
 @router.get("")
-def list_notifications(before_id: int | None = Query(None, ge=1), limit: int = Query(30, ge=1, le=100),
-                       unread: bool = False, category: Literal["assignment", "deadline", "result", "review", "generation"] | None = None,
-                       db: Session = Depends(get_db), user=Depends(get_current_user)):
+def list_notifications(
+    before_id: int | None = Query(None, ge=1),
+    limit: int = Query(30, ge=1, le=100),
+    unread: bool = False,
+    category: Literal["assignment", "deadline", "result", "review", "generation"] | None = None,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     base = inbox(db, user)
     unread_count = base.filter(UserNotification.read_at.is_(None)).count()
     latest_id = base.with_entities(func.max(UserNotification.id)).scalar() or 0
@@ -65,13 +86,21 @@ def list_notifications(before_id: int | None = Query(None, ge=1), limit: int = Q
     if category:
         query = query.filter_by(category=category)
     rows = query.order_by(UserNotification.id.desc()).limit(limit + 1).all()
-    return {"items": [serialize(r) for r in rows[:limit]], "unread_count": unread_count,
-            "latest_id": latest_id, "next_cursor": rows[limit - 1].id if len(rows) > limit else None}
+    return {
+        "items": [serialize(r) for r in rows[:limit]],
+        "unread_count": unread_count,
+        "latest_id": latest_id,
+        "next_cursor": rows[limit - 1].id if len(rows) > limit else None,
+    }
 
 
 @router.post("/read-all")
 def mark_all(payload: ReadAll, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    count = inbox(db, user).filter(UserNotification.id <= payload.through_id, UserNotification.read_at.is_(None)).update({"read_at": datetime.utcnow()}, synchronize_session=False)
+    count = (
+        inbox(db, user)
+        .filter(UserNotification.id <= payload.through_id, UserNotification.read_at.is_(None))
+        .update({"read_at": datetime.utcnow()}, synchronize_session=False)
+    )
     db.commit()
     return {"updated": count}
 
@@ -83,9 +112,12 @@ def get_preferences(db: Session = Depends(get_db), user=Depends(get_current_user
 
 
 @router.put("/preferences", response_model=Preferences)
-def put_preferences(payload: Preferences, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def put_preferences(
+    payload: Preferences, db: Session = Depends(get_db), user=Depends(get_current_user)
+):
     # Lock the principal to serialize concurrent first-time preference creation.
     from app.models.user import User
+
     db.query(User).filter_by(id=user.id).with_for_update().one()
     row = db.get(MobilePushPreference, user.id)
     if row is None:
@@ -98,7 +130,9 @@ def put_preferences(payload: Preferences, db: Session = Depends(get_db), user=De
 
 
 @router.get("/{notification_id}")
-def get_notification(notification_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def get_notification(
+    notification_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)
+):
     row = inbox(db, user).filter_by(id=notification_id).first()
     if row is None:
         raise HTTPException(404, "Уведомление недоступно")

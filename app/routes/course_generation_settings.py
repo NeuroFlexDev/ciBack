@@ -12,7 +12,6 @@ from app.services.course_generation_settings_service import (
     CourseGenerationSettingsService,
 )
 
-
 router = APIRouter(prefix="/courses")
 
 
@@ -38,6 +37,4 @@ def put_generation_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return CourseGenerationSettingsService.upsert(
-        db, course_id, current_user.id, payload
-    )
+    return CourseGenerationSettingsService.upsert(db, course_id, current_user.id, payload)

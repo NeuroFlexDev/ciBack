@@ -1,4 +1,5 @@
 """Response schemas for the native learner pilot API."""
+
 from datetime import datetime
 from typing import Any
 

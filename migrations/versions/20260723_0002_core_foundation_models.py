@@ -7,10 +7,9 @@ Create Date: 2026-07-23
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "20260723_0002"
 down_revision: str | None = "20260723_0001"
@@ -48,24 +47,18 @@ def upgrade() -> None:
         sa.Column("mime_type", sa.String(length=255), nullable=False),
         sa.Column("size_bytes", sa.BigInteger(), nullable=False),
         sa.Column("processing_error", sa.Text(), nullable=True),
-        sa.CheckConstraint(
-            "size_bytes >= 0", name="ck_documents_size_nonnegative"
-        ),
+        sa.CheckConstraint("size_bytes >= 0", name="ck_documents_size_nonnegative"),
         sa.CheckConstraint(
             "status IN ('uploaded', 'queued', 'processing', 'indexed', 'failed', 'archived')",
             name="ck_documents_status",
         ),
         sa.CheckConstraint("version > 0", name="ck_documents_version_positive"),
-        sa.ForeignKeyConstraint(
-            ["course_id"], ["courses.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "version", name="uq_documents_id_version"),
     )
-    op.create_index(
-        "ix_documents_content_hash", "documents", ["content_hash"], unique=False
-    )
+    op.create_index("ix_documents_content_hash", "documents", ["content_hash"], unique=False)
     op.create_index("ix_documents_course_id", "documents", ["course_id"], unique=False)
     op.create_index("ix_documents_id", "documents", ["id"], unique=False)
     op.create_index(
@@ -90,27 +83,19 @@ def upgrade() -> None:
             name="ck_course_graphs_status",
         ),
         sa.CheckConstraint("version > 0", name="ck_course_graphs_version_positive"),
-        sa.ForeignKeyConstraint(
-            ["course_id"], ["courses.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["created_by"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "course_id", "version", name="uq_course_graphs_course_version"
-        ),
+        sa.UniqueConstraint("course_id", "version", name="uq_course_graphs_course_version"),
     )
-    op.create_index(
-        "ix_course_graphs_course_id", "course_graphs", ["course_id"], unique=False
-    )
+    op.create_index("ix_course_graphs_course_id", "course_graphs", ["course_id"], unique=False)
     op.create_index(
         "ix_course_graphs_course_status",
         "course_graphs",
         ["course_id", "status"],
         unique=False,
     )
-    op.create_index(
-        "ix_course_graphs_created_by", "course_graphs", ["created_by"], unique=False
-    )
+    op.create_index("ix_course_graphs_created_by", "course_graphs", ["created_by"], unique=False)
     op.create_index("ix_course_graphs_id", "course_graphs", ["id"], unique=False)
 
     op.create_table(
@@ -128,12 +113,8 @@ def upgrade() -> None:
             "document_version > 0",
             name="ck_document_chunks_document_version_positive",
         ),
-        sa.CheckConstraint(
-            "chunk_index >= 0", name="ck_document_chunks_index_nonnegative"
-        ),
-        sa.CheckConstraint(
-            "page IS NULL OR page > 0", name="ck_document_chunks_page_positive"
-        ),
+        sa.CheckConstraint("chunk_index >= 0", name="ck_document_chunks_index_nonnegative"),
+        sa.CheckConstraint("page IS NULL OR page > 0", name="ck_document_chunks_page_positive"),
         sa.ForeignKeyConstraint(
             ["document_id", "document_version"],
             ["documents.id", "documents.version"],
@@ -165,17 +146,13 @@ def upgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
-        batch_op.create_index(
-            "ix_courses_current_graph_id", ["current_graph_id"], unique=False
-        )
+        batch_op.create_index("ix_courses_current_graph_id", ["current_graph_id"], unique=False)
 
 
 def downgrade() -> None:
     with op.batch_alter_table("courses") as batch_op:
         batch_op.drop_index("ix_courses_current_graph_id")
-        batch_op.drop_constraint(
-            "fk_courses_current_graph_id", type_="foreignkey"
-        )
+        batch_op.drop_constraint("fk_courses_current_graph_id", type_="foreignkey")
         batch_op.drop_column("current_graph_id")
 
     op.drop_index("ix_document_chunks_document_version", table_name="document_chunks")

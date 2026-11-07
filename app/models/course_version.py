@@ -1,7 +1,18 @@
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModelMixin
+
 from app.database.db import Base
+from app.models.base import BaseModelMixin
 
 
 class CourseVersion(Base, BaseModelMixin):
@@ -9,7 +20,10 @@ class CourseVersion(Base, BaseModelMixin):
     __table_args__ = (
         UniqueConstraint("course_id", "revision", name="uq_course_versions_course_revision"),
         CheckConstraint("revision > 0", name="ck_course_versions_revision_positive"),
-        CheckConstraint("publication_status IN ('draft', 'published')", name="ck_course_versions_publication_status"),
+        CheckConstraint(
+            "publication_status IN ('draft', 'published')",
+            name="ck_course_versions_publication_status",
+        ),
     )
 
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False, index=True)

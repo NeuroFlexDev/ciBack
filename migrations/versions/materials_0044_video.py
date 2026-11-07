@@ -1,6 +1,7 @@
 """Keep filenames and duration for immutable course media."""
-from alembic import op
+
 import sqlalchemy as sa
+from alembic import op
 
 revision = "materials_0044"
 down_revision = "mobile_0043"

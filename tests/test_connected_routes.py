@@ -44,8 +44,14 @@ def test_graph_only_exposes_owned_course(client, db_session, auth_user, auth_hea
     owned = make_course(db_session, owner_id=auth_user.id)
     foreign = make_course(db_session, owner_id=None)
 
-    assert client.get("/api/graph", params={"course_id": owned.id}, headers=auth_headers).status_code == 200
-    assert client.get("/api/graph", params={"course_id": foreign.id}, headers=auth_headers).status_code == 404
+    assert (
+        client.get("/api/graph", params={"course_id": owned.id}, headers=auth_headers).status_code
+        == 200
+    )
+    assert (
+        client.get("/api/graph", params={"course_id": foreign.id}, headers=auth_headers).status_code
+        == 404
+    )
 
 
 def test_search_receives_only_owned_lesson_ids(
@@ -99,9 +105,7 @@ def test_feedback_rejects_foreign_lesson(client, db_session, auth_headers):
     assert db_session.query(Feedback).count() == 0
 
 
-def test_agent_router_returns_not_found_without_calling_external_services(
-    client, auth_headers
-):
+def test_agent_router_returns_not_found_without_calling_external_services(client, auth_headers):
     response = client.get(
         "/api/agent/improve-theory",
         params={"lesson_id": 999999, "goal": "clarify"},

@@ -62,6 +62,4 @@ class RetrievalService:
             if len(citations) == limit:
                 break
 
-        return RetrievalResponse(
-            query=query, course_id=course_id, citations=citations
-        )
+        return RetrievalResponse(query=query, course_id=course_id, citations=citations)

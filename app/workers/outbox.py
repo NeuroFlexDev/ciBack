@@ -1,11 +1,13 @@
 """Run separately from API and generation: python -m app.workers.outbox."""
+
 import logging
 import signal
-import time
 import tempfile
+import time
 from pathlib import Path
-from app.database.db import SessionLocal
+
 import app.models  # Register all models without creating tables.
+from app.database.db import SessionLocal
 from app.services.outbox_service import process_one
 
 running = True
@@ -27,6 +29,7 @@ def main():
             with SessionLocal() as db:
                 if time.time() - last_reminder_scan >= 60:
                     from app.services.mobile_push import enqueue_due_reminders
+
                     scan = enqueue_due_reminders(db, after_id=reminder_cursor)
                     reminder_cursor = scan["next_cursor"] if scan["more"] else 0
                     db.commit()
@@ -35,7 +38,9 @@ def main():
             if not processed:
                 time.sleep(2)
         except Exception:
-            logging.getLogger(__name__).error("Outbox worker iteration failed; retrying in 5 seconds")
+            logging.getLogger(__name__).error(
+                "Outbox worker iteration failed; retrying in 5 seconds"
+            )
             time.sleep(5)
 
 

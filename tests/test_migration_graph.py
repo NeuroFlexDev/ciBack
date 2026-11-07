@@ -2,11 +2,10 @@ import json
 import os
 import subprocess
 import sys
-import pytest
 
+import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-
 
 BASE_TABLES = {
     "approvals",
@@ -37,7 +36,11 @@ BASE_TABLES = {
     "users",
 }
 EXPECTED_TABLES = BASE_TABLES | {
-    "ai_calls", "ai_response_cache", "chat_memory", "chunk_embeddings", "canvas_workspaces",
+    "ai_calls",
+    "ai_response_cache",
+    "chat_memory",
+    "chunk_embeddings",
+    "canvas_workspaces",
     "agent_artifacts",
     "course_source_links",
     "course_update_proposals",
@@ -50,23 +53,70 @@ EXPECTED_TABLES = BASE_TABLES | {
 }
 
 LEARNING_TABLES = {
-    "organization_learning_settings", "learning_role_grants", "learning_departments", "learning_people",
-    "learning_groups", "learning_group_members", "published_learning_content", "learning_assessment_definitions",
-    "learning_assignments", "learning_group_enrollments", "learning_responses", "learning_grade_events",
-    "learning_programs", "learning_program_enrollments", "organization_ownership_transfers", "learning_publication_approvals",
+    "organization_learning_settings",
+    "learning_role_grants",
+    "learning_departments",
+    "learning_people",
+    "learning_groups",
+    "learning_group_members",
+    "published_learning_content",
+    "learning_assessment_definitions",
+    "learning_assignments",
+    "learning_group_enrollments",
+    "learning_responses",
+    "learning_grade_events",
+    "learning_programs",
+    "learning_program_enrollments",
+    "organization_ownership_transfers",
+    "learning_publication_approvals",
 }
-MATERIAL_TABLES = {"organization_material_policy", "scoped_ai_usage", "course_images", "learner_assistant_messages"}
+MATERIAL_TABLES = {
+    "organization_material_policy",
+    "scoped_ai_usage",
+    "course_images",
+    "learner_assistant_messages",
+}
 INTEGRATION_TABLES = {
-    "outbound_messages", "integration_keys", "integration_operations", "webhook_endpoints",
-    "oidc_providers", "external_identities", "oidc_sessions", "billing_accounts", "billing_invoices",
-    "payment_events", "lti_platforms", "lti_resources", "lti_identities", "lti_sessions", "lti_grade_bindings",
+    "outbound_messages",
+    "integration_keys",
+    "integration_operations",
+    "webhook_endpoints",
+    "oidc_providers",
+    "external_identities",
+    "oidc_sessions",
+    "billing_accounts",
+    "billing_invoices",
+    "payment_events",
+    "lti_platforms",
+    "lti_resources",
+    "lti_identities",
+    "lti_sessions",
+    "lti_grade_bindings",
 }
 PRE_INTEGRATION_TABLES = EXPECTED_TABLES | LEARNING_TABLES | MATERIAL_TABLES
 AI_RESOURCE_TABLES = {"ai_resource_mutex", "ai_resource_usage", "ai_thread_references"}
-EXPECTED_TABLES = PRE_INTEGRATION_TABLES | INTEGRATION_TABLES | AI_RESOURCE_TABLES | {
-    "user_notifications",
-    "email_bindings", "ai_control", "business_positions", "support_access_grants", "user_mfa", "mfa_recovery_codes", "mfa_challenges", "published_source_files", "mobile_sessions", "mobile_refresh_tokens", "mobile_push_devices", "mobile_push_preferences", "learning_progress_operations",
-}
+EXPECTED_TABLES = (
+    PRE_INTEGRATION_TABLES
+    | INTEGRATION_TABLES
+    | AI_RESOURCE_TABLES
+    | {
+        "user_notifications",
+        "email_bindings",
+        "ai_control",
+        "business_positions",
+        "support_access_grants",
+        "user_mfa",
+        "mfa_recovery_codes",
+        "mfa_challenges",
+        "published_source_files",
+        "mobile_sessions",
+        "mobile_refresh_tokens",
+        "mobile_push_devices",
+        "mobile_push_preferences",
+        "learning_progress_operations",
+    }
+)
+
 
 def test_alembic_revision_graph_has_one_connected_head():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
@@ -87,12 +137,18 @@ def test_media_upgrade_accepts_existing_dev_and_main_schemas(tmp_path, starting_
         JWT_SECRET="test-only-jwt-secret-at-least-32-bytes",
     )
     for arguments in (
-        ("upgrade", starting_revision), ("upgrade", "head"), ("check",),
-        ("downgrade", starting_revision), ("upgrade", "head"), ("check",),
+        ("upgrade", starting_revision),
+        ("upgrade", "head"),
+        ("check",),
+        ("downgrade", starting_revision),
+        ("upgrade", "head"),
+        ("check",),
     ):
         result = subprocess.run(
             [sys.executable, "-m", "alembic", *arguments],
-            capture_output=True, text=True, env=env,
+            capture_output=True,
+            text=True,
+            env=env,
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
@@ -183,8 +239,9 @@ def test_migrations_upgrade_check_and_downgrade(tmp_path):
         f"engine = create_engine({env['DATABASE_URL']!r}); "
         "print(json.dumps([c['name'] for c in inspect(engine).get_columns('ai_calls')]))"
     )
-    columns = subprocess.run([sys.executable, "-c", column_code], check=True,
-                             capture_output=True, text=True, env=env)
+    columns = subprocess.run(
+        [sys.executable, "-c", column_code], check=True, capture_output=True, text=True, env=env
+    )
     assert "routing" in json.loads(columns.stdout)
 
     for arguments in (("upgrade", "head"), ("check",), ("downgrade", "base")):

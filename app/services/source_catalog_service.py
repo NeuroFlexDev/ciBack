@@ -19,7 +19,10 @@ def build_source_catalog(documents: Iterable[Any], *, max_chars: int) -> list[di
 
     queues: list[deque[tuple[Any, Any]]] = []
     for document in sorted(documents, key=lambda item: (item.id, item.version)):
-        chunks = sorted((chunk for chunk in document.chunks if not getattr(chunk, "is_deleted", False)), key=lambda item: item.chunk_index)
+        chunks = sorted(
+            (chunk for chunk in document.chunks if not getattr(chunk, "is_deleted", False)),
+            key=lambda item: item.chunk_index,
+        )
         if chunks:
             queues.append(deque((document, chunk) for chunk in chunks))
 
@@ -55,8 +58,18 @@ def build_source_catalog(documents: Iterable[Any], *, max_chars: int) -> list[di
             )
             if getattr(document, "source_type", None) == "web_search":
                 provenance = chunk.metadata_json or {}
-                result[-1].update({key: provenance.get(key) for key in (
-                    "source_type", "source_url", "source_title", "retrieved_at", "evidence_kind")})
+                result[-1].update(
+                    {
+                        key: provenance.get(key)
+                        for key in (
+                            "source_type",
+                            "source_url",
+                            "source_title",
+                            "retrieved_at",
+                            "evidence_kind",
+                        )
+                    }
+                )
             remaining -= len(included)
             if queue:
                 next_round.append(queue)
@@ -101,9 +114,7 @@ def validate_source_refs(payload: Any, allowed_ref_ids: set[str]) -> set[str]:
     return used
 
 
-def graph_source_links(
-    nodes: list[dict], source_catalog: list[dict]
-) -> list[dict]:
+def graph_source_links(nodes: list[dict], source_catalog: list[dict]) -> list[dict]:
     by_ref = {item["id"]: item for item in source_catalog}
     links: list[dict] = []
     seen: set[tuple[str, str]] = set()

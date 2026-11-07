@@ -3,8 +3,11 @@
 Organization IDs are captured at admission, so moving a user cannot move spend.
 Content is deliberately absent from this audit ledger.
 """
+
 from datetime import datetime
+
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
+
 from app.database.db import Base
 
 

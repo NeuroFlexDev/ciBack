@@ -3,9 +3,9 @@
 Revision ID: competency_0036
 Revises: accounts_0035
 """
-from alembic import op
-import sqlalchemy as sa
 
+import sqlalchemy as sa
+from alembic import op
 
 revision = "competency_0036"
 down_revision = "accounts_0035"
@@ -42,7 +42,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("competencies") as batch:
         batch.drop_index("ix_competencies_role_id")
-        batch.drop_constraint(
-            "fk_competencies_role_id_business_positions", type_="foreignkey"
-        )
+        batch.drop_constraint("fk_competencies_role_id_business_positions", type_="foreignkey")
         batch.drop_column("role_id")

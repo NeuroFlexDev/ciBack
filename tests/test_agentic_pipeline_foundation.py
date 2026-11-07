@@ -1,14 +1,14 @@
-from pydantic import BaseModel
 import pytest
+from pydantic import BaseModel
 
+from app.core.security import hash_password
 from app.models.agent_artifact import AgentArtifact
-from app.models.document import Document, DocumentChunk
 from app.models.course_graph import CourseGraph
 from app.models.course_source_link import CourseSourceLink
 from app.models.course_update_proposal import CourseUpdateProposal
+from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
 from app.models.user import User
-from app.core.security import hash_password
 from app.services.agent_runtime import AgentRuntime
 from app.services.agentic_course_pipeline import AgenticCoursePipeline
 from app.services.course_update_service import CourseUpdateService
@@ -75,9 +75,7 @@ def test_agent_runtime_persists_and_reuses_typed_artifact(db_session, auth_user)
     )
 
 
-def test_source_catalog_is_round_robin_and_graph_refs_are_durable(
-    db_session, auth_user
-):
+def test_source_catalog_is_round_robin_and_graph_refs_are_durable(db_session, auth_user):
     course = make_course(db_session, owner_id=auth_user.id)
     documents = []
     for number in (1, 2):
@@ -133,7 +131,7 @@ def test_source_catalog_is_round_robin_and_graph_refs_are_durable(
 
 @pytest.mark.parametrize("invented_knowledge", [False, True])
 @pytest.mark.parametrize("web_enabled", [False, True])
-@pytest.mark.parametrize("regulation_mode", [None, 'test_only', 'test_and_practice'])
+@pytest.mark.parametrize("regulation_mode", [None, "test_only", "test_and_practice"])
 def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
     db_session, auth_user, invented_knowledge, web_enabled, regulation_mode, monkeypatch, tmp_path
 ):
@@ -159,21 +157,46 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
         "quote": "Operators must perform the safety check.",
     }
     if web_enabled:
-        from app.core.config import settings
         from app.ai import web_search
+        from app.core.config import settings
         from tests.test_async_generation_launch import _document
+
         original = _document(db_session, course, auth_user)
         source = build_source_catalog([original], max_chars=2000)[0]
         monkeypatch.setattr(settings, "WEB_SEARCH_ENABLED", True)
         monkeypatch.setattr(settings, "UPLOAD_DIR", tmp_path)
         monkeypatch.setattr(web_search, "configured", lambda: True)
+
         def native_response(_):
             text = "Operators must perform the safety check. [Manual]"
-            return web_search.parse_response({"status": "completed", "usage": {"input_tokens": 100, "output_tokens": 50},
-                "output": [{"type": "web_search_call", "status": "completed"},
-                    {"type": "message", "content": [{"type": "output_text", "text": text,
-                        "annotations": [{"type": "url_citation", "url": "https://example.com/safety",
-                            "title": "Public safety manual", "start_index": text.index("[Manual]"), "end_index": len(text)}]}]}]})
+            return web_search.parse_response(
+                {
+                    "status": "completed",
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "output": [
+                        {"type": "web_search_call", "status": "completed"},
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": text,
+                                    "annotations": [
+                                        {
+                                            "type": "url_citation",
+                                            "url": "https://example.com/safety",
+                                            "title": "Public safety manual",
+                                            "start_index": text.index("[Manual]"),
+                                            "end_index": len(text),
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            )
+
         monkeypatch.setattr(web_search, "search", native_response)
     ingestion = {
         "artifact_version": "1.0",
@@ -317,43 +340,53 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
             }
         ],
     }
-    rubric = lambda rubric_id, criterion_id: {
-        "id": rubric_id,
-        "title": "Safety rubric",
-        "objective_ids": ["obj:apply_check"],
-        "competency_ids": ["cmp:safety"],
-        "source_ref_ids": [source["id"]],
-        "criteria": [
-            {
-                "id": criterion_id,
-                "title": "Correctness",
-                "description": "Correct execution",
-                "weight": 1.0,
-                "levels": [
-                    {"id": "level:not_met", "title": "Not met", "description": "Incorrect", "score": 0},
-                    {"id": "level:met", "title": "Met", "description": "Correct", "score": 1},
-                ],
-            }
-        ],
-        "passing_score": 1,
-    }
-    question = lambda question_id, scope, target_id: {
-        "id": question_id,
-        "kind": "single_choice",
-        "scope": scope,
-        "target_id": target_id,
-        "prompt": "What is required?",
-        "options": [
-            {"id": f"option:{scope}_check", "text": "Perform the check"},
-            {"id": f"option:{scope}_skip", "text": "Skip it"},
-        ],
-        "correct_option_ids": [f"option:{scope}_check"],
-        "expected_answer": None,
-        "explanation": "The policy requires the check.",
-        "objective_ids": ["obj:apply_check"],
-        "competency_ids": ["cmp:safety"],
-        "source_ref_ids": [source["id"]],
-    }
+
+    def rubric(rubric_id, criterion_id):
+        return {
+            "id": rubric_id,
+            "title": "Safety rubric",
+            "objective_ids": ["obj:apply_check"],
+            "competency_ids": ["cmp:safety"],
+            "source_ref_ids": [source["id"]],
+            "criteria": [
+                {
+                    "id": criterion_id,
+                    "title": "Correctness",
+                    "description": "Correct execution",
+                    "weight": 1.0,
+                    "levels": [
+                        {
+                            "id": "level:not_met",
+                            "title": "Not met",
+                            "description": "Incorrect",
+                            "score": 0,
+                        },
+                        {"id": "level:met", "title": "Met", "description": "Correct", "score": 1},
+                    ],
+                }
+            ],
+            "passing_score": 1,
+        }
+
+    def question(question_id, scope, target_id):
+        return {
+            "id": question_id,
+            "kind": "single_choice",
+            "scope": scope,
+            "target_id": target_id,
+            "prompt": "What is required?",
+            "options": [
+                {"id": f"option:{scope}_check", "text": "Perform the check"},
+                {"id": f"option:{scope}_skip", "text": "Skip it"},
+            ],
+            "correct_option_ids": [f"option:{scope}_check"],
+            "expected_answer": None,
+            "explanation": "The policy requires the check.",
+            "objective_ids": ["obj:apply_check"],
+            "competency_ids": ["cmp:safety"],
+            "source_ref_ids": [source["id"]],
+        }
+
     assessment = {
         "artifact_version": "1.0",
         "course_plan_id": "plan:safety",
@@ -420,17 +453,25 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
         "critic_qa_prompt.j2": qa,
     }
     if regulation_mode:
-        assessment['questions'] = [question(f'question:regulation_{i}', 'final', 'plan:safety') for i in range(5)]
-        if regulation_mode == 'test_only':
+        assessment["questions"] = [
+            question(f"question:regulation_{i}", "final", "plan:safety") for i in range(5)
+        ]
+        if regulation_mode == "test_only":
             assessment.update(practices=[], cases=[], rubrics=[])
     calls = []
 
     def generate(template_name, **kwargs):
         calls.append(template_name)
         import copy
+
         payload = copy.deepcopy(scripts[template_name])
         if web_enabled:
-            external = next(item for item in runtime.source_catalog.values() if item.get("source_type") == "web_search")
+            external = next(
+                item
+                for item in runtime.source_catalog.values()
+                if item.get("source_type") == "web_search"
+            )
+
             def add_evidence(value):
                 if isinstance(value, list):
                     for item in value:
@@ -443,14 +484,23 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
                             child.append(external["id"])
                         else:
                             add_evidence(child)
+
             add_evidence(payload)
             if template_name == "ingestion_agent_prompt.j2":
-                payload["documents"].append({"document_id": external["document_id"], "document_version": 1,
-                    "title": "External manual", "summary": "Public safety reference", "source_ref_ids": [external["id"]],
-                    "knowledge_item_ids": ["kn:safety_policy"]})
+                payload["documents"].append(
+                    {
+                        "document_id": external["document_id"],
+                        "document_version": 1,
+                        "title": "External manual",
+                        "summary": "Public safety reference",
+                        "source_ref_ids": [external["id"]],
+                        "knowledge_item_ids": ["kn:safety_policy"],
+                    }
+                )
         if invented_knowledge and template_name == "competency_mapper_prompt.j2":
             if calls.count(template_name) == 1:
                 import copy
+
                 invalid = copy.deepcopy(payload)
                 invalid["source_knowledge_item_ids"] = ["kn:invented_fact"]
                 invalid["knowledge"][0]["source_knowledge_item_ids"] = ["kn:invented_fact"]
@@ -501,24 +551,56 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
     assert sum(item["type"] == "lesson" for item in result.nodes) == 1
     assert sum(item["type"] == "test" for item in result.nodes) == (1 if regulation_mode else 2)
     if regulation_mode:
-        assert sum(len(item['questions']) for item in result.nodes if item['type'] == 'test') == 5
-        assert sum(len(item.get('practices', [])) + len(item.get('cases', [])) for item in result.nodes) == (0 if regulation_mode == 'test_only' else 2)
+        assert sum(len(item["questions"]) for item in result.nodes if item["type"] == "test") == 5
+        assert sum(
+            len(item.get("practices", [])) + len(item.get("cases", [])) for item in result.nodes
+        ) == (0 if regulation_mode == "test_only" else 2)
     assert db_session.query(AgentArtifact).filter(AgentArtifact.agent != "web_search").count() == 6
-    assert db_session.query(AgentArtifact).filter_by(agent="web_search").one().payload["status"] == ("completed" if web_enabled else "disabled")
+    assert db_session.query(AgentArtifact).filter_by(agent="web_search").one().payload[
+        "status"
+    ] == ("completed" if web_enabled else "disabled")
     if web_enabled:
+        from io import BytesIO
+
+        from pypdf import PdfReader
+
         from app.services.course_transfer import course_markdown
         from app.services.pdf_document import build_pdf
-        from io import BytesIO
-        from pypdf import PdfReader
+
         lesson = next(node for node in result.nodes if node["type"] == "lesson")
         assert "https://example.com/safety" in lesson["content"]
-        exported = {"course": {"title": "Safety", "description": "Public reference"},
-            "modules": [{"title": "Safety", "lessons": [{"title": "Safety check", "content": lesson["content"]}]}], "assessments": []}
+        exported = {
+            "course": {"title": "Safety", "description": "Public reference"},
+            "modules": [
+                {
+                    "title": "Safety",
+                    "lessons": [{"title": "Safety check", "content": lesson["content"]}],
+                }
+            ],
+            "assessments": [],
+        }
         assert b"https://example.com/safety" in course_markdown(exported, False)
-        pdf = PdfReader(BytesIO(build_pdf(exported, {}, {"revision": 1, "published_at": "2026-10-22",
-            "snapshot_sha256": "a" * 64, "includes_answer_keys": False}, {})))
-        assert any(str(annotation.get_object().get("/A", {}).get("/URI", "")) == "https://example.com/safety"
-            for page in pdf.pages for annotation in page.get("/Annots", []))
+        pdf = PdfReader(
+            BytesIO(
+                build_pdf(
+                    exported,
+                    {},
+                    {
+                        "revision": 1,
+                        "published_at": "2026-10-22",
+                        "snapshot_sha256": "a" * 64,
+                        "includes_answer_keys": False,
+                    },
+                    {},
+                )
+            )
+        )
+        assert any(
+            str(annotation.get_object().get("/A", {}).get("/URI", ""))
+            == "https://example.com/safety"
+            for page in pdf.pages
+            for annotation in page.get("/Annots", [])
+        )
 
 
 def test_agent_artifact_and_update_proposal_endpoints_are_owner_scoped(
@@ -562,23 +644,25 @@ def test_agent_artifact_and_update_proposal_endpoints_are_owner_scoped(
     db_session.add(foreign_run)
     db_session.commit()
 
-    artifacts = client.get(
-        f"/api/generation-runs/{run.id}/artifacts", headers=auth_headers
-    )
+    artifacts = client.get(f"/api/generation-runs/{run.id}/artifacts", headers=auth_headers)
     assert artifacts.status_code == 200
     assert artifacts.json()[0]["payload"] == {"ok": True}
-    assert client.get(
-        f"/api/generation-runs/{foreign_run.id}/artifacts", headers=auth_headers
-    ).status_code == 404
-
-    proposals = client.get(
-        f"/api/courses/{owned.id}/update-proposals", headers=auth_headers
+    assert (
+        client.get(
+            f"/api/generation-runs/{foreign_run.id}/artifacts", headers=auth_headers
+        ).status_code
+        == 404
     )
+
+    proposals = client.get(f"/api/courses/{owned.id}/update-proposals", headers=auth_headers)
     assert proposals.status_code == 200
     assert proposals.json()["items"] == []
-    assert client.get(
-        f"/api/courses/{foreign_course.id}/update-proposals", headers=auth_headers
-    ).status_code == 404
+    assert (
+        client.get(
+            f"/api/courses/{foreign_course.id}/update-proposals", headers=auth_headers
+        ).status_code
+        == 404
+    )
 
 
 def test_update_agent_proposes_diff_without_mutating_course(db_session, auth_user):
