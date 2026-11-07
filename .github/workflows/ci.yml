@@ -208,10 +208,57 @@ jobs:
           python -m alembic downgrade mobile_0043
           python -m alembic upgrade head
 
+  e2e:
+    name: PostgreSQL HTTP user journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: e2e
+          POSTGRES_PASSWORD: ci-e2e-only
+          POSTGRES_DB: e2e_bootstrap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U e2e -d e2e_bootstrap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      E2E_POSTGRES_DSN: postgresql+psycopg2://e2e:ci-e2e-only@localhost:5432/e2e_bootstrap
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install native Python dependency prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Prepare offline tokenizer
+        run: python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+      - name: Run HTTP journeys on migrated PostgreSQL
+        run: python -m pytest -c e2e/pytest.ini e2e -q --junitxml=lint-reports/e2e.xml
+      - name: Upload E2E results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-results
+          path: lint-reports/e2e.xml
+          if-no-files-found: warn
+
   image:
     name: Build and publish image
     if: github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
-    needs: [quality, lint, security]
+    needs: [quality, lint, security, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

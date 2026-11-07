@@ -7,6 +7,7 @@
 Динамическое распределение запросов и безопасное включение: [AI_ROUTING.md](AI_ROUTING.md).
 Результаты проверок: [AI_VALIDATION.md](AI_VALIDATION.md).
 Линтеры CI, локальный pre-commit и область проверки типов: [LINTING.md](LINTING.md).
+Сквозные HTTP-сценарии на PostgreSQL и локальный запуск: [e2e/README.md](e2e/README.md).
 
 ## Раздельные сервисы и B2B
 
