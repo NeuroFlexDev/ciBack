@@ -7,7 +7,7 @@ Operator candidate prices override this snapshot. No FX conversion or tools.
 """
 
 from app.ai import control as ai_control
-from app.core.config import AIRoutingCandidate, settings
+from app.core.config import AIRoutingCandidate
 
 SNAPSHOT = "2026-10-19"
 RATES = {

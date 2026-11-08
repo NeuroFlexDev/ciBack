@@ -10,6 +10,7 @@ from app.models.learning import LearningAssignment, LearningResponse, LearningRo
 from app.models.materials import LearnerAssistantMessage, ScopedAIUsage
 from app.models.user import User
 from app.services import learner_assistant_service
+from app.services.learner_assistant_service import AssistantMessage
 from app.services.learning_service import settings_for
 from tests.test_learning_runtime import assign, grant, headers, publish, world
 
@@ -56,8 +57,9 @@ def test_learner_result_is_withheld_after_access_changes_during_provider_wait(
             world["learner"],
             assignment["id"],
             lesson.id,
-            "Explain this lesson",
-            "revoked-request-123",
+            message=AssistantMessage(
+                question="Explain this lesson", request_id="revoked-request-123"
+            ),
         )
     assert denied.value.status_code == 403
     receipt = db_session.query(LearnerAssistantMessage).one()

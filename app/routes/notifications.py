@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -38,8 +39,8 @@ class Preferences(BaseModel):
     def valid_schedule(self):
         try:
             ZoneInfo(self.timezone)
-        except (ValueError, ZoneInfoNotFoundError):
-            raise ValueError("Укажите часовой пояс IANA")
+        except (ValueError, ZoneInfoNotFoundError) as _error_cause:
+            raise ValueError("Укажите часовой пояс IANA") from _error_cause
         if self.quiet_enabled and self.quiet_start == self.quiet_end:
             raise ValueError("Начало и конец тихих часов должны различаться")
         return self
@@ -66,31 +67,38 @@ def serialize(row):
     }
 
 
+@dataclass
+class NotificationFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    before_id: int | None = Query(None, ge=1)
+    limit: int = Query(30, ge=1, le=100)
+    unread: bool = False
+    category: Literal["assignment", "deadline", "result", "review", "generation"] | None = None
+
+
 @router.get("")
 def list_notifications(
-    before_id: int | None = Query(None, ge=1),
-    limit: int = Query(30, ge=1, le=100),
-    unread: bool = False,
-    category: Literal["assignment", "deadline", "result", "review", "generation"] | None = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
+    filters: NotificationFilters = Depends(),
 ):
     base = inbox(db, user)
     unread_count = base.filter(UserNotification.read_at.is_(None)).count()
     latest_id = base.with_entities(func.max(UserNotification.id)).scalar() or 0
     query = base
-    if before_id:
-        query = query.filter(UserNotification.id < before_id)
-    if unread:
+    if filters.before_id:
+        query = query.filter(UserNotification.id < filters.before_id)
+    if filters.unread:
         query = query.filter(UserNotification.read_at.is_(None))
-    if category:
-        query = query.filter_by(category=category)
-    rows = query.order_by(UserNotification.id.desc()).limit(limit + 1).all()
+    if filters.category:
+        query = query.filter_by(category=filters.category)
+    rows = query.order_by(UserNotification.id.desc()).limit(filters.limit + 1).all()
     return {
-        "items": [serialize(r) for r in rows[:limit]],
+        "items": [serialize(r) for r in rows[: filters.limit]],
         "unread_count": unread_count,
         "latest_id": latest_id,
-        "next_cursor": rows[limit - 1].id if len(rows) > limit else None,
+        "next_cursor": rows[filters.limit - 1].id if len(rows) > filters.limit else None,
     }
 
 

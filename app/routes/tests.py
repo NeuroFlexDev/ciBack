@@ -8,7 +8,7 @@ from app.models.test import Test
 from app.models.user import User
 from app.schemas.course_editor import OrderUpdate, TestCreateEditor, TestUpdateEditor
 from app.services.auth_service import get_current_user
-from app.services.course_editor_service import CourseEditorService
+from app.services.course_editor_service import CourseEditorService, ReorderTarget, TestContent
 
 router = APIRouter()
 
@@ -56,9 +56,7 @@ def add_test(
             current_user.id,
             module_id=module_id,
             course_id=None,
-            question=question,
-            answers=answers,
-            correct=correct,
+            test_content=TestContent(question=question, answers=answers, correct=correct),
         )
     )
 
@@ -77,9 +75,7 @@ def add_final_test(
             current_user.id,
             module_id=None,
             course_id=course_id,
-            question=question,
-            answers=answers,
-            correct=correct,
+            test_content=TestContent(question=question, answers=answers, correct=correct),
         )
     )
 
@@ -124,11 +120,13 @@ def reorder_tests(
     CourseEditorService._module(db, module_id, current_user.id, True)
     rows = CourseEditorService.reorder(
         db,
-        entity=Test,
-        parent_filter=(Test.module_id == module_id,),
         items=payload.items,
         owner_id=current_user.id,
-        snapshot=CourseEditorService._test_snapshot,
+        target=ReorderTarget(
+            entity=Test,
+            parent_filter=(Test.module_id == module_id,),
+            snapshot=CourseEditorService._test_snapshot,
+        ),
     )
     return [_out(x) for x in rows]
 

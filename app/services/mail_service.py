@@ -3,8 +3,10 @@
 import smtplib
 import ssl
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from typing import Any
 
 from app.core.config import settings
 from app.models.integrations import OutboundMessage
@@ -44,10 +46,21 @@ def send_account_mail(recipient: str, subject: str, text: str, message_id: str |
         smtp.send_message(message)
 
 
-def queue_mail(
-    db, recipient, subject, text, *, expires_at=None, deduplication_key=None, organization_id=None
-):
+@dataclass(frozen=True, kw_only=True)
+class MailDeliveryOptions:
+    """Parameters for queue_mail, preserving its original defaults."""
+
+    expires_at: Any = None
+    deduplication_key: Any = None
+    organization_id: Any = None
+
+
+def queue_mail(db, recipient, subject, text, *, delivery: MailDeliveryOptions | None = None):
     """Add within the caller's transaction. The durable worker owns delivery and retries."""
+    delivery = delivery or MailDeliveryOptions()
+    expires_at = delivery.expires_at
+    deduplication_key = delivery.deduplication_key
+    organization_id = delivery.organization_id
     if not configured():
         raise RuntimeError("Account mail is not configured")
     message_id = str(uuid.uuid4())
@@ -76,8 +89,10 @@ def queue_reset(db, recipient, url, token_hash, locale="ru"):
         recipient,
         subject,
         text,
-        expires_at=datetime.utcnow() + timedelta(minutes=30),
-        deduplication_key=f"reset:{token_hash}",
+        delivery=MailDeliveryOptions(
+            expires_at=datetime.utcnow() + timedelta(minutes=30),
+            deduplication_key=f"reset:{token_hash}",
+        ),
     )
 
 
@@ -89,5 +104,9 @@ def queue_invitation(db, recipient, url, organization_name, locale="ru"):
         subject = f"Лерниум — приглашение в {organization_name}"
         text = f"Вас пригласили в организацию «{organization_name}». Откройте ссылку в течение 7 дней:\n{url}\nЕсли вы не ожидали приглашения, свяжитесь с администратором."
     return queue_mail(
-        db, recipient, subject, text, expires_at=datetime.utcnow() + timedelta(days=7)
+        db,
+        recipient,
+        subject,
+        text,
+        delivery=MailDeliveryOptions(expires_at=datetime.utcnow() + timedelta(days=7)),
     )

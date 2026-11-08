@@ -12,7 +12,6 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 
 try:
     from pgvector.sqlalchemy import Vector

@@ -19,6 +19,7 @@ from app.models.user import User
 from app.services.integration_access import SCOPES, integration_owner, require_scope
 from app.services.integration_http import validate_endpoint
 from app.services.integration_secrets import seal, unseal
+from app.services.learning_service import IntegrationAssignment
 from app.services.organization_access import audit, lock_member, lock_org, member_ids
 from app.services.outbox_service import EVENT_TYPES
 from app.services.tenant_lifecycle import WEBHOOK_FIELDS, require_state, state_token
@@ -236,13 +237,13 @@ def create_webhook(
 ):
     try:
         validate_endpoint(payload.url)
-    except (ValueError, OSError):
-        raise HTTPException(422, "Укажите доступный HTTPS-адрес внешнего сервиса")
+    except (ValueError, OSError) as _error_cause:
+        raise HTTPException(422, "Укажите доступный HTTPS-адрес внешнего сервиса") from _error_cause
     secret = secrets.token_urlsafe(32)
     try:
         encrypted = seal(secret)
-    except RuntimeError:
-        raise HTTPException(503, "Оператор ещё не настроил шифрование интеграций")
+    except RuntimeError as _error_cause:
+        raise HTTPException(503, "Оператор ещё не настроил шифрование интеграций") from _error_cause
     row = WebhookEndpoint(
         organization_id=user.organization_id,
         url=payload.url,
@@ -267,8 +268,8 @@ def update_webhook(
     require_state(row, WEBHOOK_FIELDS, payload.expected_state)
     try:
         validate_endpoint(payload.url)
-    except (ValueError, OSError):
-        raise HTTPException(422, "Укажите доступный HTTPS-адрес внешнего сервиса")
+    except (ValueError, OSError) as _error_cause:
+        raise HTTPException(422, "Укажите доступный HTTPS-адрес внешнего сервиса") from _error_cause
     # Legacy messages referenced a mutable endpoint. Pin their original address
     # and signature key before editing so queued/retried events cannot move to
     # a different recipient. New messages already carry this encrypted snapshot.
@@ -516,11 +517,13 @@ def api_assign(
         }
     row, created = assign_from_integration(
         db,
-        org_id=principal.organization_id,
-        version_id=payload.course_version_id,
-        user_id=payload.user_id,
-        actor_id=principal.created_by,
-        cycle_key=payload.external_id,
+        request=IntegrationAssignment(
+            org_id=principal.organization_id,
+            version_id=payload.course_version_id,
+            user_id=payload.user_id,
+            actor_id=principal.created_by,
+            cycle_key=payload.external_id,
+        ),
     )
     db.add(
         IntegrationOperation(

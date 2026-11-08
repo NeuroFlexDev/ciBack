@@ -8,6 +8,7 @@ from app.models.materials import LearnerAssistantMessage
 from app.schemas.mobile_contract import AssistantHistoryResponse, AssistantMessageResponse
 from app.services import learner_assistant_service as assistant
 from app.services.auth_service import get_current_user
+from app.services.learner_assistant_service import AssistantMessage
 
 router = APIRouter(prefix="/learning/assignments/{assignment_id}/assistant")
 
@@ -70,7 +71,13 @@ def ask(
 ):
     return assistant.message_out(
         assistant.send_message(
-            db, user, assignment_id, payload.lesson_id, payload.question.strip(), payload.request_id
+            db,
+            user,
+            assignment_id,
+            payload.lesson_id,
+            message=AssistantMessage(
+                question=payload.question.strip(), request_id=payload.request_id
+            ),
         )
     )
 

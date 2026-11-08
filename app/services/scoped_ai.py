@@ -1,16 +1,32 @@
 """Cost reservation for interactive AI outside a course generation run."""
 
+from dataclasses import dataclass
+from typing import Any
+
 from fastapi import HTTPException
 
 from app.ai import gateway
 from app.ai.models import model_policy
 from app.models.materials import ScopedAIUsage
 from app.models.user import User
+from app.services.ai_resources import CompletionContext
 from app.services.interactive_quota import admit_request
 from app.services.organization_access import lock_member
 
 
-def tracked_completion(db, owner_id, course_id, role, messages, *, invoke=None, **kwargs):
+@dataclass(frozen=True, kw_only=True)
+class TrackedCompletionRequest:
+    """Parameters for tracked_completion, preserving its original defaults."""
+
+    role: Any
+    messages: Any
+    invoke: Any = None
+
+
+def tracked_completion(db, owner_id, course_id, *, request: TrackedCompletionRequest, **kwargs):
+    role = request.role
+    messages = request.messages
+    invoke = request.invoke
     from app.services.ai_access_boundary import author_result_access, principal_stamp
 
     stamp = principal_stamp(db.get(User, owner_id))
@@ -48,11 +64,10 @@ def tracked_completion(db, owner_id, course_id, role, messages, *, invoke=None, 
             db,
             owner_id,
             course_id,
-            role,
-            messages,
-            invoke=invoke,
-            expected_principal=stamp,
             **kwargs,
+            context=CompletionContext(
+                role=role, messages=messages, invoke=invoke, expected_principal=stamp
+            ),
         )
         usage = result.get("usage") or {}
         record.input_tokens = usage.get(

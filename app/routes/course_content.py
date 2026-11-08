@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -5,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database.db import get_db
 from app.models.user import User
-from app.repositories.course_content import CourseContentRepository
+from app.repositories.course_content import CourseContentRepository, DocumentQuery
 from app.schemas.course_graph import (
     CanvasOut,
     CanvasPut,
@@ -20,7 +21,7 @@ from app.schemas.document import (
     document_list_item,
 )
 from app.services.auth_service import get_current_user
-from app.services.course_content_service import CourseContentService
+from app.services.course_content_service import CourseContentService, DocumentUpload
 from app.services.file_storage import FileStorage, get_file_storage
 
 router = APIRouter(prefix="/courses")
@@ -68,6 +69,14 @@ def get_canvas_version(
     return CourseContentService.get_canvas_version(db, course_id, current_user.id, version)
 
 
+@dataclass
+class DocumentUploadForm:
+    """Validated request parameters, resolved independently for each request."""
+
+    file: UploadFile | None = File(default=None)
+    replace_document_id: int | None = Form(default=None, gt=0)
+
+
 @router.post(
     "/{course_id}/documents",
     response_model=DocumentUploadResponse,
@@ -75,36 +84,43 @@ def get_canvas_version(
 )
 def upload_document(
     course_id: int,
-    file: UploadFile | None = File(default=None),
-    replace_document_id: int | None = Form(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     storage: FileStorage = Depends(get_file_storage),
+    filters: DocumentUploadForm = Depends(),
 ):
-    if file is None:
+    if filters.file is None:
         raise HTTPException(status_code=400, detail="Файл не передан")
     document = CourseContentService.upload_document(
         db,
         course_id=course_id,
         owner_id=current_user.id,
-        upload=file,
         storage=storage,
-        replace_document_id=replace_document_id,
+        document_upload=DocumentUpload(
+            upload=filters.file, replace_document_id=filters.replace_document_id
+        ),
     )
     return document_list_item(document)
+
+
+@dataclass
+class DocumentListFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    limit: int = Query(default=20, ge=1, le=100)
+    offset: int = Query(default=0, ge=0)
+    document_status: DocumentStatus | None = Query(default=None, alias="status")
+    source_type: str | None = Query(default=None, min_length=1, max_length=64)
+    sort_by: Literal["created_at", "original_filename", "size_bytes", "status"] = "created_at"
+    sort_order: Literal["asc", "desc"] = "desc"
 
 
 @router.get("/{course_id}/documents", response_model=DocumentListResponse)
 def list_documents(
     course_id: int,
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    document_status: DocumentStatus | None = Query(default=None, alias="status"),
-    source_type: str | None = Query(default=None, min_length=1, max_length=64),
-    sort_by: Literal["created_at", "original_filename", "size_bytes", "status"] = "created_at",
-    sort_order: Literal["asc", "desc"] = "desc",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    filters: DocumentListFilters = Depends(),
 ):
     course = CourseContentRepository.get_owned_course(db, course_id, current_user.id)
     if course is None:
@@ -113,18 +129,20 @@ def list_documents(
         db,
         course_id=course_id,
         owner_id=current_user.id,
-        limit=limit,
-        offset=offset,
-        statuses=(
-            PUBLIC_TO_INTERNAL_STATUSES[document_status] if document_status is not None else None
+        query_options=DocumentQuery(
+            limit=filters.limit,
+            offset=filters.offset,
+            statuses=PUBLIC_TO_INTERNAL_STATUSES[filters.document_status]
+            if filters.document_status is not None
+            else None,
+            source_type=filters.source_type,
+            sort_by=filters.sort_by,
+            sort_order=filters.sort_order,
         ),
-        source_type=source_type,
-        sort_by=sort_by,
-        sort_order=sort_order,
     )
     return DocumentListResponse(
         items=[document_list_item(item) for item in items],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=filters.limit,
+        offset=filters.offset,
     )

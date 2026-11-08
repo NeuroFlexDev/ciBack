@@ -8,16 +8,15 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import create_access_token
 from app.database.db import get_db
 from app.models.integrations import ExternalIdentity, OIDCProvider, OIDCSession
 from app.models.user import User
-from app.schemas.auth import UserResponse
 from app.services import oidc_service
 from app.services.auth_service import ensure_organization_active, get_current_user
 from app.services.integration_access import integration_owner
 from app.services.integration_http import validate_endpoint
 from app.services.integration_secrets import seal
+from app.services.mobile_sessions import MobileSessionOptions
 from app.services.organization_access import audit
 
 router = APIRouter()
@@ -73,8 +72,8 @@ def create_provider(
             payload.jwks_uri,
         ):
             validate_endpoint(url)
-    except (ValueError, OSError):
-        raise HTTPException(422, "Проверьте HTTPS-адреса провайдера входа")
+    except (ValueError, OSError) as _error_cause:
+        raise HTTPException(422, "Проверьте HTTPS-адреса провайдера входа") from _error_cause
     domains = sorted({value.lower().strip() for value in payload.allowed_domains})
     if payload.allow_provisioning and not domains:
         raise HTTPException(422, "Укажите разрешённые домены для создания участников")
@@ -82,8 +81,8 @@ def create_provider(
         raise HTTPException(422, "Некорректный домен почты")
     try:
         secret = seal(payload.client_secret.get_secret_value())
-    except RuntimeError:
-        raise HTTPException(503, "Оператор ещё не настроил шифрование интеграций")
+    except RuntimeError as _error_cause:
+        raise HTTPException(503, "Оператор ещё не настроил шифрование интеграций") from _error_cause
     row = OIDCProvider(
         organization_id=user.organization_id,
         client_secret_encrypted=secret,
@@ -276,7 +275,7 @@ def exchange(payload: ExchangeInput, request: Request, db: Session = Depends(get
     if row.mobile_handoff and not result.get("mfa_required"):
         from app.services.mobile_sessions import issue
 
-        result = issue(db, user, amr=["oidc"])
+        result = issue(db, user, options=MobileSessionOptions(amr=["oidc"]))
     db.commit()
     from fastapi.encoders import jsonable_encoder
     from fastapi.responses import JSONResponse

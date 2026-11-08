@@ -1004,25 +1004,7 @@ class UpdateArtifact(AgenticContract):
     requires_human_review: bool
     summary: str = Field(min_length=1, max_length=4000)
 
-    @model_validator(mode="after")
-    def validate_update(self):
-        if not self.previous_source_refs and not self.current_source_refs:
-            raise ValueError("update artifact requires previous or current source refs")
-        source_refs = [*self.previous_source_refs, *self.current_source_refs]
-        source_by_id: dict[str, SourceRef] = {}
-        for source in source_refs:
-            existing = source_by_id.get(source.id)
-            if existing is not None and existing != source:
-                raise ValueError(f"source ref {source.id} has conflicting definitions")
-            source_by_id[source.id] = source
-        _require_unique(
-            "document change ids",
-            [str(item.document_id) for item in self.document_changes],
-        )
-        _require_unique("impact ids", [item.id for item in self.impacts])
-        _require_unique("diff ids", [item.id for item in self.proposed_diff])
-        known_source_ids = set(source_by_id)
-        known_impact_ids = {item.id for item in self.impacts}
+    def _validate_update_impacts(self, known_source_ids):
         for impact in self.impacts:
             _require_unique(f"impact {impact.id} before refs", impact.before_source_ref_ids)
             _require_unique(f"impact {impact.id} after refs", impact.after_source_ref_ids)
@@ -1042,6 +1024,27 @@ class UpdateArtifact(AgenticContract):
                 impact.before_source_ref_ids or impact.after_source_ref_ids
             ):
                 raise ValueError(f"impact {impact.id} must cite changed sources")
+
+    @model_validator(mode="after")
+    def validate_update(self):
+        if not self.previous_source_refs and not self.current_source_refs:
+            raise ValueError("update artifact requires previous or current source refs")
+        source_refs = [*self.previous_source_refs, *self.current_source_refs]
+        source_by_id: dict[str, SourceRef] = {}
+        for source in source_refs:
+            existing = source_by_id.get(source.id)
+            if existing is not None and existing != source:
+                raise ValueError(f"source ref {source.id} has conflicting definitions")
+            source_by_id[source.id] = source
+        _require_unique(
+            "document change ids",
+            [str(item.document_id) for item in self.document_changes],
+        )
+        _require_unique("impact ids", [item.id for item in self.impacts])
+        _require_unique("diff ids", [item.id for item in self.proposed_diff])
+        known_source_ids = set(source_by_id)
+        known_impact_ids = {item.id for item in self.impacts}
+        self._validate_update_impacts(known_source_ids)
         for operation in self.proposed_diff:
             _require_unique(f"diff {operation.id} impact ids", operation.impact_ids)
             _require_known(

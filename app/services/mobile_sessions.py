@@ -1,3 +1,8 @@
+from dataclasses import dataclass
+from typing import Any
+
+from app.core.security import AccessTokenClaims
+
 """Revocable refresh sessions for native clients; web bearer contract is unchanged."""
 
 import hashlib
@@ -18,7 +23,22 @@ def digest(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def issue(db, user, *, amr=None, mfa_at=None, device_name="Mobile device", session=None):
+@dataclass(frozen=True, kw_only=True)
+class MobileSessionOptions:
+    """Parameters for issue, preserving its original defaults."""
+
+    amr: Any = None
+    mfa_at: Any = None
+    device_name: Any = "Mobile device"
+    session: Any = None
+
+
+def issue(db, user, *, options: MobileSessionOptions | None = None):
+    options = options or MobileSessionOptions()
+    amr = options.amr
+    mfa_at = options.mfa_at
+    device_name = options.device_name
+    session = options.session
     ensure_organization_active(user)
     now = datetime.utcnow()
     raw = secrets.token_urlsafe(48)
@@ -47,10 +67,9 @@ def issue(db, user, *, amr=None, mfa_at=None, device_name="Mobile device", sessi
         "access_token": create_access_token(
             user.id,
             user.auth_version,
-            amr=amr,
-            mfa_at=mfa_at,
-            sid=session.id,
-            sv=session.token_version,
+            claims=AccessTokenClaims(
+                amr=amr, mfa_at=mfa_at, sid=session.id, sv=session.token_version
+            ),
         ),
         "refresh_token": raw,
         "token_type": "bearer",
@@ -105,4 +124,4 @@ def rotate(db, raw):
         )
     else:
         amr, mfa_at = ["pwd"], None
-    return issue(db, user, amr=amr, mfa_at=mfa_at, session=row)
+    return issue(db, user, options=MobileSessionOptions(amr=amr, mfa_at=mfa_at, session=row))

@@ -5,8 +5,9 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, TypeVar
+from typing import Generic, TypeVar
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ValidationError
@@ -16,11 +17,14 @@ from app.ai import control as ai_control
 from app.ai import gateway, routing, token_forecast
 from app.ai.context_budget import count_messages, require_fits
 from app.ai.models import model_policy
+from app.ai.routing import RouteContext
 from app.core.config import settings
 from app.models.agent_artifact import AgentArtifact
 from app.models.ai_state import AICall, AIResponseCache
 from app.models.generation_run import GenerationRun
 from app.repositories.pipeline import PipelineRepository
+from app.services.ai_resources import ResourceOutcome, ResourceReservation
+from app.services.generation_service import PromptRequest
 
 ArtifactModel = TypeVar("ArtifactModel", bound=BaseModel)
 
@@ -67,38 +71,55 @@ def _retryable(exc: Exception) -> bool:
     )
 
 
+def _visit(value, catalog):
+    if isinstance(value, list):
+        return [_visit(item, catalog) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {}
+    for key, child in value.items():
+        if key in {"source_refs", "previous_source_refs", "current_source_refs"} and isinstance(
+            child, list
+        ):
+            refs = []
+            for item in child:
+                if not isinstance(item, (str, dict)):
+                    raise ValueError("Source references must be existing ID strings")
+                ref_id = item if isinstance(item, str) else item.get("id")
+                if not isinstance(ref_id, str):
+                    raise ValueError("A source reference ID must be a string")
+                canonical = catalog.get(ref_id)
+                if canonical is None:
+                    raise ValueError(f"Unknown source ref: {ref_id}")
+                if isinstance(item, dict) and item != canonical:
+                    raise ValueError(f"Changed source ref: {ref_id}")
+                refs.append(copy.deepcopy(canonical))
+            result[key] = refs
+        else:
+            result[key] = _visit(child, catalog)
+    return result
+
+
 def expand_source_refs(raw: dict, catalog: dict[str, dict]) -> dict:
     """LLMs return IDs; only the server may attach canonical quotes and versions."""
 
-    def visit(value):
-        if isinstance(value, list):
-            return [visit(item) for item in value]
-        if not isinstance(value, dict):
-            return value
-        result = {}
-        for key, child in value.items():
-            if key in {"source_refs", "previous_source_refs", "current_source_refs"} and isinstance(
-                child, list
-            ):
-                refs = []
-                for item in child:
-                    if not isinstance(item, (str, dict)):
-                        raise ValueError("Source references must be existing ID strings")
-                    ref_id = item if isinstance(item, str) else item.get("id")
-                    if not isinstance(ref_id, str):
-                        raise ValueError("A source reference ID must be a string")
-                    canonical = catalog.get(ref_id)
-                    if canonical is None:
-                        raise ValueError(f"Unknown source ref: {ref_id}")
-                    if isinstance(item, dict) and item != canonical:
-                        raise ValueError(f"Changed source ref: {ref_id}")
-                    refs.append(copy.deepcopy(canonical))
-                result[key] = refs
-            else:
-                result[key] = visit(child)
-        return result
+    return _visit(raw, catalog)
 
-    return visit(raw)
+
+@dataclass(frozen=True, kw_only=True)
+class AgentInvocation(Generic[ArtifactModel]):
+    """Parameters for execute, preserving its original defaults."""
+
+    agent: str
+    artifact: str
+    sequence: int
+    template_name: str
+    response_model: type[ArtifactModel]
+    prompt_context: dict
+    max_tokens: int
+    allow_legacy_graph: bool = False
+    validator: Callable[[ArtifactModel], None] | None = None
+    normalize_response: Callable[[dict], dict] | None = None
 
 
 class AgentRuntime:
@@ -125,498 +146,547 @@ class AgentRuntime:
     def register_sources(self, sources: list[dict]) -> None:
         self.source_catalog.update({item["id"]: item for item in sources})
 
-    def execute(
-        self,
-        *,
-        agent: str,
-        artifact: str,
-        sequence: int,
-        template_name: str,
-        response_model: type[ArtifactModel],
-        prompt_context: dict,
-        max_tokens: int,
-        allow_legacy_graph: bool = False,
-        validator: Callable[[ArtifactModel], None] | None = None,
-        normalize_response: Callable[[dict], dict] | None = None,
-    ) -> ArtifactModel:
-        from app.services.generation_control import check_cancelled
+    def execute(self, *, request: AgentInvocation[ArtifactModel]) -> ArtifactModel:
+        return _AgentExecution(self, request).run()
 
-        check_cancelled(self.db, self.run_id)
-        policy = model_policy(agent)
-        live = gateway.configured() or settings.ENV != "test"
-        output_limit = policy.max_output_tokens if live else max_tokens
-        input_fingerprint = _fingerprint(
-            template_name,
-            response_model,
+
+class _AgentExecution(Generic[ArtifactModel]):
+    """State of one invocation, including durable receipts and bounded retries."""
+
+    def __init__(self, runtime: AgentRuntime, request: AgentInvocation[ArtifactModel]):
+        self.runtime = runtime
+        self.request = request
+
+    def _admit_attempt(self):
+        if self.live and self.cached is None:
+            # Reserve worst-case usage before sending. Failed calls still consume budget.
+            from app.services.generation_service import agent_messages, render_prompt
+
+            messages = agent_messages(
+                render_prompt(
+                    self.request.template_name,
+                    **{**self.request.prompt_context, "external_context": ""},
+                ),
+                expect_json=True,
+                repair_feedback=self.repair_feedback,
+            )
+            baseline_model = self.policy.fallback if self.use_fallback else self.policy.model
+            estimate = count_messages(messages, baseline_model)
+            request_features = token_forecast.features(
+                messages, self.request.agent, self.request.prompt_context
+            )
+            request_features["is_revision"] = (
+                self.request.sequence > 0
+                if self.request.agent in {"competency_mapper", "course_architect"}
+                else self.request.sequence >= 1000
+            )
+            from app.ai.providers import route_id
+
+            predictions = {
+                route_id(item.provider, item.model): token_forecast.predict(
+                    token_forecast.current_model(),
+                    role=self.request.agent,
+                    model_id=item.model,
+                    request_features=request_features,
+                    max_output_tokens=self.output_limit,
+                )
+                for item in routing.enabled_candidates(self.request.agent)
+            }
+            baseline_model = self.policy.fallback if self.use_fallback else self.policy.model
+            predictions[route_id("vsellm", baseline_model)] = token_forecast.predict(
+                token_forecast.current_model(),
+                role=self.request.agent,
+                model_id=baseline_model,
+                request_features=request_features,
+                max_output_tokens=self.output_limit,
+            )
+            previous = (
+                self.runtime.db.query(AICall)
+                .filter(AICall.run_id == self.runtime.run_id, AICall.status != "unavailable")
+                .all()
+            )
+            if any(
+                item.agent == self.request.agent
+                and item.status in {"reserved", "received"}
+                and (item.routing or {}).get("observation", {}).get("sequence")
+                == self.request.sequence
+                for item in previous
+            ):
+                # A worker died between dispatch and durable validation.
+                # Checkpoint resume must not silently repeat a paid call.
+                error = HTTPException(
+                    409,
+                    {
+                        "code": "ai_result_unknown",
+                        "message": "Результат предыдущего AI-запроса неизвестен. Автоматический платный повтор остановлен.",
+                    },
+                )
+                error.request_sent = False
+                raise error
+            consumed = sum(item.input_tokens + item.output_tokens for item in previous)
+            if ai_control.policy()["mode"] != "off":
+                history = (
+                    self.runtime.db.query(AICall)
+                    .join(GenerationRun)
+                    .filter(
+                        GenerationRun.owner_id == self.runtime.owner_id,
+                        AICall.agent == self.request.agent,
+                        AICall.routing.isnot(None),
+                        AICall.status.in_(["completed", "failed"]),
+                    )
+                    .order_by(AICall.id.desc())
+                    .limit(settings.AI_ROUTING_HISTORY_LIMIT)
+                    .all()
+                )
+                self.decision = routing.choose_route(
+                    role=self.request.agent,
+                    baseline_model=self.policy.fallback if self.use_fallback else self.policy.model,
+                    input_tokens=estimate,
+                    output_tokens=self.output_limit,
+                    routing_context=RouteContext(
+                        history=[item.routing for item in history if item.routing],
+                        excluded_models=self.excluded_models,
+                        min_tier=self.min_tier,
+                        available_providers=gateway.available_provider_ids(),
+                        forecast=predictions,
+                        input_estimates={
+                            route_id(item.provider, item.model): count_messages(
+                                messages, item.model
+                            )
+                            for item in routing.enabled_candidates(self.request.agent)
+                        },
+                    ),
+                )
+            selected_model = (
+                self.decision.selected_model
+                if self.decision
+                else (self.policy.fallback if self.use_fallback else self.policy.model)
+            )
+            selected_provider = self.decision.selected_provider if self.decision else "vsellm"
+            estimate = require_fits(messages, selected_model, self.output_limit, selected_provider)
+            from app.services.ai_entitlements import unlimited_ai
+            from app.services.ai_resources import scope
+
+            if not unlimited_ai(
+                self.runtime.db,
+                scope(self.runtime.db, self.runtime.owner_id, self.runtime.course_id),
+            ) and (
+                len(previous) >= settings.AI_MAX_CALLS_PER_RUN
+                or consumed + estimate + self.output_limit > settings.AI_MAX_TOKENS_PER_RUN
+            ):
+                raise HTTPException(402, "AI run budget exhausted")
+            metadata = (
+                self.decision.metadata
+                if self.decision
+                else {
+                    "selected_model": selected_model,
+                    "selected_provider": selected_provider,
+                }
+            )
+            metadata = {
+                **metadata,
+                "forecast": token_forecast.predict(
+                    token_forecast.current_model(),
+                    role=self.request.agent,
+                    model_id=selected_model,
+                    request_features=request_features,
+                    max_output_tokens=self.output_limit,
+                ),
+                "observation": {
+                    "features": request_features,
+                    "attempt": self.attempt,
+                    "sequence": self.request.sequence,
+                    "max_output_tokens": self.output_limit,
+                    "usage_reported": False,
+                },
+            }
+            self.call = AICall(
+                run_id=self.runtime.run_id,
+                agent=self.request.agent,
+                model=selected_model,
+                routing=metadata,
+                status="reserved",
+                input_tokens=estimate,
+                output_tokens=self.output_limit,
+            )
+            self.runtime.db.add(self.call)
+            self.runtime.db.commit()
+            from app.services.ai_resources import reserve, text_price
+
+            self.resource = reserve(
+                self.runtime.db,
+                reservation=ResourceReservation(
+                    owner_id=self.runtime.owner_id,
+                    course_id=self.runtime.course_id,
+                    run_id=self.runtime.run_id,
+                    operation="generation_text",
+                    tokens=estimate + self.output_limit,
+                    cost=text_price(
+                        self.request.agent,
+                        estimate,
+                        self.output_limit,
+                        model=selected_model,
+                        provider=selected_provider,
+                    ),
+                ),
+            )
+            self.runtime.db.commit()
+
+    def _record_provider_receipt(self):
+        self.used_model = self.raw.pop("_model", None) if isinstance(self.raw, dict) else None
+        self.usage = self.raw.pop("_usage", {}) if isinstance(self.raw, dict) else {}
+        self.usage_reported = (
+            self.raw.pop("_usage_reported", False) if isinstance(self.raw, dict) else False
+        )
+        if self.resource:
+            from app.services.ai_resources import finish
+
+            finish(
+                self.runtime.db,
+                self.resource,
+                outcome=ResourceOutcome(usage=self.usage if self.usage_reported else None),
+            )
+            self.resource = None
+        (self.raw.pop("_provider", "vsellm") if isinstance(self.raw, dict) else "vsellm")
+        if self.usage_reported:
+            self.reported_usage = self.usage
+        if self.call:
+            self.call.status = "received"
+            self.call.model = self.used_model or self.call.model
+            self.call.input_tokens = self.usage.get("input_tokens", self.call.input_tokens)
+            self.call.output_tokens = self.usage.get("output_tokens", self.call.output_tokens)
+            self.call.cached_tokens = self.usage.get("cached_tokens", 0)
+            self.call.routing = {
+                **self.call.routing,
+                "observation": {
+                    **self.call.routing["observation"],
+                    "usage_reported": self.usage_reported,
+                },
+            }
+            self.runtime.db.commit()
+
+    def _validate_result(self):
+        if self.runtime.source_catalog:
+            if self.request.normalize_response is not None:
+                self.raw = self.request.normalize_response(self.raw)
+            self.raw = expand_source_refs(self.raw, self.runtime.source_catalog)
+        self.result = self.request.response_model.model_validate(self.raw)
+        if self.request.validator:
+            self.request.validator(self.result)
+
+    def _store_result(self):
+        latency_ms = max(0, int((time.perf_counter() - self.started) * 1000))
+        if self.stored is None:
+            self.stored = AgentArtifact(
+                run_id=self.runtime.run_id,
+                course_id=self.runtime.course_id,
+                agent=self.request.agent,
+                artifact=self.request.artifact,
+                sequence=self.request.sequence,
+            )
+            PipelineRepository.add_agent_artifact(self.runtime.db, self.stored)
+        self.stored.status = "completed"
+        self.stored.schema_version = 1
+        self.stored.payload = self.result.model_dump(mode="json")
+        self.stored.input_fingerprint = self.input_fingerprint
+        self.stored.model = self.used_model
+        self.stored.latency_ms = latency_ms
+        self.stored.error = None
+        if self.call:
+            self.call.status = "completed"
+            self.call.latency_ms = max(0, int((time.perf_counter() - self.attempt_started) * 1000))
+            self.call.routing = routing.record_outcome(
+                self.call.routing, outcome="contract_pass", usage=self.reported_usage
+            )
+        if self.live and self.cached is None and settings.AI_CACHE_TTL_SECONDS:
+            self.runtime.db.merge(
+                AIResponseCache(
+                    key=self.cache_key,
+                    owner_id=self.runtime.owner_id,
+                    course_id=self.runtime.course_id,
+                    model=self.used_model or self.policy.model,
+                    payload={**self.result.model_dump(mode="json"), "_model": self.used_model},
+                    expires_at=datetime.utcnow() + timedelta(seconds=settings.AI_CACHE_TTL_SECONDS),
+                )
+            )
+        self.runtime.db.commit()
+
+    @staticmethod
+    def _failure_outcome(exc):
+        failure_kind = getattr(exc, "ai_failure_kind", None)
+        if failure_kind == "truncated":
+            outcome = "output_truncated"
+        elif isinstance(exc, (ValidationError, ValueError)) or failure_kind in {
+            "invalid_json",
+            "empty",
+        }:
+            outcome = "contract_fail"
+        elif gateway.retryable(exc):
+            outcome = "provider_error"
+        else:
+            outcome = "runtime_error"
+        return outcome
+
+    def _record_failure(self, exc):
+        if self.resource:
+            from app.services.ai_resources import finish
+
+            finish(
+                self.runtime.db,
+                self.resource,
+                outcome=ResourceOutcome(
+                    usage=getattr(exc, "ai_usage", None),
+                    unsent=getattr(exc, "request_sent", None) is False,
+                    failed=True,
+                ),
+            )
+        if self.call:
+            self.call.status = "failed"
+            self.usage = getattr(exc, "ai_usage", {})
+            if getattr(exc, "request_sent", None) is False:
+                self.call.status = "unavailable"
+                self.usage = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
+            self.call.input_tokens = self.usage.get("input_tokens", self.call.input_tokens)
+            self.call.output_tokens = self.usage.get("output_tokens", self.call.output_tokens)
+            self.call.cached_tokens = self.usage.get("cached_tokens", self.call.cached_tokens)
+            self.call.model = getattr(exc, "ai_model", None) or self.call.model
+            if getattr(exc, "ai_usage", None):
+                self.call.routing = {
+                    **self.call.routing,
+                    "observation": {**self.call.routing["observation"], "usage_reported": True},
+                }
+            outcome = self._failure_outcome(exc)
+            self.call.routing = routing.record_outcome(
+                self.call.routing,
+                outcome=outcome,
+                usage=getattr(exc, "ai_usage", None) or self.reported_usage,
+            )
+            if self.decision and ai_control.policy()["mode"] == "adaptive":
+                from app.ai.providers import route_id
+
+                if outcome != "output_truncated":
+                    self.excluded_models.add(
+                        route_id(self.decision.selected_provider, self.decision.selected_model)
+                    )
+                tier = self.decision.metadata.get("tier")
+                if tier is not None and outcome == "contract_fail":
+                    self.min_tier = max(self.min_tier, tier + 1)
+            self.call.latency_ms = max(0, int((time.perf_counter() - self.attempt_started) * 1000))
+            self.call.error_code = gateway.safe_error(exc)
+            if isinstance(exc, ValidationError):
+                self.call.error_code = (
+                    "validation:"
+                    + ",".join(
+                        ".".join(map(str, e["loc"])) + ":" + e["type"]
+                        for e in exc.errors(include_input=False, include_url=False)
+                    )
+                )[:128]
+                # Contract diagnostics exclude raw model responses, source
+                # contents and Pydantic context objects.
+                self.call.routing = {
+                    **self.call.routing,
+                    "validation_errors": [
+                        {
+                            "loc": list(e["loc"]),
+                            "type": e["type"],
+                            "message": e["msg"][:600],
+                        }
+                        for e in exc.errors(
+                            include_input=False, include_context=False, include_url=False
+                        )[:8]
+                    ],
+                }
+            self.runtime.db.add(self.call)
+            self.runtime.db.commit()
+
+    def _prepare_repair(self, exc):
+        if getattr(exc, "ai_failure_kind", None) == "truncated":
+            self.output_limit = min(self.initial_output_limit * 4, self.output_limit * 2)
+            self.repair_feedback = (
+                "The previous response reached its output-token limit. More output room is now reserved. "
+                "Return complete compact JSON; do not repeat source objects or explanations. Preserve all assigned IDs and objectives."
+            )
+        elif isinstance(exc, ValidationError):
+            self.repair_feedback = json.dumps(
+                exc.errors(include_input=False, include_url=False), default=str
+            )[:5000]
+        elif isinstance(exc, ValueError):
+            self.repair_feedback = str(exc)[:3000]
+        else:
+            self.repair_feedback = "Return complete valid JSON matching the requested contract."
+
+    def _store_terminal_failure(self):
+        latency_ms = max(0, int((time.perf_counter() - self.started) * 1000))
+        safe_error = gateway.safe_error(self.last_error) if self.last_error else "Agent failed"
+        if self.stored is None:
+            self.stored = AgentArtifact(
+                run_id=self.runtime.run_id,
+                course_id=self.runtime.course_id,
+                agent=self.request.agent,
+                artifact=self.request.artifact,
+                sequence=self.request.sequence,
+            )
+            PipelineRepository.add_agent_artifact(self.runtime.db, self.stored)
+        self.stored.status = "failed"
+        self.stored.input_fingerprint = self.input_fingerprint
+        self.stored.latency_ms = latency_ms
+        self.stored.error = safe_error
+        self.runtime.db.commit()
+
+    def _prepare_checkpoint(self):
+        self.policy = model_policy(self.request.agent)
+        self.live = gateway.configured() or settings.ENV != "test"
+        self.output_limit = self.policy.max_output_tokens if self.live else self.request.max_tokens
+        self.input_fingerprint = _fingerprint(
+            self.request.template_name,
+            self.request.response_model,
             {
-                **prompt_context,
-                "_models": [policy.model, policy.fallback],
-                "_max_tokens": output_limit,
+                **self.request.prompt_context,
+                "_models": [self.policy.model, self.policy.fallback],
+                "_max_tokens": self.output_limit,
                 **routing.cache_policy(),
             },
         )
-        cache_key = hashlib.sha256(
-            f"{self.owner_id}:{self.course_id}:{input_fingerprint}".encode()
+        self.cache_key = hashlib.sha256(
+            f"{self.runtime.owner_id}:{self.runtime.course_id}:{self.input_fingerprint}".encode()
         ).hexdigest()
-        initial_output_limit = output_limit
+        self.initial_output_limit = self.output_limit
         # A confirmed length stop is a known billed result. Repeating the same
         # response ceiling cannot repair it. Carry the required headroom across
         # checkpoint retries; admission still checks price and model capacity.
-        for previous in self.db.query(AICall).filter_by(
-            run_id=self.run_id, agent=agent, error_code="ai_output_truncated"
+        for previous in self.runtime.db.query(AICall).filter_by(
+            run_id=self.runtime.run_id, agent=self.request.agent, error_code="ai_output_truncated"
         ):
             observation = (previous.routing or {}).get("observation", {})
-            if observation.get("sequence") == sequence:
-                output_limit = max(
-                    output_limit,
+            if observation.get("sequence") == self.request.sequence:
+                self.output_limit = max(
+                    self.output_limit,
                     min(
-                        initial_output_limit * 4,
-                        int(observation.get("max_output_tokens", initial_output_limit)) * 2,
+                        self.initial_output_limit * 4,
+                        int(observation.get("max_output_tokens", self.initial_output_limit)) * 2,
                     ),
                 )
-        stored = PipelineRepository.get_agent_artifact(
-            self.db, run_id=self.run_id, agent=agent, sequence=sequence
+        self.stored = PipelineRepository.get_agent_artifact(
+            self.runtime.db,
+            run_id=self.runtime.run_id,
+            agent=self.request.agent,
+            sequence=self.request.sequence,
+        )
+
+    def _load_cached_response(self):
+        if self.live and settings.AI_CACHE_TTL_SECONDS:
+            self.runtime.db.query(AIResponseCache).filter(
+                AIResponseCache.expires_at <= datetime.utcnow()
+            ).delete(synchronize_session="fetch")
+            self.runtime.db.commit()
+        self.cached = (
+            self.runtime.db.get(AIResponseCache, self.cache_key)
+            if self.live and settings.AI_CACHE_TTL_SECONDS
+            else None
+        )
+
+    def _generate_response(self):
+        self.raw = (
+            copy.deepcopy(self.cached.payload)
+            if self.cached
+            else self.runtime.generate(
+                self.request.template_name,
+                request=PromptRequest(
+                    include_external_context=False,
+                    use_feedback=False,
+                    expect_json=True,
+                    max_tokens=self.output_limit,
+                    agent_role=self.request.agent,
+                    fallback_model=self.use_fallback if self.decision is None else False,
+                    repair_feedback=self.repair_feedback,
+                    model=self.decision.selected_model if self.decision else None,
+                    provider=self.decision.selected_provider if self.decision else None,
+                ),
+                **self.request.prompt_context,
+            )
         )
         if (
-            stored is not None
-            and stored.status == "completed"
-            and stored.input_fingerprint == input_fingerprint
+            self.request.allow_legacy_graph
+            and isinstance(self.raw, dict)
+            and isinstance(self.raw.get("nodes"), list)
+            and isinstance(self.raw.get("edges"), list)
+        ):
+            raise LegacyGraphResponse(self.raw)
+
+    def run(self) -> ArtifactModel:
+        from app.services.generation_control import check_cancelled
+
+        check_cancelled(self.runtime.db, self.runtime.run_id)
+        self._prepare_checkpoint()
+        if (
+            self.stored is not None
+            and self.stored.status == "completed"
+            and self.stored.input_fingerprint == self.input_fingerprint
         ):
             try:
-                result = response_model.model_validate(stored.payload)
-                if validator:
-                    validator(result)
-                return result
+                self.result = self.request.response_model.model_validate(self.stored.payload)
+                if self.request.validator:
+                    self.request.validator(self.result)
+                return self.result
             except (ValidationError, ValueError):
                 # A strengthened contract may invalidate an older checkpoint.
                 pass
 
-        if live and settings.AI_CACHE_TTL_SECONDS:
-            self.db.query(AIResponseCache).filter(
-                AIResponseCache.expires_at <= datetime.utcnow()
-            ).delete(synchronize_session="fetch")
-            self.db.commit()
-        cached = (
-            self.db.get(AIResponseCache, cache_key)
-            if live and settings.AI_CACHE_TTL_SECONDS
-            else None
-        )
-
-        last_error: Exception | None = None
-        started = time.perf_counter()
-        repair_feedback = ""
-        excluded_models: set[str] = set()
-        min_tier = 0
-        for attempt in range(1, self.max_attempts + 1):
-            check_cancelled(self.db, self.run_id)
-            attempt_started = time.perf_counter()
-            use_fallback = attempt > 1 and (
-                attempt == self.max_attempts
-                or not isinstance(last_error, (ValidationError, ValueError))
+        self._load_cached_response()
+        self.last_error: Exception | None = None
+        self.started = time.perf_counter()
+        self.repair_feedback = ""
+        self.excluded_models: set[str] = set()
+        self.min_tier = 0
+        for attempt in range(1, self.runtime.max_attempts + 1):
+            self.attempt = attempt
+            check_cancelled(self.runtime.db, self.runtime.run_id)
+            self.attempt_started = time.perf_counter()
+            self.use_fallback = self.attempt > 1 and (
+                self.attempt == self.runtime.max_attempts
+                or not isinstance(self.last_error, (ValidationError, ValueError))
             )
-            call = None
-            resource = None
-            decision = None
-            reported_usage = None
+            self.call = None
+            self.resource = None
+            self.decision = None
+            self.reported_usage = None
             try:
-                if live and cached is None:
-                    # Reserve worst-case usage before sending. Failed calls still consume budget.
-                    from app.services.generation_service import agent_messages, render_prompt
-
-                    messages = agent_messages(
-                        render_prompt(template_name, **{**prompt_context, "external_context": ""}),
-                        expect_json=True,
-                        repair_feedback=repair_feedback,
-                    )
-                    baseline_model = policy.fallback if use_fallback else policy.model
-                    estimate = count_messages(messages, baseline_model)
-                    request_features = token_forecast.features(messages, agent, prompt_context)
-                    request_features["is_revision"] = (
-                        sequence > 0
-                        if agent in {"competency_mapper", "course_architect"}
-                        else sequence >= 1000
-                    )
-                    from app.ai.providers import route_id
-
-                    predictions = {
-                        route_id(item.provider, item.model): token_forecast.predict(
-                            token_forecast.current_model(),
-                            role=agent,
-                            model_id=item.model,
-                            request_features=request_features,
-                            max_output_tokens=output_limit,
-                        )
-                        for item in routing.enabled_candidates(agent)
-                    }
-                    baseline_model = policy.fallback if use_fallback else policy.model
-                    predictions[route_id("vsellm", baseline_model)] = token_forecast.predict(
-                        token_forecast.current_model(),
-                        role=agent,
-                        model_id=baseline_model,
-                        request_features=request_features,
-                        max_output_tokens=output_limit,
-                    )
-                    previous = (
-                        self.db.query(AICall)
-                        .filter(AICall.run_id == self.run_id, AICall.status != "unavailable")
-                        .all()
-                    )
-                    if any(
-                        item.agent == agent
-                        and item.status in {"reserved", "received"}
-                        and (item.routing or {}).get("observation", {}).get("sequence") == sequence
-                        for item in previous
-                    ):
-                        # A worker died between dispatch and durable validation.
-                        # Checkpoint resume must not silently repeat a paid call.
-                        error = HTTPException(
-                            409,
-                            {
-                                "code": "ai_result_unknown",
-                                "message": "Результат предыдущего AI-запроса неизвестен. Автоматический платный повтор остановлен.",
-                            },
-                        )
-                        error.request_sent = False
-                        raise error
-                    consumed = sum(item.input_tokens + item.output_tokens for item in previous)
-                    if ai_control.policy()["mode"] != "off":
-                        history = (
-                            self.db.query(AICall)
-                            .join(GenerationRun)
-                            .filter(
-                                GenerationRun.owner_id == self.owner_id,
-                                AICall.agent == agent,
-                                AICall.routing.isnot(None),
-                                AICall.status.in_(["completed", "failed"]),
-                            )
-                            .order_by(AICall.id.desc())
-                            .limit(settings.AI_ROUTING_HISTORY_LIMIT)
-                            .all()
-                        )
-                        decision = routing.choose_route(
-                            role=agent,
-                            baseline_model=policy.fallback if use_fallback else policy.model,
-                            input_tokens=estimate,
-                            output_tokens=output_limit,
-                            history=[item.routing for item in history if item.routing],
-                            excluded_models=excluded_models,
-                            min_tier=min_tier,
-                            available_providers=gateway.available_provider_ids(),
-                            forecast=predictions,
-                            input_estimates={
-                                route_id(item.provider, item.model): count_messages(
-                                    messages, item.model
-                                )
-                                for item in routing.enabled_candidates(agent)
-                            },
-                        )
-                    selected_model = (
-                        decision.selected_model
-                        if decision
-                        else (policy.fallback if use_fallback else policy.model)
-                    )
-                    selected_provider = decision.selected_provider if decision else "vsellm"
-                    estimate = require_fits(
-                        messages, selected_model, output_limit, selected_provider
-                    )
-                    from app.services.ai_entitlements import unlimited_ai
-                    from app.services.ai_resources import scope
-
-                    if not unlimited_ai(
-                        self.db, scope(self.db, self.owner_id, self.course_id)
-                    ) and (
-                        len(previous) >= settings.AI_MAX_CALLS_PER_RUN
-                        or consumed + estimate + output_limit > settings.AI_MAX_TOKENS_PER_RUN
-                    ):
-                        raise HTTPException(402, "AI run budget exhausted")
-                    metadata = (
-                        decision.metadata
-                        if decision
-                        else {
-                            "selected_model": selected_model,
-                            "selected_provider": selected_provider,
-                        }
-                    )
-                    metadata = {
-                        **metadata,
-                        "forecast": token_forecast.predict(
-                            token_forecast.current_model(),
-                            role=agent,
-                            model_id=selected_model,
-                            request_features=request_features,
-                            max_output_tokens=output_limit,
-                        ),
-                        "observation": {
-                            "features": request_features,
-                            "attempt": attempt,
-                            "sequence": sequence,
-                            "max_output_tokens": output_limit,
-                            "usage_reported": False,
-                        },
-                    }
-                    call = AICall(
-                        run_id=self.run_id,
-                        agent=agent,
-                        model=selected_model,
-                        routing=metadata,
-                        status="reserved",
-                        input_tokens=estimate,
-                        output_tokens=output_limit,
-                    )
-                    self.db.add(call)
-                    self.db.commit()
-                    from app.services.ai_resources import reserve, text_price
-
-                    resource = reserve(
-                        self.db,
-                        owner_id=self.owner_id,
-                        course_id=self.course_id,
-                        run_id=self.run_id,
-                        operation="generation_text",
-                        tokens=estimate + output_limit,
-                        cost=text_price(
-                            agent,
-                            estimate,
-                            output_limit,
-                            model=selected_model,
-                            provider=selected_provider,
-                        ),
-                    )
-                    self.db.commit()
-                raw = (
-                    copy.deepcopy(cached.payload)
-                    if cached
-                    else self.generate(
-                        template_name,
-                        include_external_context=False,
-                        use_feedback=False,
-                        expect_json=True,
-                        max_tokens=output_limit,
-                        agent_role=agent,
-                        fallback_model=use_fallback if decision is None else False,
-                        repair_feedback=repair_feedback,
-                        **(
-                            {
-                                "model": decision.selected_model,
-                                "provider": decision.selected_provider,
-                            }
-                            if decision
-                            else {}
-                        ),
-                        **prompt_context,
-                    )
-                )
-                if (
-                    allow_legacy_graph
-                    and isinstance(raw, dict)
-                    and isinstance(raw.get("nodes"), list)
-                    and isinstance(raw.get("edges"), list)
-                ):
-                    raise LegacyGraphResponse(raw)
-                used_model = raw.pop("_model", None) if isinstance(raw, dict) else None
-                usage = raw.pop("_usage", {}) if isinstance(raw, dict) else {}
-                usage_reported = (
-                    raw.pop("_usage_reported", False) if isinstance(raw, dict) else False
-                )
-                if resource:
-                    from app.services.ai_resources import finish
-
-                    finish(self.db, resource, usage=usage if usage_reported else None)
-                    resource = None
-                (raw.pop("_provider", "vsellm") if isinstance(raw, dict) else "vsellm")
-                if usage_reported:
-                    reported_usage = usage
-                if call:
-                    call.status = "received"
-                    call.model = used_model or call.model
-                    call.input_tokens = usage.get("input_tokens", call.input_tokens)
-                    call.output_tokens = usage.get("output_tokens", call.output_tokens)
-                    call.cached_tokens = usage.get("cached_tokens", 0)
-                    call.routing = {
-                        **call.routing,
-                        "observation": {
-                            **call.routing["observation"],
-                            "usage_reported": usage_reported,
-                        },
-                    }
-                    self.db.commit()
-                if self.source_catalog:
-                    if normalize_response is not None:
-                        raw = normalize_response(raw)
-                    raw = expand_source_refs(raw, self.source_catalog)
-                result = response_model.model_validate(raw)
-                if validator:
-                    validator(result)
-                latency_ms = max(0, int((time.perf_counter() - started) * 1000))
-                if stored is None:
-                    stored = AgentArtifact(
-                        run_id=self.run_id,
-                        course_id=self.course_id,
-                        agent=agent,
-                        artifact=artifact,
-                        sequence=sequence,
-                    )
-                    PipelineRepository.add_agent_artifact(self.db, stored)
-                stored.status = "completed"
-                stored.schema_version = 1
-                stored.payload = result.model_dump(mode="json")
-                stored.input_fingerprint = input_fingerprint
-                stored.model = used_model
-                stored.latency_ms = latency_ms
-                stored.error = None
-                if call:
-                    call.status = "completed"
-                    call.latency_ms = max(0, int((time.perf_counter() - attempt_started) * 1000))
-                    call.routing = routing.record_outcome(
-                        call.routing, outcome="contract_pass", usage=reported_usage
-                    )
-                if live and cached is None and settings.AI_CACHE_TTL_SECONDS:
-                    self.db.merge(
-                        AIResponseCache(
-                            key=cache_key,
-                            owner_id=self.owner_id,
-                            course_id=self.course_id,
-                            model=used_model or policy.model,
-                            payload={**result.model_dump(mode="json"), "_model": used_model},
-                            expires_at=datetime.utcnow()
-                            + timedelta(seconds=settings.AI_CACHE_TTL_SECONDS),
-                        )
-                    )
-                self.db.commit()
-                return result
+                self._admit_attempt()
+                self._generate_response()
+                self._record_provider_receipt()
+                self._validate_result()
+                self._store_result()
+                return self.result
             except Exception as exc:
                 if isinstance(exc, LegacyGraphResponse):
                     raise
                 response_ceiling_exhausted = (
                     getattr(exc, "ai_failure_kind", None) == "truncated"
-                    and output_limit >= initial_output_limit * 4
+                    and self.output_limit >= self.initial_output_limit * 4
                 )
-                last_error = exc
-                self.db.rollback()
-                if resource:
-                    from app.services.ai_resources import finish
-
-                    finish(
-                        self.db,
-                        resource,
-                        usage=getattr(exc, "ai_usage", None),
-                        unsent=getattr(exc, "request_sent", None) is False,
-                        failed=True,
-                    )
-                if call:
-                    call.status = "failed"
-                    usage = getattr(exc, "ai_usage", {})
-                    if getattr(exc, "request_sent", None) is False:
-                        call.status = "unavailable"
-                        usage = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
-                    call.input_tokens = usage.get("input_tokens", call.input_tokens)
-                    call.output_tokens = usage.get("output_tokens", call.output_tokens)
-                    call.cached_tokens = usage.get("cached_tokens", call.cached_tokens)
-                    call.model = getattr(exc, "ai_model", None) or call.model
-                    if getattr(exc, "ai_usage", None):
-                        call.routing = {
-                            **call.routing,
-                            "observation": {**call.routing["observation"], "usage_reported": True},
-                        }
-                    failure_kind = getattr(exc, "ai_failure_kind", None)
-                    if failure_kind == "truncated":
-                        outcome = "output_truncated"
-                    elif isinstance(exc, (ValidationError, ValueError)) or failure_kind in {
-                        "invalid_json",
-                        "empty",
-                    }:
-                        outcome = "contract_fail"
-                    elif gateway.retryable(exc):
-                        outcome = "provider_error"
-                    else:
-                        outcome = "runtime_error"
-                    call.routing = routing.record_outcome(
-                        call.routing,
-                        outcome=outcome,
-                        usage=getattr(exc, "ai_usage", None) or reported_usage,
-                    )
-                    if decision and ai_control.policy()["mode"] == "adaptive":
-                        from app.ai.providers import route_id
-
-                        if outcome != "output_truncated":
-                            excluded_models.add(
-                                route_id(decision.selected_provider, decision.selected_model)
-                            )
-                        tier = decision.metadata.get("tier")
-                        if tier is not None and outcome == "contract_fail":
-                            min_tier = max(min_tier, tier + 1)
-                    call.latency_ms = max(0, int((time.perf_counter() - attempt_started) * 1000))
-                    call.error_code = gateway.safe_error(exc)
-                    if isinstance(exc, ValidationError):
-                        call.error_code = (
-                            "validation:"
-                            + ",".join(
-                                ".".join(map(str, e["loc"])) + ":" + e["type"]
-                                for e in exc.errors(include_input=False, include_url=False)
-                            )
-                        )[:128]
-                        # Contract diagnostics exclude raw model responses, source
-                        # contents and Pydantic context objects.
-                        call.routing = {
-                            **call.routing,
-                            "validation_errors": [
-                                {
-                                    "loc": list(e["loc"]),
-                                    "type": e["type"],
-                                    "message": e["msg"][:600],
-                                }
-                                for e in exc.errors(
-                                    include_input=False, include_context=False, include_url=False
-                                )[:8]
-                            ],
-                        }
-                    self.db.add(call)
-                    self.db.commit()
-                if getattr(exc, "ai_failure_kind", None) == "truncated":
-                    output_limit = min(initial_output_limit * 4, output_limit * 2)
-                    repair_feedback = (
-                        "The previous response reached its output-token limit. More output room is now reserved. "
-                        "Return complete compact JSON; do not repeat source objects or explanations. Preserve all assigned IDs and objectives."
-                    )
-                elif isinstance(exc, ValidationError):
-                    repair_feedback = json.dumps(
-                        exc.errors(include_input=False, include_url=False), default=str
-                    )[:5000]
-                elif isinstance(exc, ValueError):
-                    repair_feedback = str(exc)[:3000]
-                else:
-                    repair_feedback = "Return complete valid JSON matching the requested contract."
-                if cached:
-                    self.db.delete(cached)
-                    self.db.commit()
-                    cached = None
-                stored = PipelineRepository.get_agent_artifact(
-                    self.db, run_id=self.run_id, agent=agent, sequence=sequence
+                self.last_error = exc
+                self.runtime.db.rollback()
+                self._record_failure(exc)
+                self._prepare_repair(exc)
+                if self.cached:
+                    self.runtime.db.delete(self.cached)
+                    self.runtime.db.commit()
+                    self.cached = None
+                self.stored = PipelineRepository.get_agent_artifact(
+                    self.runtime.db,
+                    run_id=self.runtime.run_id,
+                    agent=self.request.agent,
+                    sequence=self.request.sequence,
                 )
                 if (
-                    attempt == self.max_attempts
+                    self.attempt == self.runtime.max_attempts
                     or response_ceiling_exhausted
                     or not _retryable(exc)
                 ):
                     break
-                if live and not isinstance(exc, (ValidationError, ValueError)):
-                    time.sleep(min(2 ** (attempt - 1), 8))
+                if self.live and not isinstance(exc, (ValidationError, ValueError)):
+                    time.sleep(min(2 ** (self.attempt - 1), 8))
 
-        latency_ms = max(0, int((time.perf_counter() - started) * 1000))
-        safe_error = gateway.safe_error(last_error) if last_error else "Agent failed"
-        if stored is None:
-            stored = AgentArtifact(
-                run_id=self.run_id,
-                course_id=self.course_id,
-                agent=agent,
-                artifact=artifact,
-                sequence=sequence,
-            )
-            PipelineRepository.add_agent_artifact(self.db, stored)
-        stored.status = "failed"
-        stored.input_fingerprint = input_fingerprint
-        stored.latency_ms = latency_ms
-        stored.error = safe_error
-        self.db.commit()
-        assert last_error is not None
-        raise last_error
+        self._store_terminal_failure()
+        assert self.last_error is not None
+        raise self.last_error

@@ -11,7 +11,7 @@ from app.models.test import Test as TestModel
 from app.models.theory import Theory
 from app.models.user import User
 from app.services.course_materialization_service import CourseMaterializationService
-from app.services.pipeline_service import PipelineRunFailed, PipelineService
+from app.services.pipeline_service import GraphGenerationRequest, PipelineRunFailed, PipelineService
 from tests.factories import make_course
 
 
@@ -263,7 +263,10 @@ def _prepared_run(db_session, owner, lesson_count):
     course.status = "configured"
     db_session.commit()
     run = PipelineService.prepare_graph_generation(
-        db_session, course_id=course.id, owner_id=owner.id, document_ids=[document.id]
+        db_session,
+        course_id=course.id,
+        owner_id=owner.id,
+        request=GraphGenerationRequest(document_ids=[document.id]),
     )
     return course, run
 

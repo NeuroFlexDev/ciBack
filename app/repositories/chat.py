@@ -1,8 +1,30 @@
+from dataclasses import dataclass
+
 from sqlalchemy.orm import Session
 
 from app.models.chat import Chat, ChatMessage
 from app.models.course import Course
 from app.services.course_access import course_access_filter, related_course_access
+
+
+@dataclass(frozen=True, kw_only=True)
+class ChatHistoryWindow:
+    """Parameters for get_history, preserving its original defaults."""
+
+    limit: int | None = None
+    offset: int = 0
+    newest: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class MessageGenerationMetadata:
+    """Parameters for add_message, preserving its original defaults."""
+
+    model: str | None = None
+    metadata: dict | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class ChatRepository:
@@ -55,14 +77,12 @@ class ChatRepository:
 
     @staticmethod
     def get_history(
-        db: Session,
-        chat_id: int,
-        user_id: int,
-        *,
-        limit: int | None = None,
-        offset: int = 0,
-        newest: bool = False,
+        db: Session, chat_id: int, user_id: int, *, window: ChatHistoryWindow | None = None
     ) -> list[ChatMessage]:
+        window = window or ChatHistoryWindow()
+        limit = window.limit
+        offset = window.offset
+        newest = window.newest
         ChatRepository._active_chat(db, chat_id, user_id)
         query = db.query(ChatMessage).filter(
             ChatMessage.chat_id == chat_id, ChatMessage.is_deleted.is_(False)
@@ -96,12 +116,14 @@ class ChatRepository:
         role: str,
         content: str,
         *,
-        model: str | None = None,
-        metadata: dict | None = None,
-        prompt_tokens: int | None = None,
-        completion_tokens: int | None = None,
-        total_tokens: int | None = None,
+        generation: MessageGenerationMetadata | None = None,
     ) -> ChatMessage:
+        generation = generation or MessageGenerationMetadata()
+        model = generation.model
+        metadata = generation.metadata
+        prompt_tokens = generation.prompt_tokens
+        completion_tokens = generation.completion_tokens
+        total_tokens = generation.total_tokens
         message = ChatMessage(
             chat_id=chat_id,
             role=role,

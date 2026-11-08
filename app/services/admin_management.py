@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 from app.models.course import Course
 from app.models.generation_run import GenerationRun
-from app.models.user import User
 from app.services.organization_access import lock_members
 
 

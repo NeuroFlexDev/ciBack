@@ -1,6 +1,5 @@
 """LTI 1.3 launch validation and durable Assignment and Grade Services delivery."""
 
-import base64
 import json
 import secrets
 import uuid
@@ -24,6 +23,7 @@ from app.models.integrations import (
 from app.models.user import User
 from app.services import integration_http
 from app.services.integration_secrets import seal, unseal
+from app.services.learning_service import IntegrationAssignment
 from app.services.oidc_service import digest, verify_id_token
 from app.services.organization_access import audit, check_seat, lock_org
 
@@ -100,6 +100,39 @@ def resolve_user(db, platform, claims):
     return user
 
 
+def _bind_gradebook(db, platform, assignment, claims):
+    ags = claims.get(AGS_CLAIM, {})
+    lineitem = ags.get("lineitem")
+    if lineitem and SCORE_SCOPE in ags.get("scope", []):
+        target = urlsplit(lineitem)
+        issuer = urlsplit(platform.issuer)
+        if (target.scheme, target.netloc) != (issuer.scheme, issuer.netloc):
+            raise HTTPException(403, "Адрес оценок LMS не принадлежит настроенному сервису")
+        try:
+            integration_http.validate_endpoint(lineitem)
+        except (ValueError, OSError) as _error_cause:
+            raise HTTPException(403, "Недопустимый адрес оценок LMS") from _error_cause
+        binding = (
+            db.query(LTIGradeBinding)
+            .filter_by(platform_id=platform.id, assignment_id=assignment.id, subject=claims["sub"])
+            .first()
+        )
+        if not binding:
+            db.add(
+                LTIGradeBinding(
+                    platform_id=platform.id,
+                    assignment_id=assignment.id,
+                    subject=claims["sub"],
+                    lineitem_url=lineitem,
+                )
+            )
+        elif binding.lineitem_url != lineitem:
+            raise HTTPException(
+                409,
+                "LMS изменила журнал оценок. Администратор должен подтвердить новое подключение",
+            )
+
+
 def complete(db, platform, raw_state, id_token, browser):
     from app.services.integration_access import ensure_integrations_enabled
 
@@ -153,42 +186,15 @@ def complete(db, platform, raw_state, id_token, browser):
 
     assignment, created = assign_from_integration(
         db,
-        org_id=org.id,
-        version_id=resource.course_version_id,
-        user_id=user.id,
-        actor_id=platform.created_by,
-        cycle_key=f"lti:{platform.id}:{resource.id}",
+        request=IntegrationAssignment(
+            org_id=org.id,
+            version_id=resource.course_version_id,
+            user_id=user.id,
+            actor_id=platform.created_by,
+            cycle_key=f"lti:{platform.id}:{resource.id}",
+        ),
     )
-    ags = claims.get(AGS_CLAIM, {})
-    lineitem = ags.get("lineitem")
-    if lineitem and SCORE_SCOPE in ags.get("scope", []):
-        target = urlsplit(lineitem)
-        issuer = urlsplit(platform.issuer)
-        if (target.scheme, target.netloc) != (issuer.scheme, issuer.netloc):
-            raise HTTPException(403, "Адрес оценок LMS не принадлежит настроенному сервису")
-        try:
-            integration_http.validate_endpoint(lineitem)
-        except (ValueError, OSError):
-            raise HTTPException(403, "Недопустимый адрес оценок LMS")
-        binding = (
-            db.query(LTIGradeBinding)
-            .filter_by(platform_id=platform.id, assignment_id=assignment.id, subject=claims["sub"])
-            .first()
-        )
-        if not binding:
-            db.add(
-                LTIGradeBinding(
-                    platform_id=platform.id,
-                    assignment_id=assignment.id,
-                    subject=claims["sub"],
-                    lineitem_url=lineitem,
-                )
-            )
-        elif binding.lineitem_url != lineitem:
-            raise HTTPException(
-                409,
-                "LMS изменила журнал оценок. Администратор должен подтвердить новое подключение",
-            )
+    _bind_gradebook(db, platform, assignment, claims)
     exchange = secrets.token_urlsafe(32)
     row.exchange_code_hash = digest(exchange)
     row.authenticated_user_id = user.id

@@ -3,6 +3,7 @@ from app.models.course_generation_settings import CourseGenerationSettings
 from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
 from app.models.user import User
+from app.services.pipeline_service import GraphGenerationRequest
 from tests.factories import make_course
 
 
@@ -159,7 +160,10 @@ def test_worker_executes_prepared_run(db_session, auth_user, monkeypatch):
     run = __import__(
         "app.services.pipeline_service", fromlist=["PipelineService"]
     ).PipelineService.prepare_graph_generation(
-        db_session, course_id=course.id, owner_id=auth_user.id, document_ids=[document.id]
+        db_session,
+        course_id=course.id,
+        owner_id=auth_user.id,
+        request=GraphGenerationRequest(document_ids=[document.id]),
     )
     monkeypatch.setattr("app.workers.generation.SessionLocal", lambda: db_session)
     monkeypatch.setattr(

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable
+from dataclasses import dataclass
+from typing import Any, Iterable
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -35,6 +36,42 @@ def _conflict(expected: int, current: int) -> HTTPException:
             "current_revision": current,
         },
     )
+
+
+@dataclass(frozen=True, kw_only=True)
+class LessonContent:
+    """Parameters for create_lesson, preserving its original defaults."""
+
+    title: str
+    description: str
+    content: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class ModuleUpdate:
+    """Parameters for update_module, preserving its original defaults."""
+
+    title: str | None
+    description: str | None
+    expected: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReorderTarget:
+    """Parameters for reorder, preserving its original defaults."""
+
+    entity: Any
+    parent_filter: Any
+    snapshot: Any
+
+
+@dataclass(frozen=True, kw_only=True)
+class TestContent:
+    """Parameters for create_test, preserving its original defaults."""
+
+    question: str
+    answers: list[str]
+    correct: str
 
 
 class CourseEditorService:
@@ -193,13 +230,11 @@ class CourseEditorService:
 
     @staticmethod
     def update_module(
-        db: Session,
-        module_id: int,
-        owner_id: int,
-        title: str | None,
-        description: str | None,
-        expected: int,
+        db: Session, module_id: int, owner_id: int, *, update: ModuleUpdate
     ) -> Module:
+        title = update.title
+        description = update.description
+        expected = update.expected
         item = CourseEditorService._module(db, module_id, owner_id, True)
         CourseEditorService._check(item, expected)
         CoursePublicationService.prepare_for_edit(item.course)
@@ -215,14 +250,11 @@ class CourseEditorService:
 
     @staticmethod
     def create_lesson(
-        db: Session,
-        course_id: int,
-        module_id: int,
-        owner_id: int,
-        title: str,
-        description: str,
-        content: str,
+        db: Session, course_id: int, module_id: int, owner_id: int, *, lesson_content: LessonContent
     ) -> Lesson:
+        title = lesson_content.title
+        description = lesson_content.description
+        content = lesson_content.content
         CourseEditorService._course(db, course_id, owner_id, True)
         if (
             db.query(Lesson)
@@ -291,10 +323,11 @@ class CourseEditorService:
         *,
         module_id: int | None,
         course_id: int | None,
-        question: str,
-        answers: list[str],
-        correct: str,
+        test_content: TestContent,
     ) -> Test:
+        question = test_content.question
+        answers = test_content.answers
+        correct = test_content.correct
         if module_id is not None:
             parent = CourseEditorService._module(db, module_id, owner_id, True)
             scope = "module"
@@ -349,8 +382,11 @@ class CourseEditorService:
 
     @staticmethod
     def reorder(
-        db: Session, *, entity, parent_filter, items: Iterable[OrderItem], owner_id: int, snapshot
+        db: Session, *, items: Iterable[OrderItem], owner_id: int, target: ReorderTarget
     ) -> list:
+        entity = target.entity
+        parent_filter = target.parent_filter
+        snapshot = target.snapshot
         rows = (
             db.query(entity)
             .filter(*parent_filter, entity.is_deleted.is_(False))

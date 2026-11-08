@@ -14,8 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATEMENT = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\b", re.I)
 
 
-def main() -> int:
-    linter = Linter(config=FluffConfig.from_root())
+def _lint_embedded_sql(linter):
     checked = skipped = errors = 0
     for directory in ("app", "migrations", "scripts"):
         for path in sorted((ROOT / directory).rglob("*.py")):
@@ -50,6 +49,12 @@ def main() -> int:
                         f"{path.relative_to(ROOT)}:{argument.lineno}: "
                         f"{violation.rule_code()} {violation.desc()}"
                     )
+    return checked, skipped, errors
+
+
+def main() -> int:
+    linter = Linter(config=FluffConfig.from_root())
+    checked, skipped, errors = _lint_embedded_sql(linter)
     for path in sorted(ROOT.rglob("*.sql")):
         if any(
             part

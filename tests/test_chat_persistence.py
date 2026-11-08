@@ -1,3 +1,5 @@
+import pytest
+
 from app.core.security import hash_password
 from app.models.chat import Chat, ChatMessage
 from app.models.user import User
@@ -17,11 +19,8 @@ def test_chat_crud_is_persistent_and_owner_isolated(client, db_session, auth_use
     db_session.add(foreign)
     db_session.commit()
     assert ChatRepository.get_history(db_session, chat_id, auth_user.id) == []
-    try:
+    with pytest.raises(KeyError):
         ChatRepository.get_history(db_session, chat_id, foreign.id)
-        assert False, "foreign owner must not read chat"
-    except KeyError:
-        pass
 
 
 def test_course_binding_requires_owned_course(client, db_session, auth_headers, auth_user):
@@ -101,7 +100,8 @@ def test_model_patch_persists(client, db_session, auth_user, auth_headers):
 def test_send_without_chat_id_creates_persistent_chat(
     client, db_session, auth_headers, monkeypatch
 ):
-    def fake_generate(*, chat_id, user_id, text, db, **kwargs):
+    def fake_generate(*, chat_id, user_id, request, db, **kwargs):
+        text = request.text
         user_message = ChatRepository.add_message(db, chat_id, "user", text)
         bot_message = ChatRepository.add_message(db, chat_id, "assistant", "answer")
         return {"user_msg_id": user_message.id, "bot_msg_id": bot_message.id}

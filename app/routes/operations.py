@@ -1,6 +1,5 @@
 """Restricted diagnostics containing counts and health only, never customer content or secrets."""
 
-import os
 import shutil
 import time
 from datetime import datetime, timedelta

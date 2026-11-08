@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -25,15 +26,23 @@ def require_current_version(version: str):
         )
 
 
-def record_receipt(
-    db: Session,
-    *,
-    email: str,
-    slug: str,
-    context: str,
-    user_id: int | None = None,
-    action: str = "accepted",
-):
+@dataclass(frozen=True, kw_only=True)
+class LegalAcceptance:
+    """Parameters for record_receipt, preserving its original defaults."""
+
+    email: str
+    slug: str
+    context: str
+    user_id: int | None = None
+    action: str = "accepted"
+
+
+def record_receipt(db: Session, *, acceptance: LegalAcceptance):
+    email = acceptance.email
+    slug = acceptance.slug
+    context = acceptance.context
+    user_id = acceptance.user_id
+    action = acceptance.action
     document = DOCUMENTS[slug]
     receipt = LegalReceipt(
         user_id=user_id,

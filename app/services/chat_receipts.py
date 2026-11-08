@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.models.chat import Chat, ChatMessage
 from app.models.user import User
 from app.repositories.chat import ChatRepository
-from app.services.chat_service import chat_generate, convert_messages
+from app.services.chat_service import ChatGenerationRequest, chat_generate, convert_messages
 
 
 def find_receipt(db, owner_id, key):
@@ -99,11 +99,13 @@ def send_once(db, user, payload):
         chat_generate(
             chat_id=chat.id,
             user_id=user.id,
-            text=payload.text,
             db=db,
-            engine_name=payload.engine,
-            model=payload.model,
-            existing_user_message=question,
+            request=ChatGenerationRequest(
+                text=payload.text,
+                engine_name=payload.engine,
+                model=payload.model,
+                existing_user_message=question,
+            ),
         )
         question.message_metadata = {**question.message_metadata, "request_status": "completed"}
         db.commit()

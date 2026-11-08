@@ -22,7 +22,7 @@ from app.schemas.mobile_contract import (
 from app.services.auth_service import AuthService, get_current_user
 from app.services.integration_secrets import cipher, seal
 from app.services.mfa_service import authentication_result
-from app.services.mobile_sessions import digest, issue, rotate
+from app.services.mobile_sessions import MobileSessionOptions, digest, issue, rotate
 
 router = APIRouter()
 
@@ -89,8 +89,8 @@ def register_push_device(
         raise HTTPException(422, "Invalid push device")
     try:
         cipher()
-    except Exception:
-        raise HTTPException(503, "Push token storage is not configured")
+    except Exception as _error_cause:
+        raise HTTPException(503, "Push token storage is not configured") from _error_cause
     row = db.query(MobilePushDevice).filter_by(session_id=sid).first()
     token_hash = digest(payload.token)
     # A native token identifies one installation. Reassign it atomically when a
@@ -145,8 +145,8 @@ def update_push_preferences(
     db.query(User).filter_by(id=user.id).with_for_update().one()
     try:
         ZoneInfo(payload.timezone)
-    except (ZoneInfoNotFoundError, ValueError):
-        raise HTTPException(422, "timezone must be a valid IANA timezone")
+    except (ZoneInfoNotFoundError, ValueError) as _error_cause:
+        raise HTTPException(422, "timezone must be a valid IANA timezone") from _error_cause
     row = db.get(MobilePushPreference, user.id)
     if row is None:
         row = MobilePushPreference(user_id=user.id)
@@ -192,7 +192,9 @@ def login(payload: LoginInput, db: Session = Depends(get_db)):
     if result.get("mfa_required"):
         db.commit()
         return result
-    result = issue(db, user, device_name=payload.device_name, amr=["pwd"])
+    result = issue(
+        db, user, options=MobileSessionOptions(device_name=payload.device_name, amr=["pwd"])
+    )
     db.commit()
     return result
 

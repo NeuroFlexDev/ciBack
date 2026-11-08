@@ -12,7 +12,12 @@ from app.database.db import get_db
 from app.models.legal import LegalReceipt, LegalRequest
 from app.models.user import User
 from app.services.auth_service import get_current_user
-from app.services.legal_service import CATALOG, record_receipt, require_current_version
+from app.services.legal_service import (
+    CATALOG,
+    LegalAcceptance,
+    record_receipt,
+    require_current_version,
+)
 
 router = APIRouter(prefix="/legal")
 
@@ -84,7 +89,10 @@ def contact(payload: ContactPayload, db: Session = Depends(get_db)):
     )
     if payload.purpose == "enquiry":
         record_receipt(
-            db, email=payload.email, slug="contact-consent", context="request:" + reference
+            db,
+            acceptance=LegalAcceptance(
+                email=payload.email, slug="contact-consent", context="request:" + reference
+            ),
         )
     db.flush()
     return {"reference": reference}
@@ -130,10 +138,12 @@ def marketing(
     # Withdrawal is allowed even when the client has an older document version.
     record_receipt(
         db,
-        email=user.email,
-        user_id=user.id,
-        slug="marketing-consent",
-        context="account",
-        action="accepted" if payload.accepted else "withdrawn",
+        acceptance=LegalAcceptance(
+            email=user.email,
+            user_id=user.id,
+            slug="marketing-consent",
+            context="account",
+            action="accepted" if payload.accepted else "withdrawn",
+        ),
     )
     return {"marketing_active": payload.accepted}

@@ -1,6 +1,7 @@
 import json
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlencode
 
@@ -15,11 +16,9 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import create_access_token
 from app.database.db import get_db
 from app.models.integrations import LTIIdentity, LTIPlatform, LTIResource, LTISession
 from app.models.user import User
-from app.schemas.auth import UserResponse
 from app.services import lti_service
 from app.services.auth_service import ensure_organization_active
 from app.services.integration_access import integration_owner
@@ -79,16 +78,16 @@ def create_platform(
             payload.jwks_uri,
         ):
             validate_endpoint(url)
-    except (ValueError, OSError):
-        raise HTTPException(422, "Проверьте HTTPS-адреса LMS")
+    except (ValueError, OSError) as _error_cause:
+        raise HTTPException(422, "Проверьте HTTPS-адреса LMS") from _error_cause
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     pem = private.private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
     ).decode()
     try:
         encrypted = seal(pem)
-    except RuntimeError:
-        raise HTTPException(503, "Оператор ещё не настроил шифрование интеграций")
+    except RuntimeError as _error_cause:
+        raise HTTPException(503, "Оператор ещё не настроил шифрование интеграций") from _error_cause
     public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key())) | {
         "kid": str(uuid.uuid4()),
         "use": "sig",
@@ -283,25 +282,30 @@ def jwks(platform_id: int, db: Session = Depends(get_db)):
     return {"keys": [platform.public_jwk]}
 
 
+@dataclass
+class LTILoginParameters:
+    """Validated request parameters, resolved independently for each request."""
+
+    iss: str = Query(max_length=2048)
+    login_hint: str = Query(min_length=1, max_length=2048)
+    target_link_uri: str = Query(max_length=2048)
+    client_id: str | None = Query(None, max_length=255)
+    lti_message_hint: str = Query("", max_length=4096)
+
+
 @router.get("/lti/{platform_id}/login")
-def login(
-    platform_id: int,
-    iss: str = Query(max_length=2048),
-    login_hint: str = Query(min_length=1, max_length=2048),
-    target_link_uri: str = Query(max_length=2048),
-    client_id: str | None = Query(None, max_length=255),
-    lti_message_hint: str = Query("", max_length=4096),
-    db: Session = Depends(get_db),
-):
+def login(platform_id: int, db: Session = Depends(get_db), filters: LTILoginParameters = Depends()):
     platform = db.query(LTIPlatform).filter_by(id=platform_id, enabled=True).first()
     if (
         not platform
-        or iss != platform.issuer
-        or (client_id and client_id != platform.client_id)
-        or target_link_uri != lti_service.launch_url(platform)
+        or filters.iss != platform.issuer
+        or (filters.client_id and filters.client_id != platform.client_id)
+        or filters.target_link_uri != lti_service.launch_url(platform)
     ):
         raise HTTPException(403, "LMS или адрес запуска не совпадает с настройкой")
-    url, state, browser = lti_service.begin(db, platform, login_hint, lti_message_hint)
+    url, state, browser = lti_service.begin(
+        db, platform, filters.login_hint, filters.lti_message_hint
+    )
     response = RedirectResponse(url, status_code=303)
     response.set_cookie(
         "lernium_lti_" + state[:12],

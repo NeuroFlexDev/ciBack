@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -15,9 +16,7 @@ from app.database.db import get_db
 from app.models.account import PasswordReset
 from app.models.administration import AdminEvent, Invitation, Organization
 from app.models.ai_state import AICall
-from app.models.chat import Chat
 from app.models.course import Course
-from app.models.course_graph import CourseGraph
 from app.models.document import Document
 from app.models.generation_run import GenerationRun
 from app.models.legal import LegalRequest
@@ -31,15 +30,13 @@ from app.services.admin_management import (
     state_token,
 )
 from app.services.auth_service import get_current_user, require_admin
-from app.services.legal_service import record_receipt, require_current_version
+from app.services.legal_service import LegalAcceptance, record_receipt, require_current_version
 from app.services.organization_access import (
     audit,
-    check_course_limit,
     check_seat,
     lock_member,
     lock_members,
     lock_org,
-    member_ids,
     seats,
 )
 
@@ -184,16 +181,7 @@ def require_team_owner(user, db):
     return org_id
 
 
-def make_invitation(db, actor, payload, *, position_id=None):
-    actor = lock_member(
-        db,
-        actor.id,
-        extra_org_ids=(payload.organization_id,),
-        expected_auth_version=actor.auth_version,
-    )
-    from app.services.business_service import manages_business, position_for
-
-    business = manages_business(actor)
+def _validate_inviting_actor(db, actor, payload, business):
     if not actor.is_admin:
         if business and actor.organization_role in {"manager", "admin"}:
             if payload.organization_id != actor.organization_id or payload.role not in {
@@ -205,6 +193,13 @@ def make_invitation(db, actor, payload, *, position_id=None):
                 )
         elif require_team_owner(actor, db) != payload.organization_id:
             raise HTTPException(403, "Недоступная организация")
+
+
+def _invitation_organization(db, actor, payload, position_id):
+    from app.services.business_service import manages_business, position_for
+
+    business = manages_business(actor)
+    _validate_inviting_actor(db, actor, payload, business)
     org = db.get(Organization, payload.organization_id)
     check_seat(db, org)
     from app.services.business_hierarchy import resolve_manager
@@ -230,12 +225,10 @@ def make_invitation(db, actor, payload, *, position_id=None):
         and actor.organization_role != "owner"
     ):
         raise HTTPException(403, "Управляющего назначает владелец компании")
-    existing = db.query(User).filter(User.email == payload.email).first()
-    if existing and (existing.is_admin or existing.organization_id):
-        raise HTTPException(
-            409,
-            "Аккаунт уже связан с организацией или является оператором. Сначала завершите текущие отношения доступа.",
-        )
+    return org, manager_id
+
+
+def _validate_invitation_uniqueness(db, actor, payload, org):
     if not actor.is_admin:
         if payload.role == "owner":
             raise HTTPException(
@@ -263,6 +256,23 @@ def make_invitation(db, actor, payload, *, position_id=None):
         .first()
     ):
         raise HTTPException(409, "Действующее приглашение уже существует. Сначала отзовите его.")
+
+
+def make_invitation(db, actor, payload, *, position_id=None):
+    actor = lock_member(
+        db,
+        actor.id,
+        extra_org_ids=(payload.organization_id,),
+        expected_auth_version=actor.auth_version,
+    )
+    org, manager_id = _invitation_organization(db, actor, payload, position_id)
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing and (existing.is_admin or existing.organization_id):
+        raise HTTPException(
+            409,
+            "Аккаунт уже связан с организацией или является оператором. Сначала завершите текущие отношения доступа.",
+        )
+    _validate_invitation_uniqueness(db, actor, payload, org)
     raw = secrets.token_urlsafe(32)
     row = Invitation(
         email=payload.email,
@@ -373,37 +383,40 @@ def update_org(
     return org_dict(db, row)
 
 
+@dataclass
+class AdminUserFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    q: str = Query("", max_length=100)
+    organization_id: int | None = None
+    offset: int = Query(0, ge=0)
+    limit: int = Query(50, ge=1, le=100)
+
+
 @router.get("/admin/users")
 def users(
-    q: str = Query("", max_length=100),
-    organization_id: int | None = None,
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
+    filters: AdminUserFilters = Depends(),
 ):
     query = db.query(User)
-    if q:
+    if filters.q:
         query = query.filter(
-            User.email.icontains(q, autoescape=True) | User.full_name.icontains(q, autoescape=True)
+            User.email.icontains(filters.q, autoescape=True)
+            | User.full_name.icontains(filters.q, autoescape=True)
         )
-    if organization_id is not None:
-        query = query.filter(User.organization_id == organization_id)
+    if filters.organization_id is not None:
+        query = query.filter(User.organization_id == filters.organization_id)
     return {
         "total": query.count(),
-        "items": [user_dict(u) for u in query.order_by(User.id.desc()).offset(offset).limit(limit)],
+        "items": [
+            user_dict(u)
+            for u in query.order_by(User.id.desc()).offset(filters.offset).limit(filters.limit)
+        ],
     }
 
 
-def change_user(db, actor, target, payload):
-    identities = lock_members(
-        db,
-        [actor.id, target.id],
-        extra_org_ids=(payload.organization_id,),
-        allow_inactive=True,
-        expected_auth_versions={actor.id: actor.auth_version},
-    )
-    actor, target = identities[actor.id], identities[target.id]
+def _validate_user_access_change(db, actor, target, payload):
     if (
         payload.expected_auth_version is not None
         and target.auth_version != payload.expected_auth_version
@@ -422,7 +435,9 @@ def change_user(db, actor, target, payload):
         and (payload.organization_role == "manager" or target.organization_role == "manager")
     ):
         raise HTTPException(403, "Доступом управляющего распоряжается владелец компании")
-    old_org = target.organization_id
+
+
+def _apply_reporting_change(db, actor, target, payload, old_org):
     if (
         payload.organization_id
         and db.get(Organization, payload.organization_id).kind == "business"
@@ -459,6 +474,44 @@ def change_user(db, actor, target, payload):
             or target.organization_role in {"owner", "admin"}
         ):
             raise HTTPException(403, "Только владелец управляет администраторами")
+
+
+def _detach_previous_organization(db, target, payload, old_org):
+    if old_org and payload.organization_id != old_org:
+        # Content and history stay with the original organization. A new tenant
+        # never inherits the employee's former company's materials or answers.
+        db.query(Course).filter(
+            Course.owner_id == target.id, Course.organization_id.is_(None)
+        ).update({"organization_id": old_org})
+        from app.models.learning import (
+            LearningGroup,
+            LearningGroupMember,
+            LearningPerson,
+            LearningRoleGrant,
+        )
+
+        db.query(LearningRoleGrant).filter_by(user_id=target.id, organization_id=old_org).delete()
+        old_groups = select(LearningGroup.id).where(LearningGroup.organization_id == old_org)
+        db.query(LearningGroupMember).filter(
+            LearningGroupMember.user_id == target.id, LearningGroupMember.group_id.in_(old_groups)
+        ).delete(synchronize_session=False)
+        person = db.get(LearningPerson, target.id)
+        if person:
+            db.delete(person)
+
+
+def change_user(db, actor, target, payload):
+    identities = lock_members(
+        db,
+        [actor.id, target.id],
+        extra_org_ids=(payload.organization_id,),
+        allow_inactive=True,
+        expected_auth_versions={actor.id: actor.auth_version},
+    )
+    actor, target = identities[actor.id], identities[target.id]
+    _validate_user_access_change(db, actor, target, payload)
+    old_org = target.organization_id
+    _apply_reporting_change(db, actor, target, payload, old_org)
     orgs = {oid: db.get(Organization, oid) for oid in {old_org, payload.organization_id} if oid}
     leaving_owner = (
         target.organization_role == "owner"
@@ -489,27 +542,7 @@ def change_user(db, actor, target, payload):
         and (not target.is_active or payload.organization_id != old_org)
     ):
         check_seat(db, orgs[payload.organization_id])
-    if old_org and payload.organization_id != old_org:
-        # Content and history stay with the original organization. A new tenant
-        # never inherits the employee's former company's materials or answers.
-        db.query(Course).filter(
-            Course.owner_id == target.id, Course.organization_id.is_(None)
-        ).update({"organization_id": old_org})
-        from app.models.learning import (
-            LearningGroup,
-            LearningGroupMember,
-            LearningPerson,
-            LearningRoleGrant,
-        )
-
-        db.query(LearningRoleGrant).filter_by(user_id=target.id, organization_id=old_org).delete()
-        old_groups = select(LearningGroup.id).where(LearningGroup.organization_id == old_org)
-        db.query(LearningGroupMember).filter(
-            LearningGroupMember.user_id == target.id, LearningGroupMember.group_id.in_(old_groups)
-        ).delete(synchronize_session=False)
-        person = db.get(LearningPerson, target.id)
-        if person:
-            db.delete(person)
+    _detach_previous_organization(db, target, payload, old_org)
     if target.organization_removed_at and (payload.is_active or payload.organization_id != old_org):
         target.organization_removed_at = None
         audit(db, actor, "business.employee_restored", "user", target.id, organization_id=old_org)
@@ -711,20 +744,29 @@ def accept_invite(payload: InviteAccept, db: Session = Depends(get_db)):
         from app.services.invitation_access import apply_owner_authoring
 
         apply_owner_authoring(db, row, user)
-        record_receipt(db, email=user.email, user_id=user.id, slug="terms", context="invitation")
+        record_receipt(
+            db,
+            acceptance=LegalAcceptance(
+                email=user.email, user_id=user.id, slug="terms", context="invitation"
+            ),
+        )
         if payload.marketing_accepted:
             record_receipt(
                 db,
-                email=user.email,
-                user_id=user.id,
-                slug="marketing-consent",
-                context="invitation",
+                acceptance=LegalAcceptance(
+                    email=user.email,
+                    user_id=user.id,
+                    slug="marketing-consent",
+                    context="invitation",
+                ),
             )
         audit(db, user, "invitation.accepted", "invitation", row.id, organization_id=org.id)
         db.commit()
-    except IntegrityError:
+    except IntegrityError as _error_cause:
         db.rollback()
-        raise HTTPException(409, "Аккаунт уже существует или приглашение использовано")
+        raise HTTPException(
+            409, "Аккаунт уже существует или приглашение использовано"
+        ) from _error_cause
     return AuthResponse(
         access_token=create_access_token(user.id), user=UserResponse.model_validate(user)
     )
@@ -983,28 +1025,36 @@ def admin_overview(db: Session = Depends(get_db), admin: User = Depends(require_
     }
 
 
+@dataclass
+class AdminCourseFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    unassigned: bool = False
+    archived: bool = False
+    q: str = Query("", max_length=100)
+    organization_id: int | None = None
+    offset: int = Query(0, ge=0)
+    limit: int = Query(50, ge=1, le=100)
+
+
 @router.get("/admin/courses")
 def admin_courses(
-    unassigned: bool = False,
-    archived: bool = False,
-    q: str = Query("", max_length=100),
-    organization_id: int | None = None,
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
+    filters: AdminCourseFilters = Depends(),
 ):
-    query = db.query(Course).filter(Course.is_deleted.is_(archived))
-    if unassigned:
+    query = db.query(Course).filter(Course.is_deleted.is_(filters.archived))
+    if filters.unassigned:
         query = query.filter(Course.owner_id.is_(None))
-    if q:
-        query = query.filter(Course.name.icontains(q, autoescape=True))
-    if organization_id is not None:
-        query = query.filter(Course.organization_id == organization_id)
+    if filters.q:
+        query = query.filter(Course.name.icontains(filters.q, autoescape=True))
+    if filters.organization_id is not None:
+        query = query.filter(Course.organization_id == filters.organization_id)
     return {
         "total": query.count(),
         "items": [
-            course_out(c) for c in query.order_by(Course.id.desc()).offset(offset).limit(limit)
+            course_out(c)
+            for c in query.order_by(Course.id.desc()).offset(filters.offset).limit(filters.limit)
         ],
     }
 

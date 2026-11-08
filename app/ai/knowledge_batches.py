@@ -76,6 +76,14 @@ def ingestion_excerpt(ingestion: dict, records: list[dict]) -> dict:
     }
 
 
+def _rename_competency_ids(value, names):
+    if isinstance(value, list):
+        return [_rename_competency_ids(item, names) for item in value]
+    if isinstance(value, dict):
+        return {key: _rename_competency_ids(item, names) for key, item in value.items()}
+    return names.get(value, value) if isinstance(value, str) else value
+
+
 def merge_competencies(parts: list[CompetencyMapArtifact]) -> CompetencyMapArtifact:
     if len(parts) == 1:
         return parts[0]
@@ -91,15 +99,8 @@ def merge_competencies(parts: list[CompetencyMapArtifact]) -> CompetencyMapArtif
             for item in data[field]
         }
 
-        def rename(value):
-            if isinstance(value, list):
-                return [rename(item) for item in value]
-            if isinstance(value, dict):
-                return {key: rename(item) for key, item in value.items()}
-            return names.get(value, value) if isinstance(value, str) else value
-
         for field in fields:
-            result[field].extend(rename(copy.deepcopy(data[field])))
+            result[field].extend(_rename_competency_ids(copy.deepcopy(data[field]), names))
     result["source_refs"] = list(
         {ref.id: ref.model_dump(mode="json") for part in parts for ref in part.source_refs}.values()
     )

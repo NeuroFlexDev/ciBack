@@ -233,30 +233,7 @@ class CanvasGenerationPayload(AgenticContract):
     tests: list[CanvasTest]
     assignments: list[CanvasAssignment]
 
-    @model_validator(mode="after")
-    def validate_canvas(self):
-        for label, values in (
-            ("payload objective ids", self.objective_ids),
-            ("payload competency ids", self.competency_ids),
-            ("payload source ref ids", self.source_ref_ids),
-            ("module ids", [item.id for item in self.modules]),
-            ("lesson ids", [item.id for item in self.lessons]),
-            ("test ids", [item.id for item in self.tests]),
-            ("assignment ids", [item.id for item in self.assignments]),
-            (
-                "question ids",
-                [question.id for test in self.tests for question in test.questions],
-            ),
-            ("rubric ids", [item.rubric.id for item in self.assignments]),
-        ):
-            _require_unique(label, values)
-
-        objective_ids = set(self.objective_ids)
-        competency_ids = set(self.competency_ids)
-        source_ref_ids = set(self.source_ref_ids)
-        module_ids = {item.id for item in self.modules}
-        lesson_ids = {item.id for item in self.lessons}
-
+    def _validate_module_layout(self, module_ids):
         _require_contiguous_positions("module positions", self.modules)
         lessons_by_module: dict[str, list[CanvasLesson]] = defaultdict(list)
         for lesson in self.lessons:
@@ -274,9 +251,7 @@ class CanvasGenerationPayload(AgenticContract):
                     f"{expected_minutes}"
                 )
 
-        if self.estimated_minutes != sum(item.estimated_minutes for item in self.lessons):
-            raise ValueError("estimated_minutes must equal the total lesson duration")
-
+    def _validate_assessment_layout(self, module_ids, lesson_ids):
         tests_by_target: dict[str, list[CanvasTest]] = defaultdict(list)
         for test in self.tests:
             if test.module_id is not None:
@@ -296,6 +271,7 @@ class CanvasGenerationPayload(AgenticContract):
         for lesson_id, assignments in assignments_by_lesson.items():
             _require_contiguous_positions(f"lesson {lesson_id} assignment positions", assignments)
 
+    def _validate_citation_inventories(self, objective_ids, competency_ids, source_ref_ids):
         for item in [*self.modules, *self.lessons, *self.tests, *self.assignments]:
             _require_unique(f"{item.id} objective ids", item.objective_ids)
             _require_unique(f"{item.id} competency ids", item.competency_ids)
@@ -326,6 +302,36 @@ class CanvasGenerationPayload(AgenticContract):
             _require_known(f"{rubric.id} competency ids", rubric.competency_ids, competency_ids)
             _require_known(f"{rubric.id} source ref ids", rubric.source_ref_ids, source_ref_ids)
 
+    @model_validator(mode="after")
+    def validate_canvas(self):
+        for label, values in (
+            ("payload objective ids", self.objective_ids),
+            ("payload competency ids", self.competency_ids),
+            ("payload source ref ids", self.source_ref_ids),
+            ("module ids", [item.id for item in self.modules]),
+            ("lesson ids", [item.id for item in self.lessons]),
+            ("test ids", [item.id for item in self.tests]),
+            ("assignment ids", [item.id for item in self.assignments]),
+            (
+                "question ids",
+                [question.id for test in self.tests for question in test.questions],
+            ),
+            ("rubric ids", [item.rubric.id for item in self.assignments]),
+        ):
+            _require_unique(label, values)
+
+        objective_ids = set(self.objective_ids)
+        competency_ids = set(self.competency_ids)
+        source_ref_ids = set(self.source_ref_ids)
+        module_ids = {item.id for item in self.modules}
+        lesson_ids = {item.id for item in self.lessons}
+
+        self._validate_module_layout(module_ids)
+        if self.estimated_minutes != sum(item.estimated_minutes for item in self.lessons):
+            raise ValueError("estimated_minutes must equal the total lesson duration")
+
+        self._validate_assessment_layout(module_ids, lesson_ids)
+        self._validate_citation_inventories(objective_ids, competency_ids, source_ref_ids)
         _validate_dag(
             "module prerequisites",
             {item.id: item.prerequisite_module_ids for item in self.modules},
@@ -336,38 +342,7 @@ class CanvasGenerationPayload(AgenticContract):
         )
         return self
 
-    def json_payload(self) -> tuple[list[dict], list[dict]]:
-        """Convert semantic response into the current persisted graph contract."""
-        modules = sorted(self.modules, key=lambda item: item.position)
-        lessons = sorted(
-            self.lessons,
-            key=lambda item: (
-                next(module.position for module in modules if module.id == item.module_id),
-                item.position,
-            ),
-        )
-        assignments_by_lesson: dict[str, list[CanvasAssignment]] = defaultdict(list)
-        for assignment in self.assignments:
-            assignments_by_lesson[assignment.lesson_id].append(assignment)
-        for assignments in assignments_by_lesson.values():
-            assignments.sort(key=lambda item: item.position)
-
-        nodes: list[dict] = []
-        edges: list[dict] = []
-        for module in modules:
-            nodes.append(
-                {
-                    "id": module.id,
-                    "label": module.title,
-                    "description": module.description,
-                    "type": "module",
-                    "estimated_minutes": module.estimated_minutes,
-                    "objective_ids": module.objective_ids,
-                    "competency_ids": module.competency_ids,
-                    "source_refs": module.source_ref_ids,
-                }
-            )
-
+    def _append_lesson_nodes(self, lessons, assignments_by_lesson, nodes):
         lessons_by_module: dict[str, list[CanvasLesson]] = defaultdict(list)
         for lesson in lessons:
             lessons_by_module[lesson.module_id].append(lesson)
@@ -401,12 +376,14 @@ class CanvasGenerationPayload(AgenticContract):
                     "cases": case_payloads,
                 }
             )
+        return lessons_by_module
 
+    def _append_curriculum_edges(self, modules, lessons, lessons_by_module, edges):
         for module in modules:
             module_lessons = sorted(lessons_by_module[module.id], key=lambda item: item.position)
             for lesson in module_lessons:
                 edges.append({"source": module.id, "target": lesson.id, "relation": "contains"})
-            for previous, current in zip(module_lessons, module_lessons[1:]):
+            for previous, current in zip(module_lessons, module_lessons[1:], strict=False):
                 edges.append(
                     {
                         "source": previous.id,
@@ -414,7 +391,7 @@ class CanvasGenerationPayload(AgenticContract):
                         "relation": "precedes",
                     }
                 )
-        for previous, current in zip(modules, modules[1:]):
+        for previous, current in zip(modules, modules[1:], strict=False):
             edges.append(
                 {
                     "source": previous.id,
@@ -441,6 +418,7 @@ class CanvasGenerationPayload(AgenticContract):
                     }
                 )
 
+    def _append_test_nodes(self, modules, nodes, edges):
         module_position = {item.id: item.position for item in modules}
         tests = sorted(
             self.tests,
@@ -502,4 +480,40 @@ class CanvasGenerationPayload(AgenticContract):
                             "relation": "precedes",
                         }
                     )
+
+    def json_payload(self) -> tuple[list[dict], list[dict]]:
+        """Convert semantic response into the current persisted graph contract."""
+        modules = sorted(self.modules, key=lambda item: item.position)
+        lessons = sorted(
+            self.lessons,
+            key=lambda item: (
+                next(module.position for module in modules if module.id == item.module_id),
+                item.position,
+            ),
+        )
+        assignments_by_lesson: dict[str, list[CanvasAssignment]] = defaultdict(list)
+        for assignment in self.assignments:
+            assignments_by_lesson[assignment.lesson_id].append(assignment)
+        for assignments in assignments_by_lesson.values():
+            assignments.sort(key=lambda item: item.position)
+
+        nodes: list[dict] = []
+        edges: list[dict] = []
+        for module in modules:
+            nodes.append(
+                {
+                    "id": module.id,
+                    "label": module.title,
+                    "description": module.description,
+                    "type": "module",
+                    "estimated_minutes": module.estimated_minutes,
+                    "objective_ids": module.objective_ids,
+                    "competency_ids": module.competency_ids,
+                    "source_refs": module.source_ref_ids,
+                }
+            )
+
+        lessons_by_module = self._append_lesson_nodes(lessons, assignments_by_lesson, nodes)
+        self._append_curriculum_edges(modules, lessons, lessons_by_module, edges)
+        self._append_test_nodes(modules, nodes, edges)
         return nodes, edges

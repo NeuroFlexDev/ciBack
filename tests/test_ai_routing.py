@@ -6,12 +6,14 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 
 from app.ai import gateway, routing
+from app.ai.gateway import InvocationOptions
 from app.core.config import AIRoutingCandidate, settings
 from app.models.ai_state import AICall
 from app.models.generation_run import GenerationRun
 from app.models.user import User
 from app.services import generation_service
 from app.services.agent_runtime import AgentRuntime
+from tests.factories import unpack_call_options
 from tests.test_ai_runtime_v2 import execute, make_runtime
 
 
@@ -42,15 +44,21 @@ def adaptive(monkeypatch):
 
 
 def choose(**kwargs):
+    parameters = {
+        "role": "ingestion",
+        "baseline_model": settings.AI_MODEL_FAST,
+        "input_tokens": 1000,
+        "output_tokens": 6000,
+        "now": 1000,
+        **kwargs,
+    }
+    request = {
+        name: parameters.pop(name)
+        for name in ("role", "baseline_model", "input_tokens", "output_tokens")
+    }
     return routing.choose_route(
-        **{
-            "role": "ingestion",
-            "baseline_model": settings.AI_MODEL_FAST,
-            "input_tokens": 1000,
-            "output_tokens": 6000,
-            "now": 1000,
-            **kwargs,
-        }
+        **request,
+        routing_context=routing.RouteContext(**parameters),
     )
 
 
@@ -150,6 +158,7 @@ def test_runtime_escalates_after_validation_and_records_requested_model(
     calls = []
 
     def generate(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         calls.append(kwargs)
         return {
             "value": "invalid" if len(calls) == 1 else 2,
@@ -187,7 +196,7 @@ def test_owner_history_does_not_change_another_owners_route(adaptive, db_session
     db_session.commit()
     seen = []
     runtime = make_runtime(
-        db_session, auth_user, lambda *a, **kw: seen.append(kw["model"]) or {"value": 1}
+        db_session, auth_user, lambda *a, **kw: seen.append(kw["request"].model) or {"value": 1}
     )
     execute(runtime)
     assert seen == ["test/cheap"]
@@ -216,7 +225,7 @@ def test_cache_avoids_paid_calls_and_policy_change_invalidates_it(
 ):
     calls = []
     runtime = make_runtime(
-        db_session, auth_user, lambda *a, **kw: calls.append(kw["model"]) or {"value": 1}
+        db_session, auth_user, lambda *a, **kw: calls.append(kw["request"].model) or {"value": 1}
     )
     execute(runtime)
     prior = db_session.get(GenerationRun, runtime.run_id)
@@ -273,7 +282,9 @@ def test_gateway_enforces_dynamic_allowlist_and_transmits_selected_model(adaptiv
     monkeypatch.setattr(gateway, "ChatOpenAI", FakeLLM)
     monkeypatch.setattr(settings, "VSELLM_API_KEY", SecretStr("test-only"))
     result = gateway.invoke_messages(
-        "ingestion", [{"role": "user", "content": "x"}], model="test/cheap", json_mode=True
+        "ingestion",
+        [{"role": "user", "content": "x"}],
+        options=InvocationOptions(model="test/cheap", json_mode=True),
     )
     assert result["usage_reported"]
     assert calls == ["test/cheap"]
@@ -284,7 +295,9 @@ def test_gateway_enforces_dynamic_allowlist_and_transmits_selected_model(adaptiv
     ]:
         monkeypatch.setattr(settings, "AI_ROUTING_MODE", mode)
         with pytest.raises(HTTPException) as exc:
-            gateway.invoke_messages(role, [{"role": "user", "content": "x"}], model=model)
+            gateway.invoke_messages(
+                role, [{"role": "user", "content": "x"}], options=InvocationOptions(model=model)
+            )
         assert exc.value.status_code == 422
     assert calls == ["test/cheap"]
 
@@ -329,7 +342,11 @@ def test_rejected_responses_retain_billed_usage(adaptive, monkeypatch, finish, c
 
     monkeypatch.setattr(gateway, "ChatOpenAI", FakeLLM)
     with pytest.raises(HTTPException) as exc:
-        gateway.invoke_messages("ingestion", [{"role": "user", "content": "x"}], model="test/cheap")
+        gateway.invoke_messages(
+            "ingestion",
+            [{"role": "user", "content": "x"}],
+            options=InvocationOptions(model="test/cheap"),
+        )
     assert exc.value.status_code == status
     assert exc.value.ai_usage == {"input_tokens": 7, "output_tokens": 3, "cached_tokens": 0}
 

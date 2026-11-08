@@ -1,4 +1,3 @@
-import json
 import logging
 import traceback
 
@@ -8,12 +7,7 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.lesson import Lesson
 from app.models.module import Module
-from app.models.task import Task
-from app.models.test import Test
-from app.models.theory import Theory
 from app.repositories.generation import GenerationRepository
-from app.schemas.generation import LessonRequest
-from app.services.embedding_service import embed_and_add
 from app.services.generation_service import DEFAULT_ENGINE, DEFAULT_MODEL, course_kwargs, llm_json
 
 router = APIRouter(
@@ -60,4 +54,4 @@ def generate_and_save_modules(
     except Exception as e:
         db.rollback()
         logger.error("DB error: %s\n%s", e, traceback.format_exc())
-        raise HTTPException(500, f"❌ Ошибка сохранения модулей: {e}")
+        raise HTTPException(500, f"❌ Ошибка сохранения модулей: {e}") from e

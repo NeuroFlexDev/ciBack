@@ -1,6 +1,8 @@
 import base64
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -54,7 +56,21 @@ def invoice_dict(row):
     }
 
 
-def apply_payment(db, invoice, *, reference, provider, actor=None, reason=""):
+@dataclass(frozen=True, kw_only=True)
+class PaymentSource:
+    """Parameters for apply_payment, preserving its original defaults."""
+
+    reference: Any
+    provider: Any
+    actor: Any = None
+    reason: Any = ""
+
+
+def apply_payment(db, invoice, *, confirmation: PaymentSource):
+    reference = confirmation.reference
+    provider = confirmation.provider
+    actor = confirmation.actor
+    reason = confirmation.reason
     if invoice.status == "paid":
         if invoice.payment_reference != reference:
             raise HTTPException(409, "Счёт уже оплачен другим платежом")
@@ -129,8 +145,8 @@ def fetch_verified_payment(payment_id):
             f"https://api.yookassa.ru/v3/payments/{payment_id}",
             headers={"Authorization": "Basic " + authorization},
         )
-    except Exception:
-        raise HTTPException(503, "Не удалось проверить платёж у провайдера")
+    except Exception as _error_cause:
+        raise HTTPException(503, "Не удалось проверить платёж у провайдера") from _error_cause
 
 
 def reconcile_payment(db, payment_id):
@@ -153,8 +169,8 @@ def reconcile_payment(db, payment_id):
         if not amount.is_finite() or amount != amount.to_integral_value():
             raise ValueError()
         amount = int(amount)
-    except (KeyError, ValueError, InvalidOperation, TypeError):
-        raise HTTPException(409, "Некорректная сумма платежа")
+    except (KeyError, ValueError, InvalidOperation, TypeError) as _error_cause:
+        raise HTTPException(409, "Некорректная сумма платежа") from _error_cause
     if amount != invoice.amount_minor or payment["amount"].get("currency") != invoice.currency:
         raise HTTPException(409, "Сумма или валюта платежа не совпадает со счётом")
     if str(payment.get("metadata", {}).get("organization_id")) != str(invoice.organization_id):
@@ -162,6 +178,10 @@ def reconcile_payment(db, payment_id):
     if invoice.provider_payment_id and invoice.provider_payment_id != payment_id:
         raise HTTPException(409, "Счёт связан с другим платежом")
     invoice.provider_payment_id = payment_id
-    apply_payment(db, invoice, reference="yookassa:" + payment_id, provider="yookassa")
+    apply_payment(
+        db,
+        invoice,
+        confirmation=PaymentSource(reference="yookassa:" + payment_id, provider="yookassa"),
+    )
     db.commit()
     return invoice_dict(invoice)

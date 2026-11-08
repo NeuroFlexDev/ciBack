@@ -18,6 +18,7 @@ import json
 import math
 import os
 import tempfile
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -72,17 +73,24 @@ def count_messages(messages: list[dict], model: str) -> int:
     )
 
 
+@dataclass(frozen=True, kw_only=True)
+class ContextLimit:
+    """Parameters for __init__, preserving its original defaults."""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    input_limit: int
+    context_window: int
+
+
 class ContextBudgetExceeded(HTTPException):
-    def __init__(
-        self,
-        *,
-        model: str,
-        input_tokens: int,
-        output_tokens: int,
-        input_limit: int,
-        context_window: int,
-        request_sent: bool = False,
-    ):
+    def __init__(self, *, request_sent: bool = False, budget: ContextLimit):
+        model = budget.model
+        input_tokens = budget.input_tokens
+        output_tokens = budget.output_tokens
+        input_limit = budget.input_limit
+        context_window = budget.context_window
         super().__init__(
             413,
             {
@@ -145,11 +153,13 @@ def require_fits(
     max_input, max_output, context = limits(model, provider)
     if output_tokens > max_output or estimate > max_input or estimate + output_tokens > context:
         raise ContextBudgetExceeded(
-            model=model,
-            input_tokens=estimate,
-            output_tokens=output_tokens,
-            input_limit=max_input,
-            context_window=context,
+            budget=ContextLimit(
+                model=model,
+                input_tokens=estimate,
+                output_tokens=output_tokens,
+                input_limit=max_input,
+                context_window=context,
+            )
         )
     return estimate
 

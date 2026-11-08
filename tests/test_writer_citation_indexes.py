@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.ai.curriculum import complete_writer_inventories
 from app.schemas.agentic_pipeline import WriterArtifact
-from app.services.agent_runtime import expand_source_refs
+from app.services.agent_runtime import AgentInvocation, expand_source_refs
 from tests.test_ai_runtime_v2 import SOURCE, make_runtime
 
 SECOND = {**SOURCE, "id": "src:doc:1:v1:chunk:2", "chunk_id": 2, "chunk_index": 1}
@@ -96,14 +96,16 @@ def test_runtime_accepts_reconciled_writer_in_one_call(db_session, auth_user):
     runtime = make_runtime(db_session, auth_user, generate)
     runtime.register_sources(CATALOG)
     result = runtime.execute(
-        agent="lesson_writer",
-        artifact="lesson_draft",
-        sequence=0,
-        template_name="lesson_writer_prompt.j2",
-        response_model=WriterArtifact,
-        prompt_context={},
-        max_tokens=100,
-        normalize_response=lambda raw: complete_writer_inventories(raw, CATALOG),
+        request=AgentInvocation(
+            agent="lesson_writer",
+            artifact="lesson_draft",
+            sequence=0,
+            template_name="lesson_writer_prompt.j2",
+            response_model=WriterArtifact,
+            prompt_context={},
+            max_tokens=100,
+            normalize_response=lambda raw: complete_writer_inventories(raw, CATALOG),
+        )
     )
     assert result.lessons[0].source_ref_ids == [SOURCE["id"]]
     assert len(calls) == 1

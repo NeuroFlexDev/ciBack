@@ -11,6 +11,7 @@ import math
 import random
 import time
 from collections import Counter, defaultdict, deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -38,11 +39,24 @@ class Measurements:
         self.requests = 0
         self.records = defaultdict(list)
         self.recent_failures = deque(maxlen=100)
+        self.stopped = asyncio.Event()
         self.stop_reason = None
         self.inflight = 0
         self.peak_inflight = 0
         self.active_users = 0
         self.phase_users = defaultdict(lambda: {"started": 0, "finished": 0, "peak_active": 0})
+
+    @property
+    def stop_reason(self):
+        return self._stop_reason
+
+    @stop_reason.setter
+    def stop_reason(self, reason):
+        self._stop_reason = reason
+        if reason is None:
+            self.stopped.clear()
+        else:
+            self.stopped.set()
 
     def permit(self):
         if self.stop_reason:
@@ -87,9 +101,21 @@ class Measurements:
         }
 
 
-async def request(
-    client, metrics, phase, session, method, path, endpoint, payload=None, expected=(200,)
-):
+@dataclass(frozen=True, kw_only=True)
+class RequestOperation:
+    method: str
+    path: str
+    endpoint: str
+    payload: dict | None = None
+    expected: tuple[int, ...] = (200,)
+
+
+async def request(client, metrics, phase, session, *, operation: RequestOperation):
+    method = operation.method
+    path = operation.path
+    endpoint = operation.endpoint
+    payload = operation.payload
+    expected = operation.expected
     if not metrics.permit():
         return None
     started = time.monotonic()
@@ -145,35 +171,74 @@ def validate_bundle(bundle, quick=False):
         raise ValueError("Tokens would expire during the reviewed run; refresh the private bundle")
 
 
-async def learner(
-    client, metrics, name, session, phase_index, duration, delay, seed, think_seconds
-):
+@dataclass(frozen=True, kw_only=True)
+class LearnerScenario:
+    name: str
+    phase_index: int
+    duration: float
+    delay: float
+    seed: int
+    think_seconds: float
+
+
+async def _begin_learner(client, metrics, session, scenario):
+    name = scenario.name
+    prefix = "/learning/assignments/" + str(session["assignments"][scenario.phase_index]["id"])
+    question = (
+        prefix + "/responses/" + session["assignments"][scenario.phase_index]["assessment_id"]
+    )
+    # Each worker reads its real revision before any mutation. No fabricated revisions or retries.
+    detail = await request(
+        client,
+        metrics,
+        name,
+        session,
+        operation=RequestOperation(method="GET", path=prefix, endpoint="assignment_detail"),
+    )
+    if not detail:
+        return None
+    revision = detail["progress_revision"]
+    if detail["responses"]:
+        metrics.stop_reason = "phase_assignment_already_used_create_a_fresh_fixture"
+        return None
+    saved = await request(
+        client,
+        metrics,
+        name,
+        session,
+        operation=RequestOperation(
+            method="PUT",
+            path=question,
+            endpoint="answer_draft",
+            payload={
+                "expected_revision": 0,
+                "attempt": 1,
+                "answer": {"selected": ["Check evidence"]},
+            },
+        ),
+    )
+    if not saved:
+        return None
+    return saved, revision
+
+
+async def learner(client, metrics, session, *, scenario: LearnerScenario):
+    name = scenario.name
+    phase_index = scenario.phase_index
+    duration = scenario.duration
+    delay = scenario.delay
+    seed = scenario.seed
+    think_seconds = scenario.think_seconds
     rng = random.Random(seed)
     await asyncio.sleep(delay)
     deadline = time.monotonic() + duration
     item = session["assignments"][phase_index]
     prefix = "/learning/assignments/" + str(item["id"])
     question = prefix + "/responses/" + item["assessment_id"]
-    # Each worker reads its real revision before any mutation. No fabricated revisions or retries.
-    detail = await request(client, metrics, name, session, "GET", prefix, "assignment_detail")
-    if not detail:
+    initial = await _begin_learner(client, metrics, session, scenario)
+    if initial is None:
         return
-    revision = detail["progress_revision"]
-    if detail["responses"]:
-        metrics.stop_reason = "phase_assignment_already_used_create_a_fresh_fixture"
-        return
-    saved = await request(
-        client,
-        metrics,
-        name,
-        session,
-        "PUT",
-        question,
-        "answer_draft",
-        {"expected_revision": 0, "attempt": 1, "answer": {"selected": ["Check evidence"]}},
-    )
-    if not saved:
-        return
+    saved, revision = initial
     submitted = False
     iteration = 0
     while time.monotonic() < deadline and not metrics.stop_reason:
@@ -184,26 +249,34 @@ async def learner(
                 metrics,
                 name,
                 session,
-                "GET",
-                "/learning/assignments?limit=20",
-                "assignment_list",
+                operation=RequestOperation(
+                    method="GET", path="/learning/assignments?limit=20", endpoint="assignment_list"
+                ),
             )
         elif selection in {1, 2, 4}:
-            await request(client, metrics, name, session, "GET", prefix, "assignment_detail")
+            await request(
+                client,
+                metrics,
+                name,
+                session,
+                operation=RequestOperation(method="GET", path=prefix, endpoint="assignment_detail"),
+            )
         elif selection == 3:
             result = await request(
                 client,
                 metrics,
                 name,
                 session,
-                "PUT",
-                prefix + "/progress",
-                "lesson_progress",
-                {
-                    "expected_revision": revision,
-                    "lesson_id": item["lesson_ids"][(iteration // 7) % len(item["lesson_ids"])],
-                    "completed": True,
-                },
+                operation=RequestOperation(
+                    method="PUT",
+                    path=prefix + "/progress",
+                    endpoint="lesson_progress",
+                    payload={
+                        "expected_revision": revision,
+                        "lesson_id": item["lesson_ids"][iteration // 7 % len(item["lesson_ids"])],
+                        "completed": True,
+                    },
+                ),
             )
             if result:
                 revision = result["progress_revision"]
@@ -213,32 +286,46 @@ async def learner(
                 metrics,
                 name,
                 session,
-                "POST",
-                question + "/submit",
-                "answer_submit",
-                {
-                    "expected_revision": saved["revision"],
-                    "attempt": 1,
-                    "answer": {"selected": ["Check evidence"]},
-                    "submission_key": f"load:{item['id']}:{phase_index}",
-                },
+                operation=RequestOperation(
+                    method="POST",
+                    path=question + "/submit",
+                    endpoint="answer_submit",
+                    payload={
+                        "expected_revision": saved["revision"],
+                        "attempt": 1,
+                        "answer": {"selected": ["Check evidence"]},
+                        "submission_key": f"load:{item['id']}:{phase_index}",
+                    },
+                ),
             )
             if result:
                 submitted = True
         else:
             await request(
-                client, metrics, name, session, "GET", prefix + "/results", "assignment_results"
+                client,
+                metrics,
+                name,
+                session,
+                operation=RequestOperation(
+                    method="GET", path=prefix + "/results", endpoint="assignment_results"
+                ),
             )
         iteration += 1
         await asyncio.sleep(think_seconds * rng.uniform(0.75, 1.25))
 
 
-async def tracked_learner(
-    client, metrics, name, session, phase_index, duration, delay, seed, think_seconds
-):
-    start = time.monotonic() + delay
-    while time.monotonic() < start and not metrics.stop_reason:
-        await asyncio.sleep(min(0.5, start - time.monotonic()))
+async def tracked_learner(client, metrics, session, *, scenario: LearnerScenario):
+    name = scenario.name
+    phase_index = scenario.phase_index
+    duration = scenario.duration
+    delay = scenario.delay
+    seed = scenario.seed
+    think_seconds = scenario.think_seconds
+    if delay > 0 and not metrics.stop_reason:
+        try:
+            await asyncio.wait_for(metrics.stopped.wait(), timeout=delay)
+        except TimeoutError:
+            pass
     if metrics.stop_reason:
         return
     stats = metrics.phase_users[name]
@@ -246,7 +333,19 @@ async def tracked_learner(
     metrics.active_users += 1
     stats["peak_active"] = max(stats["peak_active"], metrics.active_users)
     try:
-        await learner(client, metrics, name, session, phase_index, duration, 0, seed, think_seconds)
+        await learner(
+            client,
+            metrics,
+            session,
+            scenario=LearnerScenario(
+                name=name,
+                phase_index=phase_index,
+                duration=duration,
+                delay=0,
+                seed=seed,
+                think_seconds=think_seconds,
+            ),
+        )
     finally:
         stats["finished"] += 1
         metrics.active_users -= 1
@@ -267,7 +366,11 @@ async def run(bundle, *, quick=False, max_requests=20000, transport=None):
     ) as client:
         # A leading slash on httpx relative paths retains the /api base path.
         identity = await request(
-            client, metrics, "preflight", bundle["sessions"][0], "GET", "/auth/me", "identity"
+            client,
+            metrics,
+            "preflight",
+            bundle["sessions"][0],
+            operation=RequestOperation(method="GET", path="/auth/me", endpoint="identity"),
         )
         if not identity or identity.get("id") != bundle["sessions"][0]["user_id"]:
             raise ValueError("Authenticated account does not match the private session bundle")
@@ -276,10 +379,12 @@ async def run(bundle, *, quick=False, max_requests=20000, transport=None):
             metrics,
             "preflight",
             bundle["foreign"],
-            "GET",
-            "/learning/assignments/" + str(bundle["sessions"][0]["assignments"][0]["id"]),
-            "tenant_isolation",
-            expected=(403, 404),
+            operation=RequestOperation(
+                method="GET",
+                path="/learning/assignments/" + str(bundle["sessions"][0]["assignments"][0]["id"]),
+                endpoint="tenant_isolation",
+                expected=(403, 404),
+            ),
         )
         if denied is None:
             raise ValueError("Cross-organization denial not confirmed")
@@ -291,13 +396,15 @@ async def run(bundle, *, quick=False, max_requests=20000, transport=None):
                     tracked_learner(
                         client,
                         metrics,
-                        name,
                         session,
-                        phase_index,
-                        duration,
-                        ramp * index / max(1, count - 1),
-                        index,
-                        0.03 if quick else 5.0,
+                        scenario=LearnerScenario(
+                            name=name,
+                            phase_index=phase_index,
+                            duration=duration,
+                            delay=ramp * index / max(1, count - 1),
+                            seed=index,
+                            think_seconds=0.03 if quick else 5.0,
+                        ),
                     )
                     for index, session in enumerate(bundle["sessions"][:count])
                 )

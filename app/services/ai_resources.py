@@ -5,8 +5,10 @@ never consume its slots. There is no automatic paid retry in this boundary.
 Timeouts retain worst-case spend; only proven unsent requests release it.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_UP, Decimal
+from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -131,9 +133,19 @@ def background_admission_paused():
         ) from None
 
 
-def _capacity(db, owner_id, organization_id, lane, state, *, exclude=None):
-    # Deployment suspends admission under this same database mutex. Existing
-    # jobs can finish their internal AI calls; queued work waits for resume.
+@dataclass(frozen=True, kw_only=True)
+class CapacityCheck:
+    """Parameters for _capacity, preserving its original defaults."""
+
+    lane: Any
+    state: Any
+    exclude: Any = None
+
+
+def _capacity(db, owner_id, organization_id, *, check: CapacityCheck):
+    lane = check.lane
+    state = check.state
+    exclude = check.exclude
     if lane == "background" and state == "running" and background_admission_paused():
         raise CapacityBusy(
             "ai_deployment_pending",
@@ -157,7 +169,21 @@ def _capacity(db, owner_id, organization_id, lane, state, *, exclude=None):
         raise CapacityBusy()
 
 
-def _budget(db, owner_id, organization_id, tokens, pages, cost, run_id=None):
+@dataclass(frozen=True, kw_only=True)
+class ResourceEstimate:
+    """Parameters for _budget, preserving its original defaults."""
+
+    tokens: Any
+    pages: Any
+    cost: Any
+    run_id: Any = None
+
+
+def _budget(db, owner_id, organization_id, *, estimate: ResourceEstimate):
+    tokens = estimate.tokens
+    pages = estimate.pages
+    cost = estimate.cost
+    run_id = estimate.run_id
     from app.models.administration import Organization
     from app.services.ai_entitlements import unlimited_ai
 
@@ -181,7 +207,7 @@ def _budget(db, owner_id, organization_id, tokens, pages, cost, run_id=None):
             func.coalesce(func.sum(AIResourceUsage.cost_rub), 0),
         ).one()
 
-        def limit(name):
+        def limit(name, suffix=suffix):
             return (
                 limits[name.lower()] if suffix == "ORG" else getattr(settings, f"AI_INSTALL_{name}")
             )
@@ -208,22 +234,37 @@ def _budget(db, owner_id, organization_id, tokens, pages, cost, run_id=None):
             )
 
 
-def reserve(
-    db,
-    *,
-    owner_id,
-    course_id=None,
-    operation,
-    lane="metered",
-    tokens=0,
-    pages=0,
-    cost=Decimal(0),
-    key=None,
-    run_id=None,
-    queued=False,
-    timeout=None,
-    partial_ocr=False,
-):
+@dataclass(frozen=True, kw_only=True)
+class ResourceReservation:
+    """Parameters for reserve, preserving its original defaults."""
+
+    owner_id: Any
+    course_id: Any = None
+    operation: Any
+    lane: Any = "metered"
+    tokens: Any = 0
+    pages: Any = 0
+    cost: Any = Decimal(0)
+    key: Any = None
+    run_id: Any = None
+    queued: Any = False
+    timeout: Any = None
+    partial_ocr: Any = False
+
+
+def reserve(db, *, reservation: ResourceReservation):
+    owner_id = reservation.owner_id
+    course_id = reservation.course_id
+    operation = reservation.operation
+    lane = reservation.lane
+    tokens = reservation.tokens
+    pages = reservation.pages
+    cost = reservation.cost
+    key = reservation.key
+    run_id = reservation.run_id
+    queued = reservation.queued
+    timeout = reservation.timeout
+    partial_ocr = reservation.partial_ocr
     locked(db)
     key = key or f"{operation}:{uuid4().hex}"
     existing = db.query(AIResourceUsage).filter_by(key=key).first()
@@ -233,13 +274,18 @@ def reserve(
 
             run = db.get(GenerationRun, run_id)
             if run.status == "queued" and not run.cancel_requested:
-                _capacity(db, owner_id, existing.organization_id, lane, "queued")
+                _capacity(
+                    db,
+                    owner_id,
+                    existing.organization_id,
+                    check=CapacityCheck(lane=lane, state="queued"),
+                )
                 existing.status, existing.finished_at, existing.expires_at = "queued", None, None
         return existing
     org_id = scope(db, owner_id, course_id)
     status = "queued" if queued else "running"
     if lane in {"background", "interactive"}:
-        _capacity(db, owner_id, org_id, lane, status)
+        _capacity(db, owner_id, org_id, check=CapacityCheck(lane=lane, state=status))
     cost = Decimal(cost).quantize(Decimal(".000001"), rounding=ROUND_UP)
     from app.services.ai_entitlements import unlimited_ai
 
@@ -274,7 +320,12 @@ def reserve(
                 organization_limits(db, org_id)["monthly_ocr_pages"] - org_used,
             ),
         )
-    _budget(db, owner_id, org_id, tokens, pages, cost, run_id)
+    _budget(
+        db,
+        owner_id,
+        org_id,
+        estimate=ResourceEstimate(tokens=tokens, pages=pages, cost=cost, run_id=run_id),
+    )
     row = AIResourceUsage(
         key=key,
         owner_id=owner_id,
@@ -304,7 +355,12 @@ def claim(db, key):
     if row.status != "queued":
         db.commit()
         return False
-    _capacity(db, row.owner_id, row.organization_id, row.lane, "running", exclude=row.id)
+    _capacity(
+        db,
+        row.owner_id,
+        row.organization_id,
+        check=CapacityCheck(lane=row.lane, state="running", exclude=row.id),
+    )
     row.status = "running"
     row.expires_at = datetime.utcnow() + timedelta(seconds=settings.AI_JOB_TIMEOUT_SECONDS + 120)
     db.commit()
@@ -329,22 +385,44 @@ def prepare_generation_retry(db, run):
             },
         )
     if row:
-        _capacity(db, row.owner_id, row.organization_id, row.lane, "queued", exclude=row.id)
+        _capacity(
+            db,
+            row.owner_id,
+            row.organization_id,
+            check=CapacityCheck(lane=row.lane, state="queued", exclude=row.id),
+        )
         row.status, row.finished_at, row.expires_at = "queued", None, None
         return row
     return reserve(
         db,
-        owner_id=run.owner_id,
-        course_id=run.course_id,
-        operation="generation",
-        lane="background",
-        key=f"generation:{run.id}",
-        run_id=run.id,
-        queued=True,
+        reservation=ResourceReservation(
+            owner_id=run.owner_id,
+            course_id=run.course_id,
+            operation="generation",
+            lane="background",
+            key=f"generation:{run.id}",
+            run_id=run.id,
+            queued=True,
+        ),
     )
 
 
-def finish(db, row, *, usage=None, unsent=False, failed=False, pages=None):
+@dataclass(frozen=True, kw_only=True)
+class ResourceOutcome:
+    """Parameters for finish, preserving its original defaults."""
+
+    usage: Any = None
+    unsent: Any = False
+    failed: Any = False
+    pages: Any = None
+
+
+def finish(db, row, *, outcome: ResourceOutcome | None = None):
+    outcome = outcome or ResourceOutcome()
+    usage = outcome.usage
+    unsent = outcome.unsent
+    failed = outcome.failed
+    pages = outcome.pages
     if isinstance(row, str):
         row = db.query(AIResourceUsage).filter_by(key=row).first()
     if row is None:
@@ -411,9 +489,21 @@ def text_price(role, input_tokens, output_tokens, *, model=None, provider=None):
     return max(costs)
 
 
-def completion(
-    db, owner_id, course_id, role, messages, *, invoke=None, expected_principal=None, **kwargs
-):
+@dataclass(frozen=True, kw_only=True)
+class CompletionContext:
+    """Parameters for completion, preserving its original defaults."""
+
+    role: Any
+    messages: Any
+    invoke: Any = None
+    expected_principal: Any = None
+
+
+def completion(db, owner_id, course_id, *, context: CompletionContext, **kwargs):
+    role = context.role
+    messages = context.messages
+    invoke = context.invoke
+    expected_principal = context.expected_principal
     from app.ai import gateway
     from app.ai.models import model_policy
 
@@ -446,24 +536,30 @@ def completion(
     tokens = gateway.token_count(messages)
     row = reserve(
         db,
-        owner_id=owner_id,
-        course_id=course_id,
-        operation=role,
-        lane="interactive",
-        tokens=tokens + output,
-        cost=text_price(
-            role, tokens, output, model=kwargs.get("model"), provider=kwargs.get("provider")
+        reservation=ResourceReservation(
+            owner_id=owner_id,
+            course_id=course_id,
+            operation=role,
+            lane="interactive",
+            tokens=tokens + output,
+            cost=text_price(
+                role, tokens, output, model=kwargs.get("model"), provider=kwargs.get("provider")
+            ),
         ),
     )
     db.commit()
     try:
-        result = (invoke or gateway.invoke_messages)(role, messages, **kwargs)
+        result = (invoke or gateway.invoke_messages)(
+            role, messages, options=gateway.InvocationOptions(**kwargs)
+        )
         finish(
             db,
             row,
-            usage=result.get("usage")
-            if result.get("usage_reported", bool(result.get("usage")))
-            else None,
+            outcome=ResourceOutcome(
+                usage=result.get("usage")
+                if result.get("usage_reported", bool(result.get("usage")))
+                else None
+            ),
         )
         return result
     except Exception as exc:
@@ -471,9 +567,11 @@ def completion(
         finish(
             db,
             row,
-            usage=getattr(exc, "ai_usage", None),
-            unsent=getattr(exc, "request_sent", None) is False,
-            failed=True,
+            outcome=ResourceOutcome(
+                usage=getattr(exc, "ai_usage", None),
+                unsent=getattr(exc, "request_sent", None) is False,
+                failed=True,
+            ),
         )
         raise
 

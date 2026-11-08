@@ -28,7 +28,7 @@ os.environ.update(
     AI_MAX_REVISIONS="1",
 )
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import app.models
+import app.models  # noqa: F401 -- register ORM mappings
 from app.database.db import Base, SessionLocal, engine
 from app.models.ai_state import AICall
 from app.models.course import Course
@@ -80,9 +80,10 @@ report = {"success": False, "stages": [], "repairs": []}
 
 
 def tracked_generate(*args, **kwargs):
-    if kwargs.get("repair_feedback"):
+    request = kwargs["request"]
+    if request.repair_feedback:
         report["repairs"].append(
-            {"agent": kwargs.get("agent_role"), "diagnostic": kwargs["repair_feedback"][:1500]}
+            {"agent": request.agent_role, "diagnostic": request.repair_feedback[:1500]}
         )
     return generate_from_prompt(*args, **kwargs)
 
@@ -90,7 +91,7 @@ def tracked_generate(*args, **kwargs):
 try:
     from app.ai.retrieval import PersistentVectorStore, persist_embeddings
     from app.models.document import Document, DocumentChunk
-    from app.services.retrieval_service import RetrievalService
+    from app.services.retrieval_service import RetrievalQuery, RetrievalService
 
     doc = Document(
         owner_id=user.id,
@@ -114,19 +115,18 @@ try:
     ]
     session.add_all(chunks)
     session.flush()
-    for source, chunk in zip(sources, chunks):
+    for source, chunk in zip(sources, chunks, strict=True):
         source.update(document_id=doc.id, chunk_id=chunk.id)
     embedding_ids = persist_embeddings(session, chunks)
-    for chunk, embedding_id in zip(chunks, embedding_ids):
+    for chunk, embedding_id in zip(chunks, embedding_ids, strict=True):
         chunk.embedding_id = embedding_id
     session.commit()
     found = RetrievalService.search_course(
         session,
         course_id=course.id,
         owner_id=user.id,
-        query="Что делать при утечке?",
-        limit=2,
         vector_store=PersistentVectorStore(session),
+        search_query=RetrievalQuery(query="Что делать при утечке?", limit=2),
     )
     assert found.citations and all(c.document_id == doc.id for c in found.citations)
     report["embeddings_and_retrieval"] = True

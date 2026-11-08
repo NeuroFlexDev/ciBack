@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from app.services.file_storage import get_file_storage
 
 
-def file_response(request: Request, key: str, size: int, digest: str, mime: str):
+def _verified_file(key, size, digest):
     storage = get_file_storage()
     path = storage._target(key)
     hasher = sha256()
@@ -20,8 +20,10 @@ def file_response(request: Request, key: str, size: int, digest: str, mime: str)
         raise HTTPException(503, "Файл временно недоступен") from None
     if path.stat().st_size != size or hasher.hexdigest() != digest:
         raise HTTPException(503, "Проверка целостности файла не пройдена")
+    return path
 
-    etag = f'"{digest}"'
+
+def _requested_range(request, size, etag):
     range_header = request.headers.get("range")
     # A stale If-Range means restart from the full immutable file.
     if request.headers.get("if-range") and request.headers["if-range"] != etag:
@@ -54,6 +56,13 @@ def file_response(request: Request, key: str, size: int, digest: str, mime: str)
                     "Content-Range": f"bytes */{size}",
                 },
             ) from None
+    return start, end, status
+
+
+def file_response(request: Request, key: str, size: int, digest: str, mime: str):
+    path = _verified_file(key, size, digest)
+    etag = f'"{digest}"'
+    start, end, status = _requested_range(request, size, etag)
     length = max(0, end - start + 1)
 
     def chunks():

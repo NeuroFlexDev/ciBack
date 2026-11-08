@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import delete, update
 
-import app.models
+import app.models  # noqa: F401 -- register ORM mappings
 from app.database.db import SessionLocal
 from app.models.mfa import MFAChallenge, UserMFA
 

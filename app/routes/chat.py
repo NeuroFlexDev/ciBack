@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -6,10 +7,15 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.chat import Chat
 from app.models.user import User
-from app.repositories.chat import ChatRepository
+from app.repositories.chat import ChatHistoryWindow, ChatRepository
 from app.schemas.chat import ChatCreate, ChatOut, ChatRename, MessageIn, MessageOut, ModelPatch
 from app.services.auth_service import get_current_user
-from app.services.chat_service import chat_generate, convert_messages, list_available_models
+from app.services.chat_service import (
+    ChatGenerationRequest,
+    chat_generate,
+    convert_messages,
+    list_available_models,
+)
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 logger = logging.getLogger(__name__)
@@ -40,8 +46,8 @@ def create_chat_route(
 ):
     try:
         return _chat_out(ChatRepository.create_chat(db, user.id, payload.name, payload.course_id))
-    except KeyError:
-        raise HTTPException(404, "Course not found")
+    except KeyError as _error_cause:
+        raise HTTPException(404, "Course not found") from _error_cause
 
 
 @router.get("/", response_model=list[ChatOut])
@@ -60,23 +66,35 @@ def get_chats_route(
     ]
 
 
+@dataclass
+class MessageHistoryFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    limit: int | None = Query(default=None, ge=1, le=200)
+    offset: int = Query(default=0, ge=0)
+    newest: bool = Query(default=False)
+
+
 @router.get(
     "/{chat_id}/messages", response_model=list[MessageOut], response_model_exclude_none=True
 )
 def get_msgs_route(
     chat_id: int,
-    limit: int | None = Query(default=None, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-    newest: bool = Query(default=False),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    filters: MessageHistoryFilters = Depends(),
 ):
     try:
         messages = ChatRepository.get_history(
-            db, chat_id, user.id, limit=limit, offset=offset, newest=newest
+            db,
+            chat_id,
+            user.id,
+            window=ChatHistoryWindow(
+                limit=filters.limit, offset=filters.offset, newest=filters.newest
+            ),
         )
-    except KeyError:
-        raise HTTPException(404, "Chat not found")
+    except KeyError as _error_cause:
+        raise HTTPException(404, "Chat not found") from _error_cause
     return convert_messages(messages)
 
 
@@ -88,8 +106,8 @@ def delete_chat_route(
 ):
     try:
         ChatRepository.delete_chat(db, chat_id, user.id)
-    except KeyError:
-        raise HTTPException(404, "Chat not found")
+    except KeyError as _error_cause:
+        raise HTTPException(404, "Chat not found") from _error_cause
 
 
 @router.patch("/{chat_id}", response_model=ChatOut)
@@ -106,8 +124,8 @@ def rename_chat_route(
         chat.title = payload.name.strip()
         db.commit()
         return _chat_out(chat)
-    except KeyError:
-        raise HTTPException(404, "Chat not found")
+    except KeyError as _error_cause:
+        raise HTTPException(404, "Chat not found") from _error_cause
 
 
 @router.patch("/{chat_id}/model", response_model=dict)
@@ -119,8 +137,8 @@ def patch_model(
 ):
     try:
         return ChatRepository.set_chat_model(db, chat_id, user.id, payload.model, payload.engine)
-    except KeyError:
-        raise HTTPException(404, "Chat not found")
+    except KeyError as _error_cause:
+        raise HTTPException(404, "Chat not found") from _error_cause
 
 
 @router.post("/send", response_model=list[MessageOut], response_model_exclude_none=True)
@@ -140,15 +158,14 @@ def send_route(
         chat_generate(
             chat_id=chat_id,
             user_id=user.id,
-            text=msg.text,
-            engine_name=msg.engine,
-            model=msg.model,
-            expect_json=False,
             db=db,
+            request=ChatGenerationRequest(
+                text=msg.text, engine_name=msg.engine, model=msg.model, expect_json=False
+            ),
         )
         messages = ChatRepository.get_history(db, chat_id, user.id)
-    except KeyError:
-        raise HTTPException(404, "Chat not found")
+    except KeyError as _error_cause:
+        raise HTTPException(404, "Chat not found") from _error_cause
     except ValueError:
         raise HTTPException(
             422, "Сообщение или история превышают размер контекста AI. Сократите сообщение."

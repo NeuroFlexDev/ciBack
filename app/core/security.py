@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -67,17 +68,25 @@ def verify_password(password: str, encoded_password: str) -> bool:
     return hmac.compare_digest(password_hash, expected_hash)
 
 
+@dataclass(frozen=True, kw_only=True)
+class AccessTokenClaims:
+    """Authentication proof and session boundaries carried into an access JWT."""
+
+    amr: list[str] | None = None
+    mfa_at: int | None = None
+    sid: str | None = None
+    sv: int | None = None
+    wsid: str | None = None
+    web_started_at: int | None = None
+
+
 def create_access_token(
     user_id: int,
     version: int = 0,
     *,
-    amr: list[str] | None = None,
-    mfa_at: int | None = None,
-    sid: str | None = None,
-    sv: int | None = None,
-    wsid: str | None = None,
-    web_started_at: int | None = None,
+    claims: AccessTokenClaims | None = None,
 ) -> str:
+    claims = claims or AccessTokenClaims()
     issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + timedelta(minutes=settings.ACCESS_TOKEN_TTL_MINUTES)
     payload = {
@@ -87,17 +96,19 @@ def create_access_token(
         "ver": version,
         "iat": issued_at,
         "exp": expires_at,
-        "amr": amr or [],
+        "amr": claims.amr or [],
     }
-    if mfa_at is not None:
-        payload["mfa_at"] = mfa_at
-    if sid is not None:
-        payload["sid"] = sid
-        payload["sv"] = sv
+    if claims.mfa_at is not None:
+        payload["mfa_at"] = claims.mfa_at
+    if claims.sid is not None:
+        payload["sid"] = claims.sid
+        payload["sv"] = claims.sv
     else:
         # Rotations retain the original login boundary and never refresh MFA proof.
-        started = int(issued_at.timestamp()) if web_started_at is None else web_started_at
-        payload["wsid"] = wsid or secrets.token_urlsafe(24)
+        started = (
+            int(issued_at.timestamp()) if claims.web_started_at is None else claims.web_started_at
+        )
+        payload["wsid"] = claims.wsid or secrets.token_urlsafe(24)
         payload["wsa"] = started
         payload["exp"] = min(
             expires_at, datetime.fromtimestamp(started, timezone.utc) + timedelta(hours=8)

@@ -73,6 +73,41 @@ class CourseGenerationSettingsService:
         return settings_response(course, settings)
 
     @staticmethod
+    def _write_settings(db, course, owner_id, payload, settings):
+        course_id = course.id
+        current_revision = settings.revision if settings is not None else 0
+        if payload.expected_revision is not None and payload.expected_revision != current_revision:
+            raise HTTPException(
+                409,
+                {
+                    "code": "settings_revision_conflict",
+                    "message": "Настройки изменены в другой вкладке",
+                    "expected_revision": payload.expected_revision,
+                    "current_revision": current_revision,
+                },
+            )
+        data = payload.model_dump(exclude={"title", "expected_revision"}, mode="json")
+        if settings is None:
+            settings = CourseGenerationSettings(
+                course_id=course_id,
+                created_by=owner_id,
+                updated_by=owner_id,
+                **data,
+            )
+            db.add(settings)
+        else:
+            changed = course.name != payload.title or any(
+                getattr(settings, field) != value for field, value in data.items()
+            )
+            for field, value in data.items():
+                setattr(settings, field, value)
+            if changed:
+                settings.revision += 1
+            settings.updated_by = owner_id
+            settings.is_deleted = False
+        return settings
+
+    @staticmethod
     def upsert(
         db: Session,
         course_id: int,
@@ -99,40 +134,9 @@ class CourseGenerationSettingsService:
             settings = CourseGenerationSettingsRepository.get_for_course(
                 db, course_id, include_deleted=True
             )
-            current_revision = settings.revision if settings is not None else 0
-            if (
-                payload.expected_revision is not None
-                and payload.expected_revision != current_revision
-            ):
-                raise HTTPException(
-                    409,
-                    {
-                        "code": "settings_revision_conflict",
-                        "message": "Настройки изменены в другой вкладке",
-                        "expected_revision": payload.expected_revision,
-                        "current_revision": current_revision,
-                    },
-                )
-            data = payload.model_dump(exclude={"title", "expected_revision"}, mode="json")
-            if settings is None:
-                settings = CourseGenerationSettings(
-                    course_id=course_id,
-                    created_by=owner_id,
-                    updated_by=owner_id,
-                    **data,
-                )
-                db.add(settings)
-            else:
-                changed = course.name != payload.title or any(
-                    getattr(settings, field) != value for field, value in data.items()
-                )
-                for field, value in data.items():
-                    setattr(settings, field, value)
-                if changed:
-                    settings.revision += 1
-                settings.updated_by = owner_id
-                settings.is_deleted = False
-
+            settings = CourseGenerationSettingsService._write_settings(
+                db, course, owner_id, payload, settings
+            )
             if course.name != payload.title:
                 from app.services.course_publication_service import CoursePublicationService
 

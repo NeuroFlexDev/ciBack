@@ -2,7 +2,8 @@ import logging
 
 from app.database.db import SessionLocal
 from app.models.generation_run import GenerationRun
-from app.services.pipeline_service import PipelineRunFailed, PipelineService
+from app.services.ai_resources import ResourceOutcome, ResourceReservation
+from app.services.pipeline_service import PipelineRunFailed, PipelineService, ReindexOptions
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +19,15 @@ def execute_generation_run(run_id: int) -> None:
 
         reserve(
             db,
-            owner_id=run.owner_id,
-            course_id=run.course_id,
-            operation="generation",
-            lane="background",
-            key=f"generation:{run.id}",
-            run_id=run.id,
-            queued=True,
+            reservation=ResourceReservation(
+                owner_id=run.owner_id,
+                course_id=run.course_id,
+                operation="generation",
+                lane="background",
+                key=f"generation:{run.id}",
+                run_id=run.id,
+                queued=True,
+            ),
         )
         db.commit()
         claimed = claim(db, f"generation:{run.id}")
@@ -57,7 +60,9 @@ def execute_generation_run(run_id: int) -> None:
             finish(
                 db,
                 f"generation:{run_id}",
-                failed=db.get(GenerationRun, run_id).status not in {"succeeded", "completed"},
+                outcome=ResourceOutcome(
+                    failed=db.get(GenerationRun, run_id).status not in {"succeeded", "completed"}
+                ),
             )
         db.close()
 
@@ -81,7 +86,7 @@ def execute_document_index_run(run_id: int) -> None:
             document_id=run.document_id,
             owner_id=run.owner_id,
             storage=get_file_storage(),
-            run_id=run_id,
+            options=ReindexOptions(run_id=run_id),
         )
     except Exception as exc:
         db.rollback()
@@ -107,6 +112,8 @@ def execute_document_index_run(run_id: int) -> None:
             finish(
                 db,
                 f"document:{run_id}",
-                failed=run is None or run.status not in {"succeeded", "completed"},
+                outcome=ResourceOutcome(
+                    failed=run is None or run.status not in {"succeeded", "completed"}
+                ),
             )
         db.close()

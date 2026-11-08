@@ -2,7 +2,9 @@
 
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -33,18 +35,29 @@ class DeferredDelivery(Exception):
         self.until = until
 
 
-def publish(
-    db,
-    *,
-    user_id,
-    organization_id,
-    event_key,
-    category,
-    resource_type,
-    resource_id,
-    body,
-    title=None,
-):
+@dataclass(frozen=True, kw_only=True)
+class NotificationEvent:
+    """Parameters for publish, preserving its original defaults."""
+
+    user_id: Any
+    organization_id: Any
+    event_key: Any
+    category: Any
+    resource_type: Any
+    resource_id: Any
+    body: Any
+    title: Any = None
+
+
+def publish(db, *, event: NotificationEvent):
+    user_id = event.user_id
+    organization_id = event.organization_id
+    event_key = event.event_key
+    category = event.category
+    resource_type = event.resource_type
+    resource_id = event.resource_id
+    body = event.body
+    title = event.title
     row = db.query(UserNotification).filter_by(user_id=user_id, event_key=event_key).first()
     if row:
         return row
@@ -144,6 +157,48 @@ def quiet_until(pref, now):
     return target.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _notification_resource_current(db, note, user):
+    if note.resource_type == "assignment":
+        from app.models.learning import LearningAssignment
+
+        assignment = db.get(LearningAssignment, note.resource_id)
+        if (
+            not assignment
+            or assignment.user_id != user.id
+            or assignment.state != "active"
+            or (note.category == "deadline" and assignment.completed_at)
+        ):
+            return False
+    if note.resource_type == "review":
+        from app.models.learning import LearningAssignment, LearningResponse
+        from app.services.learning_service import can_review
+
+        response = db.get(LearningResponse, note.resource_id)
+        assignment = db.get(LearningAssignment, response.assignment_id) if response else None
+        if (
+            not assignment
+            or response.status != "pending_review"
+            or not can_review(db, user, assignment)
+        ):
+            return False
+    return True
+
+
+def _notification_ticket(db, device, result):
+    tickets = result.get("data")
+    if not isinstance(tickets, list) or len(tickets) != 1:
+        raise RuntimeError("Invalid Expo ticket")
+    ticket = tickets[0]
+    if ticket.get("status") == "error":
+        if (ticket.get("details") or {}).get("error") == "DeviceNotRegistered":
+            db.delete(device)
+            return None
+        raise RuntimeError("Expo rejected notification")
+    if ticket.get("status") != "ok" or not ticket.get("id"):
+        raise RuntimeError("Missing Expo ticket")
+    return ticket
+
+
 def deliver_device(db, outbox, payload):
     from app.core.integration_config import integration_settings
     from app.services.mobile_push import EXPO_URL, configured
@@ -172,29 +227,8 @@ def deliver_device(db, outbox, payload):
         or (user.organization_id and (not user.organization or not user.organization.is_active))
     ):
         return "cancelled"
-    if note.resource_type == "assignment":
-        from app.models.learning import LearningAssignment
-
-        assignment = db.get(LearningAssignment, note.resource_id)
-        if (
-            not assignment
-            or assignment.user_id != user.id
-            or assignment.state != "active"
-            or (note.category == "deadline" and assignment.completed_at)
-        ):
-            return "cancelled"
-    if note.resource_type == "review":
-        from app.models.learning import LearningAssignment, LearningResponse
-        from app.services.learning_service import can_review
-
-        response = db.get(LearningResponse, note.resource_id)
-        assignment = db.get(LearningAssignment, response.assignment_id) if response else None
-        if (
-            not assignment
-            or response.status != "pending_review"
-            or not can_review(db, user, assignment)
-        ):
-            return "cancelled"
+    if not _notification_resource_current(db, note, user):
+        return "cancelled"
     pref = db.get(MobilePushPreference, user.id)
     if pref and (not pref.push_enabled or not getattr(pref, f"{note.category}_enabled", False)):
         return "cancelled"
@@ -224,17 +258,9 @@ def deliver_device(db, outbox, payload):
         timeout=10,
     ) as response:
         result = json.loads(response.read(1_000_000))
-    tickets = result.get("data")
-    if not isinstance(tickets, list) or len(tickets) != 1:
-        raise RuntimeError("Invalid Expo ticket")
-    ticket = tickets[0]
-    if ticket.get("status") == "error":
-        if (ticket.get("details") or {}).get("error") == "DeviceNotRegistered":
-            db.delete(device)
-            return "cancelled"
-        raise RuntimeError("Expo rejected notification")
-    if ticket.get("status") != "ok" or not ticket.get("id"):
-        raise RuntimeError("Missing Expo ticket")
+    ticket = _notification_ticket(db, device, result)
+    if ticket is None:
+        return "cancelled"
     db.add(
         OutboundMessage(
             id=str(uuid.uuid4()),
@@ -276,13 +302,15 @@ def review_requested(db, assignment, response):
             continue
         row = publish(
             db,
-            user_id=user.id,
-            organization_id=assignment.organization_id,
-            event_key=f"review:{response.id}:{response.revision}",
-            category="review",
-            resource_type="review",
-            resource_id=response.id,
-            body="Поступил ответ на задание. Откройте проверку, чтобы оценить его и оставить обратную связь.",
+            event=NotificationEvent(
+                user_id=user.id,
+                organization_id=assignment.organization_id,
+                event_key=f"review:{response.id}:{response.revision}",
+                category="review",
+                resource_type="review",
+                resource_id=response.id,
+                body="Поступил ответ на задание. Откройте проверку, чтобы оценить его и оставить обратную связь.",
+            ),
         )
         queue(db, row)
 
@@ -297,13 +325,15 @@ def generation_finished(db, run, course):
     )
     row = publish(
         db,
-        user_id=run.owner_id,
-        organization_id=course.organization_id,
-        event_key=f"generation:{run.id}:{run.attempt}:{run.status}",
-        category="generation",
-        resource_type="course",
-        resource_id=course.id,
-        title=title,
-        body="Откройте веб-платформу, чтобы просмотреть результат и продолжить работу с материалом.",
+        event=NotificationEvent(
+            user_id=run.owner_id,
+            organization_id=course.organization_id,
+            event_key=f"generation:{run.id}:{run.attempt}:{run.status}",
+            category="generation",
+            resource_type="course",
+            resource_id=course.id,
+            title=title,
+            body="Откройте веб-платформу, чтобы просмотреть результат и продолжить работу с материалом.",
+        ),
     )
     queue(db, row)

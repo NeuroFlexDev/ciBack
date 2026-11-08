@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from app.core.config import settings
 from app.models.legal import LegalReceipt, LegalRequest
 from app.models.user import User
-from app.services.legal_service import CATALOG, DOCUMENTS
+from app.services.legal_service import CATALOG, DOCUMENTS, LegalAcceptance
 
 
 def registration(**changes):
@@ -103,10 +103,9 @@ def test_marketing_expires_and_new_acceptance_needs_current_version(
 
     receipt = record_receipt(
         db_session,
-        email=auth_user.email,
-        user_id=auth_user.id,
-        slug="marketing-consent",
-        context="account",
+        acceptance=LegalAcceptance(
+            email=auth_user.email, user_id=auth_user.id, slug="marketing-consent", context="account"
+        ),
     )
     receipt.created_at = datetime.utcnow() - timedelta(days=366)
     db_session.commit()

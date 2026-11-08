@@ -11,7 +11,6 @@ from app.models.course import Course
 from app.models.lesson import Lesson
 from app.models.module import Module
 from app.models.test import Test
-from app.models.theory import Theory
 from app.repositories.course_review import CourseReviewRepository
 
 WORDS_PER_MINUTE = 200

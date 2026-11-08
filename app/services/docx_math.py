@@ -3,6 +3,31 @@
 from lxml.etree import QName
 
 
+def _nary_latex(node, part):
+    operator = "∫"
+    for child in node.iter():
+        if QName(child).localname == "chr":
+            operator = next(iter(child.attrib.values()), operator)
+    operator = {"∫": r"\int", "∑": r"\sum", "∏": r"\prod"}.get(operator, operator)
+    return (
+        operator
+        + ("_{" + part("sub") + "}" if part("sub") else "")
+        + ("^{" + part("sup") + "}" if part("sup") else "")
+        + " "
+        + part("e")
+    )
+
+
+def _fraction_or_script(tag, part):
+    if tag == "f":
+        return r"\frac{" + part("num") + "}{" + part("den") + "}"
+    if tag == "sSup":
+        return "{" + part("e") + "}^{" + part("sup") + "}"
+    if tag == "sSub":
+        return "{" + part("e") + "}_{" + part("sub") + "}"
+    return "{" + part("e") + "}_{" + part("sub") + "}^{" + part("sup") + "}"
+
+
 def _latex(node):
     tag = QName(node).localname
     children = {QName(child).localname: child for child in node}
@@ -14,14 +39,8 @@ def _latex(node):
         return node.text or ""
     if tag.endswith("Pr"):
         return ""
-    if tag == "f":
-        return r"\frac{" + part("num") + "}{" + part("den") + "}"
-    if tag == "sSup":
-        return "{" + part("e") + "}^{" + part("sup") + "}"
-    if tag == "sSub":
-        return "{" + part("e") + "}_{" + part("sub") + "}"
-    if tag == "sSubSup":
-        return "{" + part("e") + "}_{" + part("sub") + "}^{" + part("sup") + "}"
+    if tag in {"f", "sSup", "sSub", "sSubSup"}:
+        return _fraction_or_script(tag, part)
     if tag == "rad":
         degree = part("deg")
         return r"\sqrt" + ("[" + degree + "]" if degree else "") + "{" + part("e") + "}"
@@ -34,18 +53,7 @@ def _latex(node):
     if tag == "mr":
         return " & ".join(_latex(child) for child in node if QName(child).localname == "e")
     if tag == "nary":
-        operator = "∫"
-        for child in node.iter():
-            if QName(child).localname == "chr":
-                operator = next(iter(child.attrib.values()), operator)
-        operator = {"∫": r"\int", "∑": r"\sum", "∏": r"\prod"}.get(operator, operator)
-        return (
-            operator
-            + ("_{" + part("sub") + "}" if part("sub") else "")
-            + ("^{" + part("sup") + "}" if part("sup") else "")
-            + " "
-            + part("e")
-        )
+        return _nary_latex(node, part)
     return "".join(_latex(child) for child in node)
 
 

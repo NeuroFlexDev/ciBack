@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import warnings
 from datetime import datetime
 from io import BytesIO
@@ -16,8 +15,10 @@ from app.core.config import settings
 from app.models.course import Course
 from app.models.materials import CourseImage
 from app.models.user import User
+from app.services.ai_resources import ResourceOutcome, ResourceReservation
 from app.services.course_access import course_access_filter
 from app.services.file_storage import LocalFileStorage
+from app.services.learning_service import LearningScope
 
 
 def course_access(db, user, course_id, *, allow_reviewer=False):
@@ -35,7 +36,7 @@ def course_access(db, user, course_id, *, allow_reviewer=False):
             and not candidate.is_deleted
             and candidate.organization_id is not None
             and candidate.organization_id == user.organization_id
-            and can_scope(db, user, "reviewer", course_id=course_id)
+            and can_scope(db, user, scope=LearningScope(role="reviewer", course_id=course_id))
         ):
             course = candidate
     if not course:
@@ -138,7 +139,7 @@ def image_access(db, user, image_id, *, author_only=False):
         and not course.is_deleted
         and course.organization_id is not None
         and course.organization_id == user.organization_id
-        and can_scope(db, user, "reviewer", course_id=course.id)
+        and can_scope(db, user, scope=LearningScope(role="reviewer", course_id=course.id))
     ):
         return item
     if not author_only and item.status == "approved":
@@ -232,23 +233,59 @@ def prepare_generation(db, user, course_id, prompt, request_id):
     db.flush()
     reserve(
         db,
-        owner_id=user.id,
-        course_id=course_id,
-        operation="image",
-        lane="background",
-        key=f"image:{item.id}",
-        queued=True,
-        cost=0 if provider.local else settings.IMAGE_PRICE_RUB,
+        reservation=ResourceReservation(
+            owner_id=user.id,
+            course_id=course_id,
+            operation="image",
+            lane="background",
+            key=f"image:{item.id}",
+            queued=True,
+            cost=0 if provider.local else settings.IMAGE_PRICE_RUB,
+        ),
     )
     db.commit()
     db.refresh(item)
     return item, True
 
 
+def _record_image_failure(db, image_id, item, exc):
+    if item is not None:
+        item = db.get(CourseImage, image_id)
+        item.status = "failed"
+        item.size_bytes = 0
+        from app.services.image_provider import ImageResultError
+
+        item.error_code = (
+            "image_access_revoked"
+            if isinstance(exc, HTTPException) and exc.status_code in {401, 403, 404, 409}
+            else str(exc)
+            if isinstance(exc, ImageResultError)
+            else "image_generation_failed"
+        )
+        db.commit()
+
+
+def _image_provider_config(item):
+    provider = providers.registry().get(item.provider)
+    if not provider or not providers.available(provider):
+        raise RuntimeError("provider_unavailable")
+    from app.services.image_provider import ImageResultError
+
+    config = item.generation_config
+    if (
+        not config
+        or config.get("endpoint") != str(provider.base_url)
+        or config.get("local") != provider.local
+    ):
+        raise ImageResultError("image_configuration_changed")
+    return provider, config
+
+
 def execute_image_generation(image_id):
     from openai import OpenAI
 
     from app.database.db import SessionLocal
+    from app.services.image_provider import image_bytes
 
     db = SessionLocal()
     item = None
@@ -270,18 +307,7 @@ def execute_image_generation(image_id):
             raise RuntimeError("image_owner_unavailable")
         owner_id, course_id, stamp = owner.id, item.course_id, principal_stamp(owner)
         author_result_access(db, owner_id, stamp, course_id, "images")
-        provider = providers.registry().get(item.provider)
-        if not provider or not providers.available(provider):
-            raise RuntimeError("provider_unavailable")
-        from app.services.image_provider import ImageResultError, image_bytes
-
-        config = item.generation_config
-        if (
-            not config
-            or config.get("endpoint") != str(provider.base_url)
-            or config.get("local") != provider.local
-        ):
-            raise ImageResultError("image_configuration_changed")
+        provider, config = _image_provider_config(item)
         item.status = "generating"
         db.commit()  # At-most-once submission: a killed worker never blindly bills again.
         client = OpenAI(
@@ -317,23 +343,10 @@ def execute_image_generation(image_id):
                 )
                 from app.services.ai_resources import finish
 
-                finish(db, f"image:{image_id}", unsent=True)
+                finish(db, f"image:{image_id}", outcome=ResourceOutcome(unsent=True))
                 return
             raise
-        if item is not None:
-            item = db.get(CourseImage, image_id)
-            item.status = "failed"
-            item.size_bytes = 0
-            from app.services.image_provider import ImageResultError
-
-            item.error_code = (
-                "image_access_revoked"
-                if isinstance(exc, HTTPException) and exc.status_code in {401, 403, 404, 409}
-                else str(exc)
-                if isinstance(exc, ImageResultError)
-                else "image_generation_failed"
-            )
-            db.commit()
+        _record_image_failure(db, image_id, item, exc)
     finally:
         if claimed:
             from app.services.ai_resources import finish
@@ -341,8 +354,10 @@ def execute_image_generation(image_id):
             finish(
                 db,
                 f"image:{image_id}",
-                unsent=not request_started,
-                failed=db.get(CourseImage, image_id).status == "failed",
+                outcome=ResourceOutcome(
+                    unsent=not request_started,
+                    failed=db.get(CourseImage, image_id).status == "failed",
+                ),
             )
         db.close()
 
@@ -377,7 +392,7 @@ def reconcile_enqueue_failure(db, image_id):
     if item.status == "queued" and receipt.status == "queued":
         # Worker takes the same image→resource locks and sees failed before claim.
         item.status, item.error_code, item.size_bytes = "failed", "image_queue_unavailable", 0
-        finish(db, receipt, unsent=True, failed=True)
+        finish(db, receipt, outcome=ResourceOutcome(unsent=True, failed=True))
     else:
         db.commit()  # A claimed job owns its outcome and original reservation.
     return item

@@ -2,13 +2,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
-from app.models.course import Course
 from app.models.module import Module
 from app.models.user import User
 from app.schemas.course_editor import ModuleCreateEditor, ModuleUpdateEditor, OrderUpdate
 from app.schemas.course_review import ModuleDetail
 from app.services.auth_service import get_current_user
-from app.services.course_editor_service import CourseEditorService
+from app.services.course_editor_service import CourseEditorService, ModuleUpdate, ReorderTarget
 from app.services.course_review_service import CourseReviewService
 
 router = APIRouter()
@@ -62,11 +61,13 @@ def reorder_modules(
     CourseEditorService._course(db, course_id, current_user.id, True)
     rows = CourseEditorService.reorder(
         db,
-        entity=Module,
-        parent_filter=(Module.course_id == course_id,),
         items=payload.items,
         owner_id=current_user.id,
-        snapshot=CourseEditorService._module_snapshot,
+        target=ReorderTarget(
+            entity=Module,
+            parent_filter=(Module.course_id == course_id,),
+            snapshot=CourseEditorService._module_snapshot,
+        ),
     )
     return [_out(item) for item in rows]
 
@@ -90,9 +91,11 @@ def update_module(
             db,
             module_id,
             current_user.id,
-            payload.title,
-            payload.description,
-            payload.expected_revision,
+            update=ModuleUpdate(
+                title=payload.title,
+                description=payload.description,
+                expected=payload.expected_revision,
+            ),
         )
     )
 

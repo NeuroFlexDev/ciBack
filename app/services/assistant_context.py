@@ -57,6 +57,47 @@ def _match(column, query):
     )
 
 
+def _append_assigned_context(db, user, query, result, candidates):
+    # Learners use their frozen assignment, never today's author draft or test keys.
+    if user.organization_id:
+        from app.services.learner_assistant_service import assignment_context
+
+        rows = (
+            db.query(LearningAssignment)
+            .filter_by(user_id=user.id, organization_id=user.organization_id, state="active")
+            .order_by(LearningAssignment.id.desc())
+            .limit(30)
+        )
+        for assignment in rows:
+            try:
+                current, snapshot = assignment_context(db, user, assignment.id)
+            except HTTPException as exc:
+                if exc.status_code in {403, 404, 409}:
+                    continue
+                raise
+            result.assignments[current.id] = current.course_version_id
+            title = snapshot.get("course", {}).get("title", "Назначенный материал")
+            result.catalog.append(
+                {
+                    "ref": f"assignment:{current.id}",
+                    "title": title,
+                    "status": "assigned",
+                    "url": f"/learning/{current.id}",
+                }
+            )
+            for module in snapshot.get("modules", []):
+                for lesson in module.get("lessons", []):
+                    candidates.append(
+                        {
+                            "ref": f"assigned:{current.id}:{lesson['id']}",
+                            "title": lesson["title"],
+                            "kind": "assigned_published_content",
+                            "quote": excerpt(lesson.get("content", ""), query),
+                            "url": f"/learning/{current.id}?item=lesson:{lesson['id']}",
+                        }
+                    )
+
+
 def build_context(db, user, query, *, course_id=None):
     result = AssistantContext()
     access = db.query(Course).filter(Course.is_deleted.is_(False), course_access_filter(user.id))
@@ -143,44 +184,8 @@ def build_context(db, user, query, *, course_id=None):
                 "url": f"/courses/{module.course_id}/edit?lesson={lesson.id}",
             }
         )
-    # Learners use their frozen assignment, never today's author draft or test keys.
-    if course_id is None and user.organization_id:
-        from app.services.learner_assistant_service import assignment_context
-
-        rows = (
-            db.query(LearningAssignment)
-            .filter_by(user_id=user.id, organization_id=user.organization_id, state="active")
-            .order_by(LearningAssignment.id.desc())
-            .limit(30)
-        )
-        for assignment in rows:
-            try:
-                current, snapshot = assignment_context(db, user, assignment.id)
-            except HTTPException as exc:
-                if exc.status_code in {403, 404, 409}:
-                    continue
-                raise
-            result.assignments[current.id] = current.course_version_id
-            title = snapshot.get("course", {}).get("title", "Назначенный материал")
-            result.catalog.append(
-                {
-                    "ref": f"assignment:{current.id}",
-                    "title": title,
-                    "status": "assigned",
-                    "url": f"/learning/{current.id}",
-                }
-            )
-            for module in snapshot.get("modules", []):
-                for lesson in module.get("lessons", []):
-                    candidates.append(
-                        {
-                            "ref": f"assigned:{current.id}:{lesson['id']}",
-                            "title": lesson["title"],
-                            "kind": "assigned_published_content",
-                            "quote": excerpt(lesson.get("content", ""), query),
-                            "url": f"/learning/{current.id}?item=lesson:{lesson['id']}",
-                        }
-                    )
+    if course_id is None:
+        _append_assigned_context(db, user, query, result, candidates)
     result.catalog = result.catalog[:50]
     ranked = rank_sources(query, candidates, limit=8)
     result.passages = ranked or (candidates[:4] if course_id else [])

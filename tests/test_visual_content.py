@@ -11,7 +11,7 @@ from app.models.ai_resources import AIResourceUsage
 from app.models.materials import CourseImage
 from app.services import image_provider, image_service
 from app.services.diagram_policy import validate_generated_diagrams
-from tests.factories import make_course
+from tests.factories import make_course, unpack_call_options
 from tests.test_materials_release import png
 
 
@@ -82,6 +82,7 @@ def test_real_image_bytes_idempotency_approval_and_frozen_options(
     calls = []
 
     def generate(**kwargs):
+        kwargs = unpack_call_options(kwargs)
         calls.append(kwargs)
         return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(png()).decode())])
 

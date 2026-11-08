@@ -161,6 +161,71 @@ def _extract_docx(content: bytes) -> list[ExtractedBlock]:
     return blocks
 
 
+def _ocr_page_payload(page, ocr_pages):
+    from app.core.config import settings
+
+    if not settings.AI_OCR_ENABLED:
+        raise ValueError("Scanned PDF requires OCR; enable AI_OCR_ENABLED")
+    ocr_pages += 1
+    if ocr_pages > settings.AI_OCR_MAX_PAGES:
+        raise ValueError("Scanned PDF exceeds AI_OCR_MAX_PAGES; split the document")
+    usage = extraction_usage.get()
+    if (
+        usage is not None
+        and usage.get("ocr_page_limit") is not None
+        and ocr_pages > usage["ocr_page_limit"]
+    ):
+        raise ValueError(
+            "Недостаточно квоты OCR для документа; увеличьте лимит или загрузите текстовую версию"
+        )
+    if usage is not None:
+        usage["ocr_pages"] = ocr_pages
+    # Local OCR avoids shipping whole documents to a vision model and
+    # preserves page provenance. Missing language packs fail explicitly.
+    try:
+        textpage = page.get_textpage_ocr(language="rus+eng", dpi=150, full=True)
+        payload = page.get_text("dict", textpage=textpage, sort=True)
+    except Exception as exc:
+        raise ValueError("OCR unavailable: install Tesseract with rus+eng language data") from exc
+    return payload, ocr_pages
+
+
+def _pdf_text_block(raw_block, page_number, page_height):
+    line_texts: list[str] = []
+    font_sizes: list[float] = []
+    bold = False
+    for line in raw_block.get("lines", []):
+        span_texts: list[str] = []
+        for span in line.get("spans", []):
+            text = _normalize_text(str(span.get("text") or ""))
+            if not text:
+                continue
+            span_texts.append(text)
+            font_sizes.append(float(span.get("size") or 0))
+            font_name = str(span.get("font") or "").casefold()
+            flags = int(span.get("flags") or 0)
+            bold = bold or "bold" in font_name or bool(flags & 16)
+        line_text = _normalize_text(" ".join(span_texts))
+        if line_text:
+            line_texts.append(line_text)
+    text = _normalize_text(" ".join(line_texts))
+    if not text:
+        return None
+    bbox = raw_block.get("bbox", (0, 0, 0, 0))
+    x0, y0, x1, y1 = (float(value) for value in bbox)
+    return _PdfBlock(
+        text=text,
+        page=page_number,
+        x0=x0,
+        y0=y0,
+        x1=x1,
+        y1=y1,
+        page_height=page_height,
+        font_size=max(font_sizes, default=0),
+        bold=bold,
+    )
+
+
 def _pdf_blocks(document) -> list[_PdfBlock]:
     from app.core.config import settings
 
@@ -174,72 +239,14 @@ def _pdf_blocks(document) -> list[_PdfBlock]:
             raise ValueError("Слишком большой размер страницы PDF")
         payload = page.get_text("dict", sort=True)
         if not page.get_text("text").strip() and page.get_images():
-            from app.core.config import settings
-
-            if not settings.AI_OCR_ENABLED:
-                raise ValueError("Scanned PDF requires OCR; enable AI_OCR_ENABLED")
-            ocr_pages += 1
-            if ocr_pages > settings.AI_OCR_MAX_PAGES:
-                raise ValueError("Scanned PDF exceeds AI_OCR_MAX_PAGES; split the document")
-            usage = extraction_usage.get()
-            if (
-                usage is not None
-                and usage.get("ocr_page_limit") is not None
-                and ocr_pages > usage["ocr_page_limit"]
-            ):
-                raise ValueError(
-                    "Недостаточно квоты OCR для документа; увеличьте лимит или загрузите текстовую версию"
-                )
-            if usage is not None:
-                usage["ocr_pages"] = ocr_pages
-            # Local OCR avoids shipping whole documents to a vision model and
-            # preserves page provenance. Missing language packs fail explicitly.
-            try:
-                textpage = page.get_textpage_ocr(language="rus+eng", dpi=150, full=True)
-                payload = page.get_text("dict", textpage=textpage, sort=True)
-            except Exception as exc:
-                raise ValueError(
-                    "OCR unavailable: install Tesseract with rus+eng language data"
-                ) from exc
+            payload, ocr_pages = _ocr_page_payload(page, ocr_pages)
         page_height = float(page.rect.height)
         for raw_block in payload.get("blocks", []):
             if raw_block.get("type", 0) != 0:
                 continue
-            line_texts: list[str] = []
-            font_sizes: list[float] = []
-            bold = False
-            for line in raw_block.get("lines", []):
-                span_texts: list[str] = []
-                for span in line.get("spans", []):
-                    text = _normalize_text(str(span.get("text") or ""))
-                    if not text:
-                        continue
-                    span_texts.append(text)
-                    font_sizes.append(float(span.get("size") or 0))
-                    font_name = str(span.get("font") or "").casefold()
-                    flags = int(span.get("flags") or 0)
-                    bold = bold or "bold" in font_name or bool(flags & 16)
-                line_text = _normalize_text(" ".join(span_texts))
-                if line_text:
-                    line_texts.append(line_text)
-            text = _normalize_text(" ".join(line_texts))
-            if not text:
-                continue
-            bbox = raw_block.get("bbox", (0, 0, 0, 0))
-            x0, y0, x1, y1 = (float(value) for value in bbox)
-            blocks.append(
-                _PdfBlock(
-                    text=text,
-                    page=page_number,
-                    x0=x0,
-                    y0=y0,
-                    x1=x1,
-                    y1=y1,
-                    page_height=page_height,
-                    font_size=max(font_sizes, default=0),
-                    bold=bold,
-                )
-            )
+            block = _pdf_text_block(raw_block, page_number, page_height)
+            if block is not None:
+                blocks.append(block)
     return sorted(blocks, key=lambda item: (item.page, round(item.y0, 1), item.x0))
 
 
@@ -327,6 +334,19 @@ def _extract_pdf(content: bytes) -> list[ExtractedBlock]:
     return result
 
 
+def _flush_text_paragraph(blocks, paragraph, paragraph_section):
+    text = _normalize_text(" ".join(paragraph))
+    if text:
+        blocks.append(
+            ExtractedBlock(
+                text=text,
+                section=paragraph_section,
+                block_type="list_item" if _LIST_ITEM.match(text) else "paragraph",
+            )
+        )
+    return [], None
+
+
 def _extract_txt(content: bytes) -> list[ExtractedBlock]:
     lines = content.decode("utf-8-sig").splitlines()
     blocks: list[ExtractedBlock] = []
@@ -336,20 +356,6 @@ def _extract_txt(content: bytes) -> list[ExtractedBlock]:
     paragraph_section: str | None = None
     in_fence = False
     fence_marker: str | None = None
-
-    def flush_paragraph() -> None:
-        nonlocal paragraph, paragraph_section
-        text = _normalize_text(" ".join(paragraph))
-        if text:
-            blocks.append(
-                ExtractedBlock(
-                    text=text,
-                    section=paragraph_section,
-                    block_type="list_item" if _LIST_ITEM.match(text) else "paragraph",
-                )
-            )
-        paragraph = []
-        paragraph_section = None
 
     index = 0
     while index < len(lines):
@@ -368,7 +374,9 @@ def _extract_txt(content: bytes) -> list[ExtractedBlock]:
         if not in_fence:
             atx = _ATX_HEADING.match(raw_line)
             if atx:
-                flush_paragraph()
+                paragraph, paragraph_section = _flush_text_paragraph(
+                    blocks, paragraph, paragraph_section
+                )
                 title = _normalize_text(atx.group(2))
                 level = len(atx.group(1))
                 section = _section_path(headings, level, title)
@@ -401,14 +409,16 @@ def _extract_txt(content: bytes) -> list[ExtractedBlock]:
                 continue
 
         if not stripped:
-            flush_paragraph()
+            paragraph, paragraph_section = _flush_text_paragraph(
+                blocks, paragraph, paragraph_section
+            )
         else:
             if not paragraph:
                 paragraph_section = section
             paragraph.append(raw_line)
         index += 1
 
-    flush_paragraph()
+    paragraph, paragraph_section = _flush_text_paragraph(blocks, paragraph, paragraph_section)
     return blocks
 
 

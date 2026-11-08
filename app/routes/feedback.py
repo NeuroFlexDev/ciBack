@@ -21,4 +21,4 @@ def leave_feedback(
         FeedbackRepository.save_feedback(db, payload, current_user.id)
         return {"message": "✅ Отзыв сохранён"}
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from e

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from redis import RedisError
 
 from app.core import http_security as security
-from app.core.security import create_access_token
+from app.core.security import AccessTokenClaims, create_access_token
 from app.routes.account import PasswordChange, ResetConfirm
 from app.routes.mfa import ChallengeInput
 from app.schemas.auth import AuthCredentials
@@ -170,7 +170,7 @@ def test_authenticated_password_changes_ignore_extra_email_and_rotating_tokens(b
     app, counts = boundary
     with TestClient(app) as client:
         for index in range(21):
-            token = create_access_token(123, amr=[f"fixture-{index}"])
+            token = create_access_token(123, claims=AccessTokenClaims(amr=[f"fixture-{index}"]))
             response = client.post(
                 "/api/change-password",
                 headers={"Authorization": "bEaReR " + token},

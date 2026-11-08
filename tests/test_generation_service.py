@@ -4,7 +4,9 @@ import logging
 import pytest
 from fastapi import HTTPException
 
-from app.services.generation_service import generate_from_prompt
+from app.services.agent_runtime import AgentInvocation
+from app.services.generation_service import PromptRequest, generate_from_prompt
+from tests.factories import unpack_call_options
 
 
 class DummyClient:
@@ -45,9 +47,7 @@ def test_json_ok(monkeypatch):
 
     result = generate_from_prompt(
         template_name=None,
-        prompt="test",
-        engine="gigachat",
-        expect_json=True,
+        request=PromptRequest(prompt="test", engine="gigachat", expect_json=True),
     )
 
     assert result["modules"][0]["title"] == "X"
@@ -60,7 +60,7 @@ def test_json_fail(monkeypatch):
     _patch_model_factory(monkeypatch, "gigachat", '{"bad":1}\n{extra}')
 
     with pytest.raises(HTTPException) as exc_info:
-        generate_from_prompt(prompt="x", engine="gigachat", expect_json=True)
+        generate_from_prompt(request=PromptRequest(prompt="x", engine="gigachat", expect_json=True))
 
     assert exc_info.value.status_code == 500
 
@@ -68,7 +68,9 @@ def test_json_fail(monkeypatch):
 def test_lc_giga_alias(monkeypatch):
     _patch_model_factory(monkeypatch, "gigachat", json.dumps({"ok": 1}))
 
-    result = generate_from_prompt(prompt="x", engine="lc_giga", expect_json=True)
+    result = generate_from_prompt(
+        request=PromptRequest(prompt="x", engine="lc_giga", expect_json=True)
+    )
 
     assert result["ok"] == 1
 
@@ -85,7 +87,7 @@ def test_huggingface_alias_supports_no_argument_factory(monkeypatch):
         factory,
     )
 
-    result = generate_from_prompt(prompt="x", engine="huggingface")
+    result = generate_from_prompt(request=PromptRequest(prompt="x", engine="huggingface"))
 
     assert result == {"ok": True}
     assert "_model" not in result
@@ -98,7 +100,7 @@ def test_extracts_json_fence_without_stripping_json_characters(monkeypatch):
         '```json\n{"name": "reason", "ok": true}\n```',
     )
 
-    result = generate_from_prompt(prompt="x", engine="gigachat")
+    result = generate_from_prompt(request=PromptRequest(prompt="x", engine="gigachat"))
 
     assert result["name"] == "reason"
     assert result["ok"] is True
@@ -111,7 +113,7 @@ def test_accepts_dict_response(monkeypatch):
         {"ok": True, "value": 7},
     )
 
-    result = generate_from_prompt(prompt="x", engine="gigachat")
+    result = generate_from_prompt(request=PromptRequest(prompt="x", engine="gigachat"))
 
     assert result["ok"] is True
     assert result["value"] == 7
@@ -124,7 +126,7 @@ def test_accepts_text_wrapped_dict_response(monkeypatch):
         {"text": json.dumps({"ok": True})},
     )
 
-    result = generate_from_prompt(prompt="x", engine="gigachat")
+    result = generate_from_prompt(request=PromptRequest(prompt="x", engine="gigachat"))
 
     assert result["ok"] is True
 
@@ -138,9 +140,7 @@ def test_passes_requested_model_to_factory_and_returns_actual_model(monkeypatch)
     )
 
     result = generate_from_prompt(
-        prompt="x",
-        engine="gigachat",
-        model="requested-model",
+        request=PromptRequest(prompt="x", engine="gigachat", model="requested-model")
     )
 
     assert observed["model"] == "requested-model"
@@ -157,7 +157,7 @@ def test_prompt_and_raw_response_are_not_logged(monkeypatch, caplog):
     )
     caplog.set_level(logging.INFO, logger="app.services.generation_service")
 
-    generate_from_prompt(prompt=secret_prompt, engine="gigachat")
+    generate_from_prompt(request=PromptRequest(prompt=secret_prompt, engine="gigachat"))
 
     assert secret_prompt not in caplog.text
     assert secret_response not in caplog.text
@@ -182,7 +182,9 @@ def test_json_response_preserves_nested_markdown_fences(monkeypatch, wrapped, ma
     if wrapped:
         raw = "```json\n" + raw + "\n```"
     _patch_model_factory(monkeypatch, "gigachat", raw)
-    result = generate_from_prompt(prompt="test", engine="gigachat", expect_json=True)
+    result = generate_from_prompt(
+        request=PromptRequest(prompt="test", engine="gigachat", expect_json=True)
+    )
     result.pop("_model")
     assert result == expected
     assert result["sections"][0]["content_markdown"] == markdown
@@ -229,20 +231,25 @@ def test_completed_stages_are_reused_after_parser_upgrade(db_session, auth_user,
     calls = []
 
     def generated(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         calls.append(kwargs["agent_role"])
-        return generate_from_prompt(prompt="test", engine="gigachat", expect_json=True)
+        return generate_from_prompt(
+            request=PromptRequest(prompt="test", engine="gigachat", expect_json=True)
+        )
 
     runtime = make_runtime(db_session, auth_user, generated)
 
     def stage(active, role):
         return active.execute(
-            agent=role,
-            artifact="checkpoint",
-            sequence=0,
-            template_name="unused.j2",
-            response_model=Content,
-            prompt_context={},
-            max_tokens=6000,
+            request=AgentInvocation(
+                agent=role,
+                artifact="checkpoint",
+                sequence=0,
+                template_name="unused.j2",
+                response_model=Content,
+                prompt_context={},
+                max_tokens=6000,
+            )
         )
 
     for role in ("ingestion", "competency_mapper", "course_architect"):

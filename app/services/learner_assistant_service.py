@@ -1,13 +1,16 @@
 """Learner chat only receives the assigned immutable, answer-free lesson snapshot."""
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from fastapi import HTTPException
 
 from app.ai import gateway
 from app.core.config import settings
 from app.models.materials import LearnerAssistantMessage
+from app.services.ai_resources import CompletionContext
 from app.services.interactive_quota import admit_request
 from app.services.organization_access import lock_member
 
@@ -64,52 +67,25 @@ def message_out(item):
     }
 
 
-def send_message(db, user, assignment_id, lesson_id, question, request_id):
-    from app.services.ai_access_boundary import principal_stamp, refresh_principal
+@dataclass(frozen=True, kw_only=True)
+class AssistantMessage:
+    """Parameters for send_message, preserving its original defaults."""
 
-    user_id, stamp = user.id, principal_stamp(user)
-    user = lock_member(db, user_id, expected_auth_version=stamp[1])
-    if principal_stamp(user) != stamp:
-        raise HTTPException(403, "Доступ изменился до начала запроса")
-    assignment, snapshot = assignment_context(db, user, assignment_id)
-    version_id = assignment.course_version_id
-    lessons = {
-        lesson["id"]: lesson for module in snapshot["modules"] for lesson in module["lessons"]
-    }
-    lesson = lessons.get(lesson_id)
-    if not lesson:
-        raise HTTPException(404, "Урок не найден в назначенной версии курса")
-    expire_history(db, user.id)
-    existing = (
-        db.query(LearnerAssistantMessage).filter_by(owner_id=user.id, request_id=request_id).first()
+    question: Any
+    request_id: Any
+
+
+def _learner_prompt(db, assignment, lesson, item):
+    user_id, assignment_id, lesson_id, question = (
+        item.owner_id,
+        item.assignment_id,
+        item.lesson_id,
+        item.question,
     )
-    if existing:
-        if (
-            existing.assignment_id != assignment_id
-            or existing.lesson_id != lesson_id
-            or existing.question != question
-        ):
-            raise HTTPException(409, "Этот ключ сообщения уже использован")
-        return existing
-    admit_request(db, user)
-    item = LearnerAssistantMessage(
-        owner_id=user.id,
-        organization_id=assignment.organization_id,
-        scope_status="captured",
-        assignment_id=assignment_id,
-        course_version_id=assignment.course_version_id,
-        lesson_id=lesson_id,
-        request_id=request_id,
-        question=question,
-        status="pending",
-    )
-    db.add(item)
-    db.commit()
-    db.refresh(item)
     recent = (
         db.query(LearnerAssistantMessage)
         .filter_by(
-            owner_id=user.id,
+            owner_id=user_id,
             assignment_id=assignment_id,
             course_version_id=assignment.course_version_id,
             lesson_id=lesson_id,
@@ -175,6 +151,144 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
             ),
         }
     )
+    return messages
+
+
+def _apply_learner_response(response, item, lesson, assignment):
+    lesson_id, assignment_id = item.lesson_id, item.assignment_id
+    result = json.loads(response["text"])
+    cited = result.get("cited_lesson_ids", [])
+    if (
+        not isinstance(result.get("answer"), str)
+        or not result["answer"].strip()
+        or not isinstance(cited, list)
+    ):
+        raise ValueError("Invalid assistant response")
+    if any(type(value) is not int or value != lesson_id for value in cited):
+        raise ValueError("Unknown lesson citation")
+    if len(result["answer"]) > 16000:
+        raise ValueError("Response too large")
+    item.answer = result["answer"]
+    if result.get("unsupported") or not cited:
+        item.answer += "\n\nВ материалах этого урока нет достаточного подтверждения ответа."
+    item.citations = (
+        [
+            {
+                "lesson_id": lesson_id,
+                "title": lesson["title"],
+                "url": f"/learning/{assignment_id}?item=lesson:{lesson_id}",
+                "course_version_id": assignment.course_version_id,
+            }
+        ]
+        if cited
+        else []
+    )
+    usage = response.get("usage") or {}
+    item.model = response.get("model")
+    item.input_tokens = int(usage.get("input_tokens") or 0)
+    item.output_tokens = int(usage.get("output_tokens") or 0)
+    item.status = "completed"
+
+
+def _learner_local_answer(item, lesson, version_id, question):
+    lesson_id, assignment_id = item.lesson_id, item.assignment_id
+    from app.ai.evidence import rank_sources
+
+    saved = lesson.get("content") or ""
+    passages = [{"quote": saved[start : start + 1500]} for start in range(0, len(saved), 1500)]
+    matches = rank_sources(question, passages, limit=2)
+    if matches:
+        item.answer = (
+            "Сейчас отвечаю по сохранённому материалу. Подходящие выдержки:\n\n"
+            + "\n\n".join(
+                "\n".join("> " + line for line in passage["quote"].splitlines())
+                for passage in matches
+            )
+        )
+        item.citations = [
+            {
+                "lesson_id": lesson_id,
+                "title": lesson["title"],
+                "url": f"/learning/{assignment_id}?item=lesson:{lesson_id}",
+                "course_version_id": version_id,
+            }
+        ]
+    else:
+        item.answer = (
+            "Сейчас доступен локальный режим. В этом материале не нашлось точного подтверждения ответа. Уточните вопрос или откройте материал «"
+            + lesson["title"]
+            + "»."
+        )
+        item.citations = []
+    item.status, item.model, item.error_code = (
+        "completed",
+        "local/extractive",
+        "assistant_local_fallback",
+    )
+
+
+def _verify_learner_version(db, item, stamp, version_id):
+    from app.services.ai_access_boundary import refresh_principal
+
+    current_user = refresh_principal(db, item.owner_id, stamp)
+    current_assignment, _ = assignment_context(db, current_user, item.assignment_id)
+    if current_assignment.course_version_id != version_id:
+        raise HTTPException(403, "Назначенная версия изменилась")
+
+
+def _existing_learner_message(db, user, assignment_id, lesson_id, message):
+    request_id, question = message.request_id, message.question
+    existing = (
+        db.query(LearnerAssistantMessage).filter_by(owner_id=user.id, request_id=request_id).first()
+    )
+    if existing:
+        if (
+            existing.assignment_id != assignment_id
+            or existing.lesson_id != lesson_id
+            or existing.question != question
+        ):
+            raise HTTPException(409, "Этот ключ сообщения уже использован")
+        return existing
+    return existing
+
+
+def send_message(db, user, assignment_id, lesson_id, *, message: AssistantMessage):
+    question = message.question
+    request_id = message.request_id
+    from app.services.ai_access_boundary import principal_stamp
+
+    user_id, stamp = user.id, principal_stamp(user)
+    user = lock_member(db, user_id, expected_auth_version=stamp[1])
+    if principal_stamp(user) != stamp:
+        raise HTTPException(403, "Доступ изменился до начала запроса")
+    assignment, snapshot = assignment_context(db, user, assignment_id)
+    version_id = assignment.course_version_id
+    lessons = {
+        lesson["id"]: lesson for module in snapshot["modules"] for lesson in module["lessons"]
+    }
+    lesson = lessons.get(lesson_id)
+    if not lesson:
+        raise HTTPException(404, "Урок не найден в назначенной версии курса")
+    expire_history(db, user.id)
+    existing = _existing_learner_message(db, user, assignment_id, lesson_id, message)
+    if existing:
+        return existing
+    admit_request(db, user)
+    item = LearnerAssistantMessage(
+        owner_id=user.id,
+        organization_id=assignment.organization_id,
+        scope_status="captured",
+        assignment_id=assignment_id,
+        course_version_id=assignment.course_version_id,
+        lesson_id=lesson_id,
+        request_id=request_id,
+        question=question,
+        status="pending",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    messages = _learner_prompt(db, assignment, lesson, item)
     try:
         from app.ai.context_budget import effective_input_limit
 
@@ -188,53 +302,17 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
             db,
             user.id,
             assigned_course,
-            "chat",
-            messages,
-            expected_principal=stamp,
             max_tokens=2000,
             json_mode=True,
+            context=CompletionContext(role="chat", messages=messages, expected_principal=stamp),
         )
         try:
-            current_user = refresh_principal(db, user_id, stamp)
-            current_assignment, _ = assignment_context(db, current_user, assignment_id)
-            if current_assignment.course_version_id != version_id:
-                raise HTTPException(403, "Назначенная версия изменилась")
+            _verify_learner_version(db, item, stamp, version_id)
         except HTTPException:
             item.status, item.error_code = "failed", "assistant_access_revoked"
             db.commit()
             raise
-        result = json.loads(response["text"])
-        cited = result.get("cited_lesson_ids", [])
-        if (
-            not isinstance(result.get("answer"), str)
-            or not result["answer"].strip()
-            or not isinstance(cited, list)
-        ):
-            raise ValueError("Invalid assistant response")
-        if any(type(value) is not int or value != lesson_id for value in cited):
-            raise ValueError("Unknown lesson citation")
-        if len(result["answer"]) > 16000:
-            raise ValueError("Response too large")
-        item.answer = result["answer"]
-        if result.get("unsupported") or not cited:
-            item.answer += "\n\nВ материалах этого урока нет достаточного подтверждения ответа."
-        item.citations = (
-            [
-                {
-                    "lesson_id": lesson_id,
-                    "title": lesson["title"],
-                    "url": f"/learning/{assignment_id}?item=lesson:{lesson_id}",
-                    "course_version_id": assignment.course_version_id,
-                }
-            ]
-            if cited
-            else []
-        )
-        usage = response.get("usage") or {}
-        item.model = response.get("model")
-        item.input_tokens = int(usage.get("input_tokens") or 0)
-        item.output_tokens = int(usage.get("output_tokens") or 0)
-        item.status = "completed"
+        _apply_learner_response(response, item, lesson, assignment)
     except Exception:
         if item.error_code == "assistant_access_revoked":
             raise HTTPException(
@@ -247,10 +325,7 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
         # A provider outage must not remove access to the assigned lesson.
         # Refresh authorization even on failure: an outage is never a bypass.
         try:
-            current_user = refresh_principal(db, user_id, stamp)
-            current_assignment, _ = assignment_context(db, current_user, assignment_id)
-            if current_assignment.course_version_id != version_id:
-                raise HTTPException(403, "Назначенная версия изменилась")
+            _verify_learner_version(db, item, stamp, version_id)
         except HTTPException:
             item.status, item.error_code = "failed", "assistant_access_revoked"
             db.commit()
@@ -261,38 +336,6 @@ def send_message(db, user, assignment_id, lesson_id, question, request_id):
                     "message": "Доступ к помощнику изменился во время запроса.",
                 },
             ) from None
-        from app.ai.evidence import rank_sources
-
-        saved = lesson.get("content") or ""
-        passages = [{"quote": saved[start : start + 1500]} for start in range(0, len(saved), 1500)]
-        matches = rank_sources(question, passages, limit=2)
-        if matches:
-            item.answer = (
-                "Сейчас отвечаю по сохранённому материалу. Подходящие выдержки:\n\n"
-                + "\n\n".join(
-                    "\n".join("> " + line for line in passage["quote"].splitlines())
-                    for passage in matches
-                )
-            )
-            item.citations = [
-                {
-                    "lesson_id": lesson_id,
-                    "title": lesson["title"],
-                    "url": f"/learning/{assignment_id}?item=lesson:{lesson_id}",
-                    "course_version_id": version_id,
-                }
-            ]
-        else:
-            item.answer = (
-                "Сейчас доступен локальный режим. В этом материале не нашлось точного подтверждения ответа. Уточните вопрос или откройте материал «"
-                + lesson["title"]
-                + "»."
-            )
-            item.citations = []
-        item.status, item.model, item.error_code = (
-            "completed",
-            "local/extractive",
-            "assistant_local_fallback",
-        )
+        _learner_local_answer(item, lesson, version_id, question)
     db.commit()
     return item

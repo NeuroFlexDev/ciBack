@@ -28,7 +28,7 @@ def add_task(
         task = TaskRepository.add_task(db, module_id, payload)
         return TaskResponse.model_validate(task)
     except ValueError as e:
-        raise HTTPException(404, detail=str(e))
+        raise HTTPException(404, detail=str(e)) from e
 
 
 @router.get(
@@ -44,7 +44,7 @@ def get_tasks(
         tasks = TaskRepository.get_tasks(db, module_id)
         return [TaskResponse.model_validate(t) for t in tasks if not t.is_deleted]
     except ValueError as e:
-        raise HTTPException(404, detail=str(e))
+        raise HTTPException(404, detail=str(e)) from e
 
 
 @router.get("/tasks/{task_id}", summary="Получить задачу по ID", response_model=TaskResponse)

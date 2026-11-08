@@ -96,3 +96,40 @@ def test_error_budget_request_bound_and_latency_percentiles():
     assert metrics.stop_reason.startswith("server_or_transport_errors")
     assert percentile([1, 2, 3, 4, 100], 95) == 100
     assert metrics.report()["endpoints"][0]["statuses"]["500"] == 6
+
+
+def test_stop_interrupts_ramp_before_starting_another_learner(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from scripts import load_platform
+
+    simulated = AsyncMock()
+    monkeypatch.setattr(load_platform, "learner", simulated)
+
+    async def scenario():
+        metrics = Measurements(100)
+        task = asyncio.create_task(
+            load_platform.tracked_learner(
+                None,
+                metrics,
+                {},
+                scenario=load_platform.LearnerScenario(
+                    name="ramp",
+                    phase_index=0,
+                    duration=10,
+                    delay=3600,
+                    seed=0,
+                    think_seconds=1,
+                ),
+            )
+        )
+        await asyncio.sleep(0)
+        metrics.stop_reason = "operator_stop"
+        await asyncio.wait_for(task, timeout=1)
+        assert metrics.active_users == 0
+        assert metrics.stopped.is_set()
+        metrics.stop_reason = None
+        assert not metrics.stopped.is_set()
+
+    asyncio.run(scenario())
+    simulated.assert_not_awaited()

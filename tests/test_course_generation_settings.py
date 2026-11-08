@@ -5,7 +5,7 @@ from app.models.course_generation_settings import CourseGenerationSettings
 from app.models.generation_run import GenerationRun
 from app.models.user import User
 from app.services.pipeline_service import PipelineRunFailed, PipelineService
-from tests.factories import make_course
+from tests.factories import make_course, unpack_call_options
 from tests.generated_graph_fixture import concrete_graph
 
 
@@ -194,6 +194,7 @@ def test_generation_uses_snapshot_and_settings_in_prompt(db_session, auth_user, 
     captured = {}
 
     def fake_generate(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         captured.update(kwargs)
         return concrete_graph()
 

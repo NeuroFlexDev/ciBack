@@ -2,7 +2,7 @@
 
 import json
 
-import app.models
+import app.models  # noqa: F401 -- register ORM mappings
 from app.database.db import SessionLocal
 from app.routes.operations import diagnostics
 

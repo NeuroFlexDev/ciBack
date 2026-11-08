@@ -4,18 +4,25 @@ import argparse
 import json
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 
-def generate(
-    output: Path,
-    *,
-    host: str,
-    apple_team_id: str,
-    apple_bundle_id: str,
-    android_package: str,
-    android_sha256: list[str],
-) -> None:
+@dataclass(frozen=True, kw_only=True)
+class AssociationIdentity:
+    host: str
+    apple_team_id: str
+    apple_bundle_id: str
+    android_package: str
+    android_sha256: list[str]
+
+
+def generate(output, *, identity: AssociationIdentity):
+    host = identity.host
+    apple_team_id = identity.apple_team_id
+    apple_bundle_id = identity.apple_bundle_id
+    android_package = identity.android_package
+    android_sha256 = identity.android_sha256
     if host not in {"dev.platform.lernium.ru", "lernium.ru"}:
         raise ValueError("host must be dev.platform.lernium.ru or lernium.ru")
     if not re.fullmatch(r"[A-Z0-9]{10}", apple_team_id):
@@ -77,11 +84,13 @@ def main() -> None:
     args = parser.parse_args()
     generate(
         args.output,
-        host=args.host,
-        apple_team_id=args.apple_team_id,
-        apple_bundle_id=args.apple_bundle_id,
-        android_package=args.android_package,
-        android_sha256=[v.strip() for v in args.android_sha256.split(",") if v.strip()],
+        identity=AssociationIdentity(
+            host=args.host,
+            apple_team_id=args.apple_team_id,
+            apple_bundle_id=args.apple_bundle_id,
+            android_package=args.android_package,
+            android_sha256=[v.strip() for v in args.android_sha256.split(",") if v.strip()],
+        ),
     )
 
 

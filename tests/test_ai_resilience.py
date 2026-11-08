@@ -4,13 +4,15 @@ import pytest
 from pydantic import SecretStr
 
 from app.ai import gateway, providers
+from app.ai.gateway import InvocationOptions
 from app.core.config import AIProvider, AIRoutingCandidate, settings
 from app.models.ai_state import AICall
 from app.models.chat import ChatMessage
 from app.models.generation_run import GenerationRun
 from app.repositories.chat import ChatRepository
-from app.services.chat_service import chat_generate
-from app.services.pipeline_service import PipelineService
+from app.services.chat_service import ChatGenerationRequest, chat_generate
+from app.services.pipeline_service import GraphGenerationRequest, PipelineService
+from app.services.retrieval_service import RetrievalQuery
 from tests.factories import make_course
 from tests.test_ai_runtime_v2 import execute, make_runtime
 from tests.test_generation_status import _run
@@ -155,7 +157,11 @@ def test_route_approval_does_not_transfer_to_another_provider(two_providers, mon
         gateway, "ChatOpenAI", lambda **kw: pytest.fail("unapproved route must not send")
     )
     with pytest.raises(providers.AIUnavailable):
-        gateway.invoke_messages("chat", [{"role": "user", "content": "hello"}], model="test/shared")
+        gateway.invoke_messages(
+            "chat",
+            [{"role": "user", "content": "hello"}],
+            options=InvocationOptions(model="test/shared"),
+        )
 
 
 def test_chat_has_persisted_local_answer_with_no_inference_service(
@@ -164,7 +170,10 @@ def test_chat_has_persisted_local_answer_with_no_inference_service(
     monkeypatch.setattr(gateway, "ChatOpenAI", lambda **kw: pytest.fail("must not call network"))
     chat = ChatRepository.create_chat(db_session, auth_user.id, "Offline")
     result = chat_generate(
-        chat_id=chat.id, user_id=auth_user.id, text="Объясни определение", db=db_session
+        chat_id=chat.id,
+        user_id=auth_user.id,
+        db=db_session,
+        request=ChatGenerationRequest(text="Объясни определение"),
     )
     assert result["raw"]["degraded"]
     assert "локальный режим" in result["answer"]
@@ -180,7 +189,10 @@ def test_local_answer_quotes_only_accessible_sources(db_session, auth_user, monk
     db_session.commit()
     chat = ChatRepository.create_chat(db_session, auth_user.id, "Sources", course.id)
     result = chat_generate(
-        chat_id=chat.id, user_id=auth_user.id, text="Что делать при утечке?", db=db_session
+        chat_id=chat.id,
+        user_id=auth_user.id,
+        db=db_session,
+        request=ChatGenerationRequest(text="Что делать при утечке?"),
     )
     assert result["raw"]["degraded"]
     assert chunk.text in result["answer"]
@@ -265,9 +277,8 @@ def test_embedding_outage_keeps_chunks_searchable(db_session, auth_user, monkeyp
         db_session,
         course_id=course.id,
         owner_id=auth_user.id,
-        query="Что делать при утечке?",
-        limit=3,
         vector_store=retrieval.PersistentVectorStore(db_session),
+        search_query=RetrievalQuery(query="Что делать при утечке?", limit=3),
     )
     assert [item.chunk_id for item in found.citations] == [chunk.id]
 
@@ -330,7 +341,10 @@ def test_real_worker_without_providers_preserves_a_resumable_run(
     course.status = "configured"
     db_session.commit()
     run = PipelineService.prepare_graph_generation(
-        db_session, course_id=course.id, owner_id=auth_user.id, document_ids=[document.id]
+        db_session,
+        course_id=course.id,
+        owner_id=auth_user.id,
+        request=GraphGenerationRequest(document_ids=[document.id]),
     )
     monkeypatch.setattr(settings, "ENV", "production")
     monkeypatch.setattr(settings, "AI_MAX_ATTEMPTS", 1)

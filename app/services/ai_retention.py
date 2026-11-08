@@ -42,6 +42,18 @@ def _ids(query, column):
     return sorted(row[0] for row in query.with_entities(column).all())
 
 
+def _protect_embedded_versions(value, protected):
+    if isinstance(value, list):
+        for item in value:
+            _protect_embedded_versions(item, protected)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "course_version_id" and type(item) is int:
+                protected.add(item)
+            else:
+                _protect_embedded_versions(item, protected)
+
+
 def _protected_versions(db):
     protected = set()
     # Discover real foreign keys, including integration tables. Only children
@@ -56,21 +68,10 @@ def _protected_versions(db):
                 )
     from app.models.learning import LearningProgram, LearningProgramEnrollment
 
-    def visit(value):
-        if isinstance(value, list):
-            for item in value:
-                visit(item)
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key == "course_version_id" and type(item) is int:
-                    protected.add(item)
-                else:
-                    visit(item)
-
     for (value,) in db.query(LearningProgram.steps):
-        visit(value)
+        _protect_embedded_versions(value, protected)
     for (value,) in db.query(LearningProgramEnrollment.snapshot):
-        visit(value)
+        _protect_embedded_versions(value, protected)
     return protected
 
 

@@ -9,12 +9,19 @@ from pydantic import BaseModel, SecretStr, ValidationError
 
 from app.ai import gateway
 from app.ai.evidence import rank_sources, source_batches
+from app.ai.gateway import InvocationOptions
 from app.ai.models import model_policy
 from app.models.ai_state import AICall, AIResponseCache
 from app.models.generation_run import GenerationRun
 from app.schemas.agentic_pipeline import QAArtifact
-from app.services.agent_runtime import AgentRuntime, _fingerprint, expand_source_refs
-from tests.factories import make_course
+from app.services.agent_runtime import (
+    AgentInvocation,
+    AgentRuntime,
+    _fingerprint,
+    expand_source_refs,
+)
+from app.services.agentic_course_pipeline import ReviewContext
+from tests.factories import make_course, unpack_call_options
 
 SOURCE = {
     "id": "src:doc:1:v1:chunk:1",
@@ -43,16 +50,46 @@ def make_runtime(db, user, generate):
     return AgentRuntime(db=db, run_id=run.id, course_id=course.id, generate=generate)
 
 
+def test_retry_feedback_does_not_leak_between_runtime_invocations(db_session, auth_user):
+    requests = []
+    responses = iter([{"value": "invalid"}, {"value": 1}, {"value": 2}])
+
+    def generate(_template, *, request, **_context):
+        requests.append(request)
+        return next(responses)
+
+    runtime = make_runtime(db_session, auth_user, generate)
+    runtime.max_attempts = 2
+    for sequence in range(2):
+        result = runtime.execute(
+            request=AgentInvocation(
+                agent="ingestion",
+                artifact="example",
+                sequence=sequence,
+                template_name="unused.j2",
+                response_model=Value,
+                prompt_context={"input": str(sequence)},
+                max_tokens=100,
+            )
+        )
+        assert result.value == sequence + 1
+    assert requests[0].repair_feedback == ""
+    assert requests[1].repair_feedback
+    assert requests[2].repair_feedback == ""
+
+
 def execute(runtime, **kw):
     return runtime.execute(
-        agent="ingestion",
-        artifact="example",
-        sequence=0,
-        template_name="unused.j2",
-        response_model=Value,
-        prompt_context={"input": "hello"},
-        max_tokens=100,
-        **kw,
+        request=AgentInvocation(
+            agent="ingestion",
+            artifact="example",
+            sequence=0,
+            template_name="unused.j2",
+            response_model=Value,
+            prompt_context={"input": "hello"},
+            max_tokens=100,
+            **kw,
+        )
     )
 
 
@@ -123,7 +160,11 @@ def test_sdk_truncation_retains_usage_and_is_retryable(monkeypatch):
     monkeypatch.setattr(settings, "VSELLM_API_KEY", SecretStr("test-only"))
     monkeypatch.setattr(gateway, "ChatOpenAI", TruncatedLLM)
     with pytest.raises(HTTPException) as exc:
-        gateway.invoke_messages("ingestion", [{"role": "user", "content": "Test"}], json_mode=True)
+        gateway.invoke_messages(
+            "ingestion",
+            [{"role": "user", "content": "Test"}],
+            options=InvocationOptions(json_mode=True),
+        )
     assert exc.value.ai_usage == {"input_tokens": 120, "output_tokens": 40, "cached_tokens": 0}
     assert gateway.retryable(exc.value)
 
@@ -265,6 +306,7 @@ def test_retry_contains_validation_feedback(db_session, auth_user):
     calls = []
 
     def generate(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         calls.append(kwargs)
         return {"value": "invalid"} if len(calls) == 1 else {"value": 2}
 
@@ -294,6 +336,7 @@ def test_semantic_validator_retries_before_persisting_success(db_session, auth_u
     calls = []
 
     def generate(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         calls.append(kwargs)
         return {"value": len(calls)}
 
@@ -422,13 +465,10 @@ def test_qa_splits_oversized_pairs_without_omitting_lessons(monkeypatch):
 
     monkeypatch.setattr(pipeline, "_review_batch", review)
     result = pipeline._review(
-        common={},
-        ingestion=None,
-        competency_map=None,
         course_plan=None,
         writer=writer,
         assessment=None,
-        revision=0,
+        review_context=ReviewContext(common={}, ingestion=None, competency_map=None, revision=0),
     )
     assert result.checked_artifact_ids == [l.id for l in lessons]
     assert attempts == [
@@ -491,6 +531,7 @@ def test_confirmed_output_truncation_increases_reserved_response_and_preserves_s
     limits = []
 
     def generate(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         limits.append(kwargs["max_tokens"])
         if len(limits) == 1:
             error = HTTPException(502, "Truncated")
@@ -520,6 +561,7 @@ def test_checkpoint_retry_remembers_confirmed_output_truncation(db_session, auth
     seen = []
 
     def truncated(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         seen.append(kwargs["max_tokens"])
         error = HTTPException(502, "Truncated")
         error.ai_failure_kind = "truncated"
@@ -536,6 +578,7 @@ def test_checkpoint_retry_remembers_confirmed_output_truncation(db_session, auth
         execute(runtime)
 
     def success(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         seen.append(kwargs["max_tokens"])
         return {"value": 9}
 
@@ -551,6 +594,7 @@ def test_output_recovery_stops_at_its_bounded_ceiling(db_session, auth_user, mon
     seen = []
 
     def truncated(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         seen.append(kwargs["max_tokens"])
         error = HTTPException(502, "Truncated")
         error.ai_failure_kind = "truncated"

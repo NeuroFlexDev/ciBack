@@ -1,3 +1,7 @@
+from dataclasses import dataclass
+
+from app.services.learning_service import AssignmentRequest
+
 """Company owner → manager → job profile → employee → learning assignment."""
 
 from datetime import datetime
@@ -403,44 +407,51 @@ def archive_position(
     return position_out(db, row, user)
 
 
+@dataclass
+class EmployeeFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    q: str = Query("", max_length=100)
+    offset: int = Query(0, ge=0)
+    limit: int = Query(50, ge=1, le=100)
+    role: Literal["manager", "member", "candidate"] | None = None
+    manager_id: int | None = Query(None, gt=0)
+    user_id: int | None = Query(None, gt=0)
+    removed: bool = False
+
+
 @router.get("/employees")
 def employees(
-    q: str = Query("", max_length=100),
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-    role: Literal["manager", "member", "candidate"] | None = None,
-    manager_id: int | None = Query(None, gt=0),
-    user_id: int | None = Query(None, gt=0),
-    removed: bool = False,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
+    filters: EmployeeFilters = Depends(),
 ):
     org = require_business(db, user)
     query = db.query(User).filter(people_filter(user), User.is_admin.is_(False))
     query = query.filter(
         User.organization_removed_at.is_not(None)
-        if removed
+        if filters.removed
         else User.organization_removed_at.is_(None)
     )
-    if user_id is not None:
-        query = query.filter(User.id == user_id)
-    if role:
+    if filters.user_id is not None:
+        query = query.filter(User.id == filters.user_id)
+    if filters.role:
         query = query.filter(
             User.organization_role.in_(["manager", "admin"])
-            if role == "manager"
-            else User.organization_role == role
+            if filters.role == "manager"
+            else User.organization_role == filters.role
         )
-    if manager_id is not None:
-        query = query.filter(User.manager_id == manager_id)
-    if q.strip():
+    if filters.manager_id is not None:
+        query = query.filter(User.manager_id == filters.manager_id)
+    if filters.q.strip():
         query = query.filter(
-            User.email.icontains(q.strip(), autoescape=True)
-            | User.username.icontains(q.strip(), autoescape=True)
-            | User.full_name.icontains(q.strip(), autoescape=True)
+            User.email.icontains(filters.q.strip(), autoescape=True)
+            | User.username.icontains(filters.q.strip(), autoescape=True)
+            | User.full_name.icontains(filters.q.strip(), autoescape=True)
         )
     from app.routes.administration import user_dict
 
-    rows = query.order_by(User.id).offset(offset).limit(limit).all()
+    rows = query.order_by(User.id).offset(filters.offset).limit(filters.limit).all()
     people = {
         p.user_id: p
         for p in db.query(LearningPerson).filter(
@@ -1081,12 +1092,14 @@ def assign_course(
     for target in targets:
         assignment, added = learning.create_assignment(
             db,
-            org_id=org.id,
-            version_id=version.id,
-            user_id=target.id,
-            actor_id=user.id,
-            rules=rules,
-            rules_revision=config.revision,
+            request=AssignmentRequest(
+                org_id=org.id,
+                version_id=version.id,
+                user_id=target.id,
+                actor_id=user.id,
+                rules=rules,
+                rules_revision=config.revision,
+            ),
         )
         created += int(added)
         if added:

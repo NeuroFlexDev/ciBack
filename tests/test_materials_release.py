@@ -17,6 +17,7 @@ from app.services import learner_assistant_service as assistant
 from app.services.document_safety import validate_container
 from app.services.generation_control import GenerationCancelled, check_cancelled
 from app.services.generation_preflight import generation_preflight
+from app.services.learner_assistant_service import AssistantMessage
 from tests.factories import make_course
 
 
@@ -338,26 +339,46 @@ def test_learner_assistant_uses_snapshot_and_valid_citation_only(
 
     monkeypatch.setattr("app.ai.gateway.invoke_messages", generate)
     first = assistant.send_message(
-        db_session, auth_user, 8, 5, "Where is the nucleus?", "question-123"
+        db_session,
+        auth_user,
+        8,
+        5,
+        message=AssistantMessage(question="Where is the nucleus?", request_id="question-123"),
     )
     assert first.status == "completed"
     assert first.citations[0]["course_version_id"] == version.id
     assert "correct_answer" not in json.dumps(observed)
     assert (
         assistant.send_message(
-            db_session, auth_user, 8, 5, "Where is the nucleus?", "question-123"
+            db_session,
+            auth_user,
+            8,
+            5,
+            message=AssistantMessage(question="Where is the nucleus?", request_id="question-123"),
         ).id
         == first.id
     )
     assert len(observed) == 1
     with pytest.raises(HTTPException) as exc:
-        assistant.send_message(db_session, auth_user, 8, 99, "Unknown lesson", "question-456")
+        assistant.send_message(
+            db_session,
+            auth_user,
+            8,
+            99,
+            message=AssistantMessage(question="Unknown lesson", request_id="question-456"),
+        )
     assert exc.value.status_code == 404
     monkeypatch.setattr(
         "app.ai.gateway.invoke_messages",
         lambda *a, **kw: {"text": json.dumps({"answer": "x", "cited_lesson_ids": [999]})},
     )
-    failed = assistant.send_message(db_session, auth_user, 8, 5, "Question", "question-789")
+    failed = assistant.send_message(
+        db_session,
+        auth_user,
+        8,
+        5,
+        message=AssistantMessage(question="Question", request_id="question-789"),
+    )
     assert failed.status == "completed" and failed.model == "local/extractive"
     assert not failed.citations and "локальный режим" in failed.answer
     assert failed.answer != "x"

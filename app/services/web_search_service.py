@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -20,6 +22,7 @@ from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
 from app.models.user import User
 from app.services import ai_resources
+from app.services.ai_resources import ResourceOutcome, ResourceReservation
 from app.services.file_storage import get_file_storage
 from app.services.generation_control import check_cancelled
 from app.services.material_quota import check_storage
@@ -85,7 +88,19 @@ def _save(db, artifact, data):
     db.commit()
 
 
-def _snapshots(db, runtime, result, query, now, created_files):
+@dataclass(frozen=True, kw_only=True)
+class WebSearchReceipt:
+    """Parameters for _snapshots, preserving its original defaults."""
+
+    result: Any
+    query: Any
+    now: Any
+
+
+def _snapshots(db, runtime, created_files, *, receipt: WebSearchReceipt):
+    result = receipt.result
+    query = receipt.query
+    now = receipt.now
     user = db.get(User, runtime.owner_id)
     rows, public_sources = [], []
     for source in result["sources"]:
@@ -159,6 +174,118 @@ def _snapshots(db, runtime, result, query, now, created_files):
     return build_source_catalog(rows, max_chars=20000), public_sources
 
 
+def _replay_search_artifact(db, artifact, source_catalog):
+    payload = artifact.payload
+    additions = payload.get("catalog", [])
+    known = {item["id"] for item in source_catalog}
+    source_catalog.extend(item for item in additions if item["id"] not in known)
+    if payload.get("status") == "searching":
+        _save(
+            db,
+            artifact,
+            {
+                **payload,
+                "status": "unknown",
+                "warning": "Результат предыдущего поиска неизвестен. Автоматический платный повтор остановлен.",
+            },
+        )
+    else:
+        db.commit()
+    return source_catalog
+
+
+def _remove_uncommitted_search_files(db, created_files):
+    for key in created_files:
+        if db.query(Document.id).filter_by(storage_key=key).first() is None:
+            try:
+                get_file_storage().delete(key)
+            except OSError:
+                pass
+
+
+def _record_search_failure(db, resource, call, exc):
+    if resource is not None and resource.status != "completed":
+        unsent = getattr(exc, "request_sent", False if call is None else None) is False
+        if call:
+            call.status = "unavailable" if unsent else "failed"
+            call.error_code = getattr(exc, "code", "web_search_failed")
+            usage = getattr(exc, "ai_usage", None)
+            if usage:
+                call.input_tokens, call.output_tokens = (
+                    usage["input_tokens"],
+                    usage["output_tokens"],
+                )
+        ai_resources.finish(
+            db,
+            resource,
+            outcome=ResourceOutcome(
+                usage=getattr(exc, "ai_usage", None), unsent=unsent, failed=True
+            ),
+        )
+
+
+def _reserve_search_query(db, runtime, user, number):
+    calls = (
+        db.query(AICall)
+        .filter(AICall.run_id == runtime.run_id, AICall.status != "unavailable")
+        .all()
+    )
+    # Native retrieval consumes input tokens too (observed in live QA).
+    token_reserve = 32000 + settings.WEB_SEARCH_MAX_OUTPUT_TOKENS
+    from app.services.ai_entitlements import unlimited_ai
+
+    if not unlimited_ai(db, user.organization_id) and (
+        len(calls) >= settings.AI_MAX_CALLS_PER_RUN
+        or sum(c.input_tokens + c.output_tokens for c in calls) + token_reserve
+        > settings.AI_MAX_TOKENS_PER_RUN
+    ):
+        raise HTTPException(402, "Web search run budget exhausted")
+    resource = ai_resources.reserve(
+        db,
+        reservation=ResourceReservation(
+            owner_id=user.id,
+            course_id=runtime.course_id,
+            run_id=runtime.run_id,
+            operation="web_search",
+            tokens=token_reserve,
+            cost=settings.WEB_SEARCH_RESERVATION_RUB,
+            key=f"web-search:{runtime.run_id}:{number}",
+            timeout=settings.WEB_SEARCH_TIMEOUT_SECONDS,
+        ),
+    )
+    call = AICall(
+        run_id=runtime.run_id,
+        agent="web_search",
+        model=settings.WEB_SEARCH_MODEL,
+        status="reserved",
+        input_tokens=32000,
+        output_tokens=settings.WEB_SEARCH_MAX_OUTPUT_TOKENS,
+        routing={
+            "provider": settings.WEB_SEARCH_PROVIDER,
+            "query_index": number,
+            "max_tool_calls": 1,
+        },
+    )
+    db.add(call)
+    db.commit()
+    return resource, call
+
+
+def _save_search_unavailable(db, artifact, data, exc):
+    data["status"] = (
+        "completed"
+        if data["catalog"]
+        else (
+            "no_results" if getattr(exc, "code", "") == "web_search_no_citations" else "unavailable"
+        )
+    )
+    data["warning"] = (
+        "Интернет-поиск не дал подтверждённых сведений или недоступен. Автоматического повторного запроса не было; проверьте полноту исходных материалов."
+    )
+    data["error_code"] = getattr(exc, "code", "web_search_budget_or_storage_limit")
+    _save(db, artifact, data)
+
+
 def supplement(runtime, common: dict, source_catalog: list[dict], *, invoke=None) -> list[dict]:
     """Mutate the caller's catalog; its later graph-source FK links stay valid.
 
@@ -179,23 +306,7 @@ def supplement(runtime, common: dict, source_catalog: list[dict], *, invoke=None
         .first()
     )
     if artifact:
-        payload = artifact.payload
-        additions = payload.get("catalog", [])
-        known = {item["id"] for item in source_catalog}
-        source_catalog.extend(item for item in additions if item["id"] not in known)
-        if payload.get("status") == "searching":
-            _save(
-                db,
-                artifact,
-                {
-                    **payload,
-                    "status": "unknown",
-                    "warning": "Результат предыдущего поиска неизвестен. Автоматический платный повтор остановлен.",
-                },
-            )
-        else:
-            db.commit()
-        return source_catalog
+        return _replay_search_artifact(db, artifact, source_catalog)
     plan = search_plan(common, source_catalog)
     data = {**plan, "sources": [], "catalog": [], "warning": None}
     artifact = AgentArtifact(
@@ -235,47 +346,7 @@ def supplement(runtime, common: dict, source_catalog: list[dict], *, invoke=None
             check_cancelled(db, runtime.run_id)
             check_source_limit(db, user.id, runtime.course_id)
             check_storage(db, user, 1)
-            calls = (
-                db.query(AICall)
-                .filter(AICall.run_id == runtime.run_id, AICall.status != "unavailable")
-                .all()
-            )
-            # Native retrieval consumes input tokens too (observed in live QA).
-            token_reserve = 32000 + settings.WEB_SEARCH_MAX_OUTPUT_TOKENS
-            from app.services.ai_entitlements import unlimited_ai
-
-            if not unlimited_ai(db, user.organization_id) and (
-                len(calls) >= settings.AI_MAX_CALLS_PER_RUN
-                or sum(c.input_tokens + c.output_tokens for c in calls) + token_reserve
-                > settings.AI_MAX_TOKENS_PER_RUN
-            ):
-                raise HTTPException(402, "Web search run budget exhausted")
-            resource = ai_resources.reserve(
-                db,
-                owner_id=user.id,
-                course_id=runtime.course_id,
-                run_id=runtime.run_id,
-                operation="web_search",
-                tokens=token_reserve,
-                cost=settings.WEB_SEARCH_RESERVATION_RUB,
-                key=f"web-search:{runtime.run_id}:{number}",
-                timeout=settings.WEB_SEARCH_TIMEOUT_SECONDS,
-            )
-            call = AICall(
-                run_id=runtime.run_id,
-                agent="web_search",
-                model=settings.WEB_SEARCH_MODEL,
-                status="reserved",
-                input_tokens=32000,
-                output_tokens=settings.WEB_SEARCH_MAX_OUTPUT_TOKENS,
-                routing={
-                    "provider": settings.WEB_SEARCH_PROVIDER,
-                    "query_index": number,
-                    "max_tool_calls": 1,
-                },
-            )
-            db.add(call)
-            db.commit()
+            resource, call = _reserve_search_query(db, runtime, user, number)
             result = (invoke or web_search.search)(query)
             usage = result.get("usage")
             if usage:
@@ -284,10 +355,15 @@ def supplement(runtime, common: dict, source_catalog: list[dict], *, invoke=None
                     usage["output_tokens"],
                 )
             call.status = "completed"
-            ai_resources.finish(db, resource, usage=usage)
+            ai_resources.finish(db, resource, outcome=ResourceOutcome(usage=usage))
             check_cancelled(db, runtime.run_id)
             now = datetime.now(timezone.utc).isoformat()
-            catalog, sources = _snapshots(db, runtime, result, query, now, created_files)
+            catalog, sources = _snapshots(
+                db,
+                runtime,
+                created_files,
+                receipt=WebSearchReceipt(result=result, query=query, now=now),
+            )
             data["catalog"] = data["catalog"] + catalog
             data["sources"] = data["sources"] + sources
             data["status"] = "completed"
@@ -297,43 +373,12 @@ def supplement(runtime, common: dict, source_catalog: list[dict], *, invoke=None
             db.rollback()
             # Only files written by this failed attempt and never committed to
             # a Document row may be removed. Historical snapshots are untouched.
-            for key in created_files:
-                if db.query(Document.id).filter_by(storage_key=key).first() is None:
-                    try:
-                        get_file_storage().delete(key)
-                    except OSError:
-                        pass
-            if resource is not None and resource.status != "completed":
-                unsent = getattr(exc, "request_sent", False if call is None else None) is False
-                if call:
-                    call.status = "unavailable" if unsent else "failed"
-                    call.error_code = getattr(exc, "code", "web_search_failed")
-                    usage = getattr(exc, "ai_usage", None)
-                    if usage:
-                        call.input_tokens, call.output_tokens = (
-                            usage["input_tokens"],
-                            usage["output_tokens"],
-                        )
-                ai_resources.finish(
-                    db, resource, usage=getattr(exc, "ai_usage", None), unsent=unsent, failed=True
-                )
+            _remove_uncommitted_search_files(db, created_files)
+            _record_search_failure(db, resource, call, exc)
             # Revoked membership/cancellation must stop the whole run after the
             # provider receipt is durably recorded, not return new evidence.
             check_cancelled(db, runtime.run_id)
-            data["status"] = (
-                "completed"
-                if data["catalog"]
-                else (
-                    "no_results"
-                    if getattr(exc, "code", "") == "web_search_no_citations"
-                    else "unavailable"
-                )
-            )
-            data["warning"] = (
-                "Интернет-поиск не дал подтверждённых сведений или недоступен. Автоматического повторного запроса не было; проверьте полноту исходных материалов."
-            )
-            data["error_code"] = getattr(exc, "code", "web_search_budget_or_storage_limit")
-            _save(db, artifact, data)
+            _save_search_unavailable(db, artifact, data, exc)
             break
     return source_catalog
 

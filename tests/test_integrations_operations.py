@@ -42,6 +42,7 @@ from app.services import (
     outbox_service,
 )
 from app.services.integration_secrets import seal, unseal
+from app.services.mail_service import MailDeliveryOptions
 
 
 @pytest.fixture(autouse=True)
@@ -285,7 +286,7 @@ def test_expired_messages_are_not_delivered_and_abandoned_leases_resume(db_sessi
         "x@example.org",
         "Hello",
         "private",
-        expires_at=datetime.utcnow() - timedelta(seconds=1),
+        delivery=MailDeliveryOptions(expires_at=datetime.utcnow() - timedelta(seconds=1)),
     )
     db_session.commit()
     called = []

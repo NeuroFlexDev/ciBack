@@ -9,14 +9,7 @@ def source_ref_id(document_id: int, document_version: int, chunk_id: int) -> str
     return f"src:doc:{document_id}:v{document_version}:chunk:{chunk_id}"
 
 
-def build_source_catalog(documents: Iterable[Any], *, max_chars: int) -> list[dict]:
-    """Build a fair, immutable evidence catalog for agent prompts.
-
-    Chunks are selected round-robin across documents instead of taking the
-    first N characters from the first document. The catalog identifier is the
-    only citation identifier agents are allowed to emit.
-    """
-
+def _document_queues(documents):
     queues: list[deque[tuple[Any, Any]]] = []
     for document in sorted(documents, key=lambda item: (item.id, item.version)):
         chunks = sorted(
@@ -25,7 +18,18 @@ def build_source_catalog(documents: Iterable[Any], *, max_chars: int) -> list[di
         )
         if chunks:
             queues.append(deque((document, chunk) for chunk in chunks))
+    return queues
 
+
+def build_source_catalog(documents: Iterable[Any], *, max_chars: int) -> list[dict]:
+    """Build a fair, immutable evidence catalog for agent prompts.
+
+    Chunks are selected round-robin across documents instead of taking the
+    first N characters from the first document. The catalog identifier is the
+    only citation identifier agents are allowed to emit.
+    """
+
+    queues = _document_queues(documents)
     result: list[dict] = []
     remaining = max_chars
     while queues and remaining > 0:
@@ -87,30 +91,31 @@ def normalize_ref_id(value: Any) -> str | None:
     return str(candidate) if candidate else None
 
 
+def _visit_source_refs(value: Any, allowed_ref_ids, used) -> None:
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    if isinstance(value, dict):
+        for child_key, child in value.items():
+            if child_key in {"source_refs", "citations", "evidence"}:
+                if not isinstance(child, list):
+                    raise ValueError(f"{child_key} must be a list")
+                for raw_ref in child:
+                    ref_id = normalize_ref_id(raw_ref)
+                    if ref_id is None or ref_id not in allowed_ref_ids:
+                        raise ValueError(f"unknown source reference: {ref_id}")
+                    used.add(ref_id)
+            _visit_source_refs(child, allowed_ref_ids, used)
+    elif isinstance(value, list):
+        for child in value:
+            _visit_source_refs(child, allowed_ref_ids, used)
+
+
 def validate_source_refs(payload: Any, allowed_ref_ids: set[str]) -> set[str]:
     """Reject invented citations anywhere in an agent artifact."""
 
     used: set[str] = set()
 
-    def visit(value: Any, key: str | None = None) -> None:
-        if hasattr(value, "model_dump"):
-            value = value.model_dump(mode="json")
-        if isinstance(value, dict):
-            for child_key, child in value.items():
-                if child_key in {"source_refs", "citations", "evidence"}:
-                    if not isinstance(child, list):
-                        raise ValueError(f"{child_key} must be a list")
-                    for raw_ref in child:
-                        ref_id = normalize_ref_id(raw_ref)
-                        if ref_id is None or ref_id not in allowed_ref_ids:
-                            raise ValueError(f"unknown source reference: {ref_id}")
-                        used.add(ref_id)
-                visit(child, child_key)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child, key)
-
-    visit(payload)
+    _visit_source_refs(payload, allowed_ref_ids, used)
     return used
 
 

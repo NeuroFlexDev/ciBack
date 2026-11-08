@@ -1,9 +1,19 @@
+from dataclasses import dataclass
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.repositories.retrieval import RetrievalRepository
 from app.schemas.retrieval import RetrievalCitation, RetrievalResponse
 from app.services.vector_store import VectorSearchFilters, VectorStore
+
+
+@dataclass(frozen=True, kw_only=True)
+class RetrievalQuery:
+    """Parameters for search_course, preserving its original defaults."""
+
+    query: str
+    limit: int
 
 
 class RetrievalService:
@@ -13,10 +23,11 @@ class RetrievalService:
         *,
         course_id: int,
         owner_id: int,
-        query: str,
-        limit: int,
         vector_store: VectorStore,
+        search_query: RetrievalQuery,
     ) -> RetrievalResponse:
+        query = search_query.query
+        limit = search_query.limit
         if RetrievalRepository.get_owned_course(db, course_id, owner_id) is None:
             raise HTTPException(status_code=404, detail="Курс не найден")
 

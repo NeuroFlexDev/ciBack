@@ -2,11 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.models.course import Course
 from app.models.course_structure import CourseStructure
-from app.models.lesson import Lesson
 from app.models.module import Module
-from app.models.task import Task
-from app.models.test import Test
-from app.models.theory import Theory
 
 
 class GenerationRepository:

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Dict, Optional
 
 from app.ai import control as ai_control
 from app.chat_engine.base import ChatEngine
@@ -25,7 +24,6 @@ ENGINES: dict[str, Callable[[str | None], ChatEngine]] = {
 
 
 def get_chat_engine(name: str, model: str | None) -> ChatEngine:
-    from app.core.config import settings
 
     if ai_control.policy()["local_only"]:
         raise ValueError("Legacy external chat engines are disabled in local-only mode")

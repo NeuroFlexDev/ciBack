@@ -10,6 +10,8 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 
 from app.ai import control, gateway, managed_http, providers, routing
+from app.ai.gateway import InvocationOptions
+from app.ai.routing import RouteContext
 from app.core.config import settings
 from app.core.integration_config import integration_settings
 from app.models.administration import AdminEvent
@@ -117,7 +119,7 @@ def test_encrypted_key_not_in_read_api_or_audit_and_live_routing(
         baseline_model=settings.AI_MODEL_WRITER,
         input_tokens=1000,
         output_tokens=300,
-        available_providers={"cloud"},
+        routing_context=RouteContext(available_providers={"cloud"}),
     )
     assert (route.selected_provider, route.selected_model) == ("cloud", "writer-small")
     assert routing.policy_fingerprint() != before
@@ -231,8 +233,7 @@ def test_baseline_revocation_is_enforced_at_gateway(client, auth_headers, manage
         gateway.invoke_messages(
             "lesson_writer",
             [{"role": "user", "content": "Hello"}],
-            max_tokens=100,
-            provider="vsellm",
+            options=InvocationOptions(max_tokens=100, provider="vsellm"),
         )
     sent.assert_not_called()
 

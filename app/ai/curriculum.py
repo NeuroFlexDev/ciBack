@@ -50,6 +50,20 @@ def complete_writer_inventories(raw: dict, catalog: list[dict]) -> dict:
     return result
 
 
+def _require_reference(ref, allowed, field):
+    if not isinstance(ref, str) or ref not in allowed:
+        raise ValueError(f"Unknown {field} ID: {ref}")
+
+
+def _index_inventory(inventory, allowed, field):
+    indexed = set()
+    for item in inventory:
+        ref = item.get("id") if isinstance(item, dict) else item
+        _require_reference(ref, allowed, field)
+        indexed.add(ref)
+    return indexed
+
+
 def complete_competency_inventories(raw: dict, *, sources: set[str], knowledge: set[str]) -> dict:
     """Complete redundant citation indexes, never invent ontology nodes or evidence.
 
@@ -69,12 +83,7 @@ def complete_competency_inventories(raw: dict, *, sources: set[str], knowledge: 
         inventory = result.get(field)
         if not isinstance(inventory, list):
             continue
-        indexed = set()
-        for item in inventory:
-            ref = item.get("id") if isinstance(item, dict) else item
-            if not isinstance(ref, str) or ref not in allowed:
-                raise ValueError(f"Unknown {field} ID: {ref}")
-            indexed.add(ref)
+        indexed = _index_inventory(inventory, allowed, field)
         citation_field = "source_ref_ids" if field == "source_refs" else field
         for array in arrays:
             nodes = result.get(array, [])
@@ -85,8 +94,7 @@ def complete_competency_inventories(raw: dict, *, sources: set[str], knowledge: 
                 if not isinstance(refs, list):
                     continue
                 for ref in refs:
-                    if not isinstance(ref, str) or ref not in allowed:
-                        raise ValueError(f"Unknown {citation_field} ID: {ref}")
+                    _require_reference(ref, allowed, citation_field)
                     if ref not in indexed:
                         inventory.append(ref)
                         indexed.add(ref)
@@ -167,36 +175,36 @@ def slice_curriculum(plan: CoursePlan, writer: WriterArtifact, lesson_ids: set[s
     return partial_plan, partial_writer
 
 
-def merge_assessments(parts: list[AssessmentArtifact]) -> AssessmentArtifact:
-    """Namespace generated IDs to avoid collisions between independent agents."""
+def _namespace_assessment_ids(value, batch_index):
     import hashlib
 
+    if isinstance(value, list):
+        return [_namespace_assessment_ids(item, batch_index) for item in value]
+    if isinstance(value, dict):
+        return {key: _namespace_assessment_ids(item, batch_index) for key, item in value.items()}
+    if (
+        isinstance(value, str)
+        and value.partition(":")[0]
+        in {"question", "option", "practice", "case", "rubric", "criterion", "level"}
+        and " " not in value
+    ):
+        prefix, _, suffix = value.partition(":")
+        return (
+            f"{prefix}:b{batch_index}:"
+            + suffix[:85]
+            + ":"
+            + hashlib.sha256(value.encode()).hexdigest()[:8]
+        )
+    return value
+
+
+def merge_assessments(parts: list[AssessmentArtifact]) -> AssessmentArtifact:
+    """Namespace generated IDs to avoid collisions between independent agents."""
     payload = parts[0].model_dump(mode="json")
     for field in ("questions", "practices", "cases", "rubrics"):
         payload[field] = []
     for index, part in enumerate(parts):
-
-        def visit(value):
-            if isinstance(value, list):
-                return [visit(item) for item in value]
-            if isinstance(value, dict):
-                return {key: visit(item) for key, item in value.items()}
-            if (
-                isinstance(value, str)
-                and value.partition(":")[0]
-                in {"question", "option", "practice", "case", "rubric", "criterion", "level"}
-                and " " not in value
-            ):
-                prefix, _, suffix = value.partition(":")
-                return (
-                    f"{prefix}:b{index}:"
-                    + suffix[:85]
-                    + ":"
-                    + hashlib.sha256(value.encode()).hexdigest()[:8]
-                )
-            return value
-
-        data = visit(part.model_dump(mode="json"))
+        data = _namespace_assessment_ids(part.model_dump(mode="json"), index)
         for field in ("questions", "practices", "cases", "rubrics"):
             payload[field].extend(data[field])
     for field in ("module_ids", "lesson_ids", "objective_ids", "competency_ids"):

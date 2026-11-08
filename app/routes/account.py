@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import create_access_token, hash_password, normalize_email, verify_password
+from app.core.security import hash_password, normalize_email, verify_password
 from app.core.surface import surface
 from app.database.db import get_db
 from app.models.account import EmailBinding, PasswordReset
@@ -18,6 +18,7 @@ from app.models.user import User
 from app.schemas.auth import UserResponse
 from app.services import mail_service
 from app.services.auth_service import AuthService, get_current_user
+from app.services.mail_service import MailDeliveryOptions
 
 router = APIRouter()
 
@@ -121,9 +122,11 @@ def request_email(
             else "Войдите в свой аккаунт Лерниума и откройте ссылку в течение 30 минут:\n"
         )
         + url,
-        expires_at=expires,
-        deduplication_key="email-binding:" + digest,
-        organization_id=user.organization_id,
+        delivery=MailDeliveryOptions(
+            expires_at=expires,
+            deduplication_key="email-binding:" + digest,
+            organization_id=user.organization_id,
+        ),
     )
     from app.services.organization_access import audit
 

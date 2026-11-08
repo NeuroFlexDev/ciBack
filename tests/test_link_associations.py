@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
-from generate_associations import generate
+from generate_associations import AssociationIdentity, generate
 
 TEAM = "ABCDE12345"
 FINGERPRINT = ":".join(["AB"] * 32)
@@ -16,11 +16,13 @@ def test_generated_associations_scope_routes_and_apps_to_one_contour(tmp_path, h
     output = tmp_path / host
     generate(
         output,
-        host=host,
-        apple_team_id=TEAM,
-        apple_bundle_id="ru.lernium.app",
-        android_package="ru.lernium.app",
-        android_sha256=[FINGERPRINT],
+        identity=AssociationIdentity(
+            host=host,
+            apple_team_id=TEAM,
+            apple_bundle_id="ru.lernium.app",
+            android_package="ru.lernium.app",
+            android_sha256=[FINGERPRINT],
+        ),
     )
 
     apple = json.loads((output / "apple-app-site-association").read_text(encoding="utf-8"))
@@ -40,11 +42,13 @@ def test_generator_rejects_unapproved_hosts(tmp_path, host):
     with pytest.raises(ValueError, match="host"):
         generate(
             tmp_path,
-            host=host,
-            apple_team_id=TEAM,
-            apple_bundle_id="ru.lernium.app",
-            android_package="ru.lernium.app",
-            android_sha256=[FINGERPRINT],
+            identity=AssociationIdentity(
+                host=host,
+                apple_team_id=TEAM,
+                apple_bundle_id="ru.lernium.app",
+                android_package="ru.lernium.app",
+                android_sha256=[FINGERPRINT],
+            ),
         )
 
 
@@ -52,18 +56,22 @@ def test_generator_requires_real_signing_identifiers_and_fingerprint(tmp_path):
     with pytest.raises(ValueError):
         generate(
             tmp_path,
-            host="lernium.ru",
-            apple_team_id="TEAM",
-            apple_bundle_id="ru.lernium.app",
-            android_package="ru.lernium.app",
-            android_sha256=[FINGERPRINT],
+            identity=AssociationIdentity(
+                host="lernium.ru",
+                apple_team_id="TEAM",
+                apple_bundle_id="ru.lernium.app",
+                android_package="ru.lernium.app",
+                android_sha256=[FINGERPRINT],
+            ),
         )
     with pytest.raises(ValueError):
         generate(
             tmp_path,
-            host="lernium.ru",
-            apple_team_id=TEAM,
-            apple_bundle_id="ru.lernium.app",
-            android_package="ru.lernium.app",
-            android_sha256=["unknown"],
+            identity=AssociationIdentity(
+                host="lernium.ru",
+                apple_team_id=TEAM,
+                apple_bundle_id="ru.lernium.app",
+                android_package="ru.lernium.app",
+                android_sha256=["unknown"],
+            ),
         )

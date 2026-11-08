@@ -133,7 +133,7 @@ def runtime(tmp_path_factory):
     finally:
         for server, _, _ in servers:
             server.should_exit = True
-        for server, thread, listener in servers:
+        for _server, thread, listener in servers:
             thread.join(timeout=10)
             listener.close()
         if engine is not None:

@@ -1,14 +1,14 @@
 """Learning authorization, immutable publication and server-side assessment rules."""
 
 import json
-import re
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from app.models.administration import Organization
 from app.models.course import Course
@@ -16,7 +16,6 @@ from app.models.course_version import CourseVersion
 from app.models.learning import (
     AssessmentDefinition,
     LearningAssignment,
-    LearningDepartment,
     LearningGradeEvent,
     LearningGroup,
     LearningGroupMember,
@@ -129,8 +128,22 @@ def group(db, org_id, group_id, active=True):
     return row
 
 
-def can_scope(db, user, role, *, course_id=None, group_id=None, user_id=None):
+@dataclass(frozen=True, kw_only=True)
+class LearningScope:
+    """Parameters for can_scope, preserving its original defaults."""
+
+    role: Any
+    course_id: Any = None
+    group_id: Any = None
+    user_id: Any = None
+
+
+def can_scope(db, user, *, scope: LearningScope):
     """Roles that expose work/answers always require an explicit object scope."""
+    role = scope.role
+    course_id = scope.course_id
+    group_id = scope.group_id
+    user_id = scope.user_id
     for grant in role_grants(db, user):
         if grant.role != role:
             continue
@@ -189,7 +202,9 @@ def allowed_assigner(db, user, course, target_id=None, group_id=None):
     catalogue = any(
         g.role == "manager" and g.scope_type == "course" and g.scope_id == course.id for g in grants
     )
-    scope = can_scope(db, user, "manager", group_id=group_id, user_id=target_id)
+    scope = can_scope(
+        db, user, scope=LearningScope(role="manager", group_id=group_id, user_id=target_id)
+    )
     if not catalogue or not scope:
         raise HTTPException(403, "Нет права назначать этот курс выбранной группе или участнику")
 
@@ -448,7 +463,7 @@ def validate_publication_approval(db, course, modules):
         not reviewer
         or not reviewer.is_active
         or reviewer.organization_id != org_id
-        or not can_scope(db, reviewer, "reviewer", course_id=course.id)
+        or not can_scope(db, reviewer, scope=LearningScope(role="reviewer", course_id=course.id))
     ):
         raise HTTPException(
             409, "Права согласовавшего сотрудника отозваны. Требуется новое согласование."
@@ -559,9 +574,20 @@ def public_snapshot(db, assignment):
     return data
 
 
-def learner_assignment(
-    db, user, assignment_id, *, lock=False, allow_revoked=False, allow_locked=False
-):
+@dataclass(frozen=True, kw_only=True)
+class AssignmentAccessPolicy:
+    """Parameters for learner_assignment, preserving its original defaults."""
+
+    lock: Any = False
+    allow_revoked: Any = False
+    allow_locked: Any = False
+
+
+def learner_assignment(db, user, assignment_id, *, policy: AssignmentAccessPolicy | None = None):
+    policy = policy or AssignmentAccessPolicy()
+    lock = policy.lock
+    allow_revoked = policy.allow_revoked
+    allow_locked = policy.allow_locked
     org_id = organization(user)
     query = select(LearningAssignment).where(
         LearningAssignment.id == assignment_id,
@@ -719,10 +745,12 @@ def can_review(db, user, assignment):
     return can_scope(
         db,
         user,
-        "reviewer",
-        course_id=version.course_id,
-        group_id=assignment.group_id,
-        user_id=assignment.user_id,
+        scope=LearningScope(
+            role="reviewer",
+            course_id=version.course_id,
+            group_id=assignment.group_id,
+            user_id=assignment.user_id,
+        ),
     )
 
 
@@ -737,14 +765,20 @@ def can_report(db, user, assignment):
         return True
     version = db.get(CourseVersion, assignment.course_version_id)
     return can_scope(
-        db, user, "manager", group_id=assignment.group_id, user_id=assignment.user_id
+        db,
+        user,
+        scope=LearningScope(
+            role="manager", group_id=assignment.group_id, user_id=assignment.user_id
+        ),
     ) or can_scope(
         db,
         user,
-        "reviewer",
-        course_id=version.course_id,
-        group_id=assignment.group_id,
-        user_id=assignment.user_id,
+        scope=LearningScope(
+            role="reviewer",
+            course_id=version.course_id,
+            group_id=assignment.group_id,
+            user_id=assignment.user_id,
+        ),
     )
 
 
@@ -799,55 +833,17 @@ def response_dict(db, row, assignment, *, include_key=False):
     return result
 
 
-def save_answer(db, user, assignment, key, payload, submit=False):
-    ensure_learning_write(db, assignment.organization_id)
-    assessment = assessment_for(db, assignment, key)
-    if submit:
-        existing = (
-            db.query(LearningResponse)
-            .filter_by(assignment_id=assignment.id, submission_key=payload.submission_key)
-            .first()
-        )
-        if existing:
-            if (
-                existing.assessment_id != key
-                or existing.attempt != payload.attempt
-                or existing.answer != payload.answer
-            ):
-                raise HTTPException(409, "Этот ключ отправки уже использован для другого ответа")
-            return existing
-        if assessment["question_type"] == "open":
-            from app.services.regulation_assessment import practice_unlocked
+@dataclass(frozen=True, kw_only=True)
+class AnswerCommand:
+    """Parameters for save_answer, preserving its original defaults."""
 
-            if not practice_unlocked(
-                snapshot_for(db, assignment.course_version_id),
-                db.query(LearningResponse).filter_by(assignment_id=assignment.id).all(),
-                assignment.rules.get("pass_percent", 60),
-            ):
-                raise HTTPException(
-                    409,
-                    "Сначала пройдите тестовые вопросы. Черновик практики можно сохранить и отправить после теста.",
-                )
-    row = (
-        db.query(LearningResponse)
-        .filter_by(assignment_id=assignment.id, assessment_id=key, attempt=payload.attempt)
-        .first()
-    )
-    if row and row.status != "draft":
-        raise HTTPException(
-            409, "Отправленный ответ неизменяем. Начните разрешённую новую попытку."
-        )
-    if (row.revision if row else 0) != payload.expected_revision:
-        raise HTTPException(
-            409,
-            {
-                "message": "Ответ изменён на другом устройстве. Получите сохранённую версию и сравните текст.",
-                "current_revision": row.revision if row else 0,
-                "current_response": jsonable_encoder(response_dict(db, row, assignment))
-                if row
-                else None,
-            },
-        )
+    key: Any
+    payload: Any
+    submit: Any = False
+
+
+def _validate_answer_attempt(db, assignment, command):
+    key, payload, submit = command.key, command.payload, command.submit
     maximum = assignment.rules.get("max_attempts", 3)
     if payload.attempt > maximum:
         raise HTTPException(409, "Лимит попыток исчерпан")
@@ -868,6 +864,121 @@ def save_answer(db, user, assignment, key, payload, submit=False):
         raise HTTPException(
             409, "Срок отправки истёк. Черновик сохранён; обратитесь к ответственному за обучение."
         )
+
+
+def _validate_submitted_answer(assessment, payload):
+    if assessment["question_type"] == "open":
+        if not payload.answer.get("text", "").strip():
+            raise HTTPException(422, "Напишите ответ")
+    else:
+        selected = payload.answer.get("selected", [])
+        if (
+            not selected
+            or len(selected) != len(set(selected))
+            or any(x not in assessment["answers"] for x in selected)
+        ):
+            raise HTTPException(422, "Выберите допустимые варианты ответа")
+        if assessment["question_type"] == "single" and len(selected) != 1:
+            raise HTTPException(422, "Выберите один вариант ответа")
+
+
+def _grade_submitted_answer(db, assignment, assessment, payload, row):
+    if assessment["question_type"] != "open" and assessment["grading_mode"] == "automatic":
+        row.points = (
+            assessment["max_points"]
+            if set(payload.answer.get("selected", [])) == set(assessment["correct_answers"])
+            else 0
+        )
+        row.status = "reviewed"
+        row.feedback = "Ответ проверен автоматически по ключу опубликованной версии."
+        row.grading_metadata = {"method": "exact_set"}
+        db.flush()
+        db.add(
+            LearningGradeEvent(
+                response_id=row.id, points=row.points, feedback=row.feedback, source="automatic"
+            )
+        )
+        event(
+            db,
+            assignment.organization_id,
+            "submission.graded",
+            f"response:{row.id}:revision:{row.revision}",
+            {
+                "response_id": row.id,
+                "assignment_id": assignment.id,
+                "points": row.points,
+                "max_points": assessment["max_points"],
+            },
+        )
+        from app.services.mobile_push import enqueue as enqueue_push
+
+        enqueue_push(db, assignment, "result", f"response:{row.id}:revision:{row.revision}")
+    elif assessment["grading_mode"] == "ai_assisted":
+        # AI cannot silently decide a grade. A separate auditable proposal may
+        # assist a scoped reviewer; the authoritative state stays in the queue.
+        row.grading_metadata = {
+            "method": "manual",
+            "reason": "Требуется подтверждение проверяющего",
+        }
+
+
+def _require_practice_unlocked(db, assignment, assessment):
+    if assessment["question_type"] == "open":
+        from app.services.regulation_assessment import practice_unlocked
+
+        if not practice_unlocked(
+            snapshot_for(db, assignment.course_version_id),
+            db.query(LearningResponse).filter_by(assignment_id=assignment.id).all(),
+            assignment.rules.get("pass_percent", 60),
+        ):
+            raise HTTPException(
+                409,
+                "Сначала пройдите тестовые вопросы. Черновик практики можно сохранить и отправить после теста.",
+            )
+
+
+def save_answer(db, user, assignment, *, command: AnswerCommand):
+    key = command.key
+    payload = command.payload
+    submit = command.submit
+    ensure_learning_write(db, assignment.organization_id)
+    assessment = assessment_for(db, assignment, key)
+    if submit:
+        existing = (
+            db.query(LearningResponse)
+            .filter_by(assignment_id=assignment.id, submission_key=payload.submission_key)
+            .first()
+        )
+        if existing:
+            if (
+                existing.assessment_id != key
+                or existing.attempt != payload.attempt
+                or existing.answer != payload.answer
+            ):
+                raise HTTPException(409, "Этот ключ отправки уже использован для другого ответа")
+            return existing
+        _require_practice_unlocked(db, assignment, assessment)
+    row = (
+        db.query(LearningResponse)
+        .filter_by(assignment_id=assignment.id, assessment_id=key, attempt=payload.attempt)
+        .first()
+    )
+    if row and row.status != "draft":
+        raise HTTPException(
+            409, "Отправленный ответ неизменяем. Начните разрешённую новую попытку."
+        )
+    if (row.revision if row else 0) != payload.expected_revision:
+        raise HTTPException(
+            409,
+            {
+                "message": "Ответ изменён на другом устройстве. Получите сохранённую версию и сравните текст.",
+                "current_revision": row.revision if row else 0,
+                "current_response": jsonable_encoder(response_dict(db, row, assignment))
+                if row
+                else None,
+            },
+        )
+    _validate_answer_attempt(db, assignment, command)
     if row is None:
         row = LearningResponse(
             assignment_id=assignment.id, assessment_id=key, attempt=payload.attempt, revision=1
@@ -877,59 +988,11 @@ def save_answer(db, user, assignment, key, payload, submit=False):
         row.revision += 1
     row.answer = deepcopy(payload.answer)
     if submit:
-        if assessment["question_type"] == "open":
-            if not payload.answer.get("text", "").strip():
-                raise HTTPException(422, "Напишите ответ")
-        else:
-            selected = payload.answer.get("selected", [])
-            if (
-                not selected
-                or len(selected) != len(set(selected))
-                or any(x not in assessment["answers"] for x in selected)
-            ):
-                raise HTTPException(422, "Выберите допустимые варианты ответа")
-            if assessment["question_type"] == "single" and len(selected) != 1:
-                raise HTTPException(422, "Выберите один вариант ответа")
+        _validate_submitted_answer(assessment, payload)
         row.submission_key = payload.submission_key
         row.submitted_at = datetime.utcnow()
         row.status = "pending_review"
-        if assessment["question_type"] != "open" and assessment["grading_mode"] == "automatic":
-            row.points = (
-                assessment["max_points"]
-                if set(payload.answer.get("selected", [])) == set(assessment["correct_answers"])
-                else 0
-            )
-            row.status = "reviewed"
-            row.feedback = "Ответ проверен автоматически по ключу опубликованной версии."
-            row.grading_metadata = {"method": "exact_set"}
-            db.flush()
-            db.add(
-                LearningGradeEvent(
-                    response_id=row.id, points=row.points, feedback=row.feedback, source="automatic"
-                )
-            )
-            event(
-                db,
-                assignment.organization_id,
-                "submission.graded",
-                f"response:{row.id}:revision:{row.revision}",
-                {
-                    "response_id": row.id,
-                    "assignment_id": assignment.id,
-                    "points": row.points,
-                    "max_points": assessment["max_points"],
-                },
-            )
-            from app.services.mobile_push import enqueue as enqueue_push
-
-            enqueue_push(db, assignment, "result", f"response:{row.id}:revision:{row.revision}")
-        elif assessment["grading_mode"] == "ai_assisted":
-            # AI cannot silently decide a grade. A separate auditable proposal may
-            # assist a scoped reviewer; the authoritative state stays in the queue.
-            row.grading_metadata = {
-                "method": "manual",
-                "reason": "Требуется подтверждение проверяющего",
-            }
+        _grade_submitted_answer(db, assignment, assessment, payload, row)
         audit(
             db,
             user,
@@ -949,20 +1012,33 @@ def save_answer(db, user, assignment, key, payload, submit=False):
     return row
 
 
-def create_assignment(
-    db,
-    *,
-    org_id,
-    version_id,
-    user_id,
-    actor_id,
-    rules,
-    rules_revision,
-    due_at=None,
-    group_id=None,
-    cycle_key="initial",
-    prerequisite_id=None,
-):
+@dataclass(frozen=True, kw_only=True)
+class AssignmentRequest:
+    """Parameters for create_assignment, preserving its original defaults."""
+
+    org_id: Any
+    version_id: Any
+    user_id: Any
+    actor_id: Any
+    rules: Any
+    rules_revision: Any
+    due_at: Any = None
+    group_id: Any = None
+    cycle_key: Any = "initial"
+    prerequisite_id: Any = None
+
+
+def create_assignment(db, *, request: AssignmentRequest):
+    org_id = request.org_id
+    version_id = request.version_id
+    user_id = request.user_id
+    actor_id = request.actor_id
+    rules = request.rules
+    rules_revision = request.rules_revision
+    due_at = request.due_at
+    group_id = request.group_id
+    cycle_key = request.cycle_key
+    prerequisite_id = request.prerequisite_id
     ensure_learning_write(db, org_id)
     existing = (
         db.query(LearningAssignment)
@@ -1003,7 +1079,23 @@ def create_assignment(
     return row, True
 
 
-def assign_from_integration(db, org_id, version_id, user_id, actor_id, cycle_key="initial"):
+@dataclass(frozen=True, kw_only=True)
+class IntegrationAssignment:
+    """Parameters for assign_from_integration, preserving its original defaults."""
+
+    org_id: Any
+    version_id: Any
+    user_id: Any
+    actor_id: Any
+    cycle_key: Any = "initial"
+
+
+def assign_from_integration(db, *, request: IntegrationAssignment):
+    org_id = request.org_id
+    version_id = request.version_id
+    user_id = request.user_id
+    actor_id = request.actor_id
+    cycle_key = request.cycle_key
     from app.services.organization_access import lock_org
 
     org = lock_org(db, org_id)
@@ -1022,13 +1114,15 @@ def assign_from_integration(db, org_id, version_id, user_id, actor_id, cycle_key
         raise HTTPException(422, "Некорректный ключ назначения")
     return create_assignment(
         db,
-        org_id=org_id,
-        version_id=version_id,
-        user_id=user_id,
-        actor_id=actor_id,
-        rules=LearningRules.model_validate(config.rules).model_dump(),
-        rules_revision=config.revision,
-        cycle_key=cycle_key,
+        request=AssignmentRequest(
+            org_id=org_id,
+            version_id=version_id,
+            user_id=user_id,
+            actor_id=actor_id,
+            rules=LearningRules.model_validate(config.rules).model_dump(),
+            rules_revision=config.revision,
+            cycle_key=cycle_key,
+        ),
     )
 
 

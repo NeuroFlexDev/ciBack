@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable
 
 from fastapi import HTTPException
@@ -18,7 +19,26 @@ from app.schemas.agentic_pipeline import (
     WriterArtifact,
 )
 from app.schemas.pipeline import GeneratedGraphPayload
-from app.services.agent_runtime import AgentRuntime, LegacyGraphResponse
+from app.services.agent_runtime import AgentInvocation, AgentRuntime, LegacyGraphResponse
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentRevision:
+    """Shared prompt context and QA feedback for one pipeline revision."""
+
+    common: dict
+    qa_feedback: QAArtifact | None
+    revision: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewContext:
+    """Immutable evidence inventories and revision reviewed together."""
+
+    common: dict
+    ingestion: IngestionArtifact
+    competency_map: CompetencyMapArtifact
+    revision: int
 
 
 def _json(value) -> str:
@@ -79,6 +99,32 @@ class AgenticGraphBuild:
         }
 
 
+def _collect_ids(value, known_ids):
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    if isinstance(value, dict):
+        if isinstance(value.get("id"), str):
+            known_ids.add(value["id"])
+        for item in value.values():
+            _collect_ids(item, known_ids)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_ids(item, known_ids)
+
+
+def _collect_refs(value, cited):
+    if isinstance(value, dict):
+        if str(value.get("id", "")).startswith("src:"):
+            cited.add(value["id"])
+        for key, item in value.items():
+            if key.endswith("source_ref_ids") and isinstance(item, list):
+                cited.update(item)
+            _collect_refs(item, cited)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_refs(item, cited)
+
+
 class AgenticCoursePipeline:
     """Backend-only coordinator for the grounded course generation agents."""
 
@@ -90,6 +136,136 @@ class AgenticCoursePipeline:
     ) -> None:
         self.runtime = runtime
         self.checkpoint = checkpoint
+
+    def _ingest_step(self, common, source_catalog, state):
+        self.checkpoint("ingestion", 5)
+        try:
+            result = self._ingest(common, source_catalog, state.get("qa"))
+            return {"ingestion": result.model_dump(mode="json")}
+        except LegacyGraphResponse as exc:
+            return {"legacy": exc.payload}
+
+    def _competencies_step(self, common, state):
+        self.checkpoint("competency_mapping", 20)
+        result = self._map_competencies(
+            common, state["ingestion"], state.get("qa"), state["revision"]
+        )
+        return {"competency_map": result.model_dump(mode="json")}
+
+    def _architect_step(self, common, settings_snapshot, source_catalog, state):
+        from app.ai.knowledge_batches import architecture_projection
+
+        self.checkpoint("course_architecture", 35)
+
+        def validate(value):
+            _canonical_sources("architect", value.source_refs, source_catalog)
+            if len(value.lessons) != settings_snapshot["lesson_count"]:
+                raise ValueError("Course Architect returned an unexpected lesson count")
+            if (
+                common["approved_plan"]
+                and [lesson.title for lesson in value.lessons] != common["approved_plan"]
+            ):
+                raise ValueError("Course Architect changed the author-approved lesson plan")
+            known = {x["id"] for x in state["competency_map"]["competencies"]}
+            if set(value.competency_ids) != known:
+                raise ValueError("Course plan must cover every mapped competency")
+
+        result = self.runtime.execute(
+            request=AgentInvocation(
+                agent="course_architect",
+                artifact="course_plan",
+                sequence=state["revision"],
+                template_name="course_architect_prompt.j2",
+                response_model=CoursePlan,
+                max_tokens=12000,
+                prompt_context={
+                    **common,
+                    "competency_map_json": _json(architecture_projection(state["competency_map"])),
+                    "source_catalog_json": _json(
+                        [{"id": x["id"], "section": x.get("section")} for x in source_catalog]
+                    ),
+                    "qa_feedback_json": _json(state.get("qa")),
+                },
+                validator=validate,
+            )
+        )
+        return {"course_plan": result.model_dump(mode="json")}
+
+    def _write_step(self, common, state):
+        self.checkpoint("lesson_writing", 50)
+        result = self._write_lessons(
+            common=common,
+            course_plan=CoursePlan.model_validate(state["course_plan"]),
+            qa_feedback=QAArtifact.model_validate(state["qa"]) if state.get("qa") else None,
+            revision=state["revision"],
+        )
+        return {"writer": result.model_dump(mode="json")}
+
+    def _assess_step(self, common, settings_snapshot, state):
+        self.checkpoint("assessment_generation", 72)
+        result = self._create_assessments(
+            settings_snapshot=settings_snapshot,
+            course_plan=CoursePlan.model_validate(state["course_plan"]),
+            writer=WriterArtifact.model_validate(state["writer"]),
+            iteration=AgentRevision(
+                common=common,
+                qa_feedback=QAArtifact.model_validate(state["qa"]) if state.get("qa") else None,
+                revision=state["revision"],
+            ),
+        )
+        return {"assessment": result.model_dump(mode="json")}
+
+    def _review_step(self, common, state):
+        self.checkpoint("quality_assurance", 88)
+        result = self._review(
+            course_plan=CoursePlan.model_validate(state["course_plan"]),
+            writer=WriterArtifact.model_validate(state["writer"]),
+            assessment=AssessmentArtifact.model_validate(state["assessment"]),
+            review_context=ReviewContext(
+                common=common,
+                ingestion=IngestionArtifact.model_validate(state["ingestion"]),
+                competency_map=CompetencyMapArtifact.model_validate(state["competency_map"]),
+                revision=state["revision"],
+            ),
+        )
+        # Structural consistency is part of the gate, never left to model self-assessment.
+        AgenticPipelineResult.model_validate(
+            {
+                k: state[k]
+                for k in ("ingestion", "competency_map", "course_plan", "writer", "assessment")
+            }
+            | {"qa": result}
+        )
+        return {"qa": result.model_dump(mode="json")}
+
+    def _route_review_step(self, state):
+        from langgraph.graph import END
+
+        qa = QAArtifact.model_validate(state["qa"])
+        if qa.verdict == "pass":
+            return END
+        if state["revision"] >= settings.AI_MAX_REVISIONS:
+            raise ValueError("QA rejected the course after the revision limit")
+        return "repair"
+
+    def _repair_step(self, state):
+        types = {
+            issue["artifact_type"]
+            for issue in state["qa"]["issues"]
+            if issue["severity"] in {"error", "blocker"}
+        }
+        target = (
+            "ingestion"
+            if "ingestion" in types
+            else "competency_mapping"
+            if "competency_map" in types
+            else "course_architecture"
+            if "course_plan" in types
+            else "lesson_writing"
+            if "lesson" in types
+            else "assessment_generation"
+        )
+        return {"revision": state["revision"] + 1, "repair_target": target}
 
     def run(
         self, *, course_title: str, settings_snapshot: dict, source_catalog: list[dict]
@@ -122,137 +298,18 @@ class AgenticCoursePipeline:
         supplement(self.runtime, common, source_catalog)
         self.runtime.register_sources(source_catalog)
 
-        def ingest(state):
-            self.checkpoint("ingestion", 5)
-            try:
-                result = self._ingest(common, source_catalog, state.get("qa"))
-                return {"ingestion": result.model_dump(mode="json")}
-            except LegacyGraphResponse as exc:
-                return {"legacy": exc.payload}
-
-        def competencies(state):
-            self.checkpoint("competency_mapping", 20)
-            result = self._map_competencies(
-                common, state["ingestion"], state.get("qa"), state["revision"]
-            )
-            return {"competency_map": result.model_dump(mode="json")}
-
-        def architect(state):
-            from app.ai.knowledge_batches import architecture_projection
-
-            self.checkpoint("course_architecture", 35)
-
-            def validate(value):
-                _canonical_sources("architect", value.source_refs, source_catalog)
-                if len(value.lessons) != settings_snapshot["lesson_count"]:
-                    raise ValueError("Course Architect returned an unexpected lesson count")
-                if (
-                    common["approved_plan"]
-                    and [lesson.title for lesson in value.lessons] != common["approved_plan"]
-                ):
-                    raise ValueError("Course Architect changed the author-approved lesson plan")
-                known = {x["id"] for x in state["competency_map"]["competencies"]}
-                if set(value.competency_ids) != known:
-                    raise ValueError("Course plan must cover every mapped competency")
-
-            result = self.runtime.execute(
-                agent="course_architect",
-                artifact="course_plan",
-                sequence=state["revision"],
-                template_name="course_architect_prompt.j2",
-                response_model=CoursePlan,
-                max_tokens=12000,
-                prompt_context={
-                    **common,
-                    "competency_map_json": _json(architecture_projection(state["competency_map"])),
-                    "source_catalog_json": _json(
-                        [{"id": x["id"], "section": x.get("section")} for x in source_catalog]
-                    ),
-                    "qa_feedback_json": _json(state.get("qa")),
-                },
-                validator=validate,
-            )
-            return {"course_plan": result.model_dump(mode="json")}
-
-        def write(state):
-            self.checkpoint("lesson_writing", 50)
-            result = self._write_lessons(
-                common=common,
-                course_plan=CoursePlan.model_validate(state["course_plan"]),
-                qa_feedback=QAArtifact.model_validate(state["qa"]) if state.get("qa") else None,
-                revision=state["revision"],
-            )
-            return {"writer": result.model_dump(mode="json")}
-
-        def assess(state):
-            self.checkpoint("assessment_generation", 72)
-            result = self._create_assessments(
-                common=common,
-                settings_snapshot=settings_snapshot,
-                course_plan=CoursePlan.model_validate(state["course_plan"]),
-                writer=WriterArtifact.model_validate(state["writer"]),
-                qa_feedback=QAArtifact.model_validate(state["qa"]) if state.get("qa") else None,
-                revision=state["revision"],
-            )
-            return {"assessment": result.model_dump(mode="json")}
-
-        def review(state):
-            self.checkpoint("quality_assurance", 88)
-            result = self._review(
-                common=common,
-                ingestion=IngestionArtifact.model_validate(state["ingestion"]),
-                competency_map=CompetencyMapArtifact.model_validate(state["competency_map"]),
-                course_plan=CoursePlan.model_validate(state["course_plan"]),
-                writer=WriterArtifact.model_validate(state["writer"]),
-                assessment=AssessmentArtifact.model_validate(state["assessment"]),
-                revision=state["revision"],
-            )
-            # Structural consistency is part of the gate, never left to model self-assessment.
-            AgenticPipelineResult.model_validate(
-                {
-                    k: state[k]
-                    for k in ("ingestion", "competency_map", "course_plan", "writer", "assessment")
-                }
-                | {"qa": result}
-            )
-            return {"qa": result.model_dump(mode="json")}
-
-        def route_review(state):
-            qa = QAArtifact.model_validate(state["qa"])
-            if qa.verdict == "pass":
-                return END
-            if state["revision"] >= settings.AI_MAX_REVISIONS:
-                raise ValueError("QA rejected the course after the revision limit")
-            return "repair"
-
-        def repair(state):
-            types = {
-                issue["artifact_type"]
-                for issue in state["qa"]["issues"]
-                if issue["severity"] in {"error", "blocker"}
-            }
-            target = (
-                "ingestion"
-                if "ingestion" in types
-                else "competency_mapping"
-                if "competency_map" in types
-                else "course_architecture"
-                if "course_plan" in types
-                else "lesson_writing"
-                if "lesson" in types
-                else "assessment_generation"
-            )
-            return {"revision": state["revision"] + 1, "repair_target": target}
-
         builder = StateGraph(CourseAgentState)
         for name, fn in [
-            ("ingestion", ingest),
-            ("competency_mapping", competencies),
-            ("course_architecture", architect),
-            ("lesson_writing", write),
-            ("assessment_generation", assess),
-            ("quality_assurance", review),
-            ("repair", repair),
+            ("ingestion", partial(self._ingest_step, common, source_catalog)),
+            ("competency_mapping", partial(self._competencies_step, common)),
+            (
+                "course_architecture",
+                partial(self._architect_step, common, settings_snapshot, source_catalog),
+            ),
+            ("lesson_writing", partial(self._write_step, common)),
+            ("assessment_generation", partial(self._assess_step, common, settings_snapshot)),
+            ("quality_assurance", partial(self._review_step, common)),
+            ("repair", partial(self._repair_step)),
         ]:
             builder.add_node(name, fn)
         builder.add_edge(START, "ingestion")
@@ -266,7 +323,7 @@ class AgenticCoursePipeline:
             ("assessment_generation", "quality_assurance"),
         ]:
             builder.add_edge(before, after)
-        builder.add_conditional_edges("quality_assurance", route_review)
+        builder.add_conditional_edges("quality_assurance", partial(self._route_review_step))
         builder.add_conditional_edges("repair", lambda s: s["repair_target"])
         from app.models.generation_run import GenerationRun
 
@@ -358,17 +415,19 @@ class AgenticCoursePipeline:
                     )
 
             result = self.runtime.execute(
-                agent="competency_mapper",
-                artifact="competency_map",
-                sequence=revision * 10000 + index,
-                template_name="competency_mapper_prompt.j2",
-                response_model=CompetencyMapArtifact,
-                max_tokens=10000,
-                prompt_context=context(batch),
-                validator=validate,
-                normalize_response=lambda raw, known=known, refs=refs: (
-                    complete_competency_inventories(raw, sources=refs, knowledge=known)
-                ),
+                request=AgentInvocation(
+                    agent="competency_mapper",
+                    artifact="competency_map",
+                    sequence=revision * 10000 + index,
+                    template_name="competency_mapper_prompt.j2",
+                    response_model=CompetencyMapArtifact,
+                    max_tokens=10000,
+                    prompt_context=context(batch),
+                    validator=validate,
+                    normalize_response=lambda raw, known=known, refs=refs: (
+                        complete_competency_inventories(raw, sources=refs, knowledge=known)
+                    ),
+                )
             )
             results.append(result)
         return merge_competencies(results)
@@ -430,24 +489,26 @@ class AgenticCoursePipeline:
                         artifacts.append(restored)
                         continue
             artifact = self.runtime.execute(
-                agent="ingestion",
-                artifact="document_knowledge",
-                sequence=index,
-                template_name="ingestion_agent_prompt.j2",
-                response_model=IngestionArtifact,
-                prompt_context={
-                    **common,
-                    "source_catalog_json": _json(ingestion_sources(batch)),
-                    "qa_feedback_json": _json(feedback),
-                },
-                max_tokens=6000,
-                allow_legacy_graph=settings.ENV == "test",
-                normalize_response=lambda value, batch=batch: complete_ingestion_inventories(
-                    value, batch
-                ),
-                validator=lambda value, batch=batch: _canonical_sources(
-                    "ingestion", value.source_refs, batch, require_all=True
-                ),
+                request=AgentInvocation(
+                    agent="ingestion",
+                    artifact="document_knowledge",
+                    sequence=index,
+                    template_name="ingestion_agent_prompt.j2",
+                    response_model=IngestionArtifact,
+                    prompt_context={
+                        **common,
+                        "source_catalog_json": _json(ingestion_sources(batch)),
+                        "qa_feedback_json": _json(feedback),
+                    },
+                    max_tokens=6000,
+                    allow_legacy_graph=settings.ENV == "test",
+                    normalize_response=lambda value, batch=batch: complete_ingestion_inventories(
+                        value, batch
+                    ),
+                    validator=lambda value, batch=batch: _canonical_sources(
+                        "ingestion", value.source_refs, batch, require_all=True
+                    ),
+                )
             )
             artifacts.append(artifact)
         return merge_ingestion(artifacts)
@@ -490,7 +551,7 @@ class AgenticCoursePipeline:
                 }.values()
             )
 
-            def validate_lesson(value):
+            def validate_lesson(value, lesson=lesson, lesson_sources=lesson_sources):
                 from app.ai.evidence import learner_markdown
 
                 if value.expected_lesson_ids != [lesson.id]:
@@ -509,51 +570,55 @@ class AgenticCoursePipeline:
                 )
 
             artifact = self.runtime.execute(
-                agent="lesson_writer",
-                artifact="lesson_draft",
-                sequence=revision * 1000 + index,
-                template_name="lesson_writer_prompt.j2",
-                response_model=WriterArtifact,
-                prompt_context={
-                    **common,
-                    "course_plan_json": _json(
-                        {
-                            "id": course_plan.id,
-                            "title": course_plan.title,
-                            "goal": course_plan.goal,
-                            "modules": [
-                                {"id": m.id, "title": m.title, "lesson_ids": m.lesson_ids}
-                                for m in course_plan.modules
-                            ],
-                        }
+                request=AgentInvocation(
+                    agent="lesson_writer",
+                    artifact="lesson_draft",
+                    sequence=revision * 1000 + index,
+                    template_name="lesson_writer_prompt.j2",
+                    response_model=WriterArtifact,
+                    prompt_context={
+                        **common,
+                        "course_plan_json": _json(
+                            {
+                                "id": course_plan.id,
+                                "title": course_plan.title,
+                                "goal": course_plan.goal,
+                                "modules": [
+                                    {"id": m.id, "title": m.title, "lesson_ids": m.lesson_ids}
+                                    for m in course_plan.modules
+                                ],
+                            }
+                        ),
+                        "lesson_spec_json": _json(lesson),
+                        "lesson_objectives_json": _json(objectives),
+                        "source_refs_json": _json(lesson_sources),
+                        "lesson_ids_json": _json([lesson.id]),
+                        "source_catalog_json": _json(lesson_sources),
+                        "qa_feedback_json": _json(
+                            {
+                                "issues": [
+                                    issue
+                                    for issue in qa_feedback.issues
+                                    if issue.artifact_type == "lesson"
+                                    and issue.artifact_id == lesson.id
+                                ]
+                            }
+                        )
+                        if qa_feedback
+                        and any(
+                            issue.artifact_type == "lesson" and issue.artifact_id == lesson.id
+                            for issue in qa_feedback.issues
+                        )
+                        else "null",
+                    },
+                    max_tokens=4096,
+                    normalize_response=lambda value, lesson_sources=lesson_sources: (
+                        complete_writer_inventories(
+                            value, [source.model_dump(mode="json") for source in lesson_sources]
+                        )
                     ),
-                    "lesson_spec_json": _json(lesson),
-                    "lesson_objectives_json": _json(objectives),
-                    "source_refs_json": _json(lesson_sources),
-                    "lesson_ids_json": _json([lesson.id]),
-                    "source_catalog_json": _json(lesson_sources),
-                    "qa_feedback_json": _json(
-                        {
-                            "issues": [
-                                issue
-                                for issue in qa_feedback.issues
-                                if issue.artifact_type == "lesson"
-                                and issue.artifact_id == lesson.id
-                            ]
-                        }
-                    )
-                    if qa_feedback
-                    and any(
-                        issue.artifact_type == "lesson" and issue.artifact_id == lesson.id
-                        for issue in qa_feedback.issues
-                    )
-                    else "null",
-                },
-                max_tokens=4096,
-                normalize_response=lambda value: complete_writer_inventories(
-                    value, [source.model_dump(mode="json") for source in lesson_sources]
-                ),
-                validator=validate_lesson,
+                    validator=validate_lesson,
+                )
             )
             if artifact.expected_lesson_ids != [lesson.id]:
                 raise ValueError("Lesson Writer must return exactly its assigned lesson")
@@ -576,16 +641,17 @@ class AgenticCoursePipeline:
         )
 
     def _create_assessments(
-        self, *, common, settings_snapshot, course_plan, writer, qa_feedback, revision
+        self, *, settings_snapshot, course_plan, writer, iteration: AgentRevision
     ):
+        common = iteration.common
+        qa_feedback = iteration.qa_feedback
+        revision = iteration.revision
         if len(course_plan.lessons) == 1:
             return self._assess_batch(
-                common=common,
                 settings_snapshot=settings_snapshot,
                 course_plan=course_plan,
                 writer=writer,
-                qa_feedback=qa_feedback,
-                revision=revision,
+                iteration=AgentRevision(common=common, qa_feedback=qa_feedback, revision=revision),
             )
         from app.ai.curriculum import merge_assessments, slice_curriculum
 
@@ -596,12 +662,14 @@ class AgenticCoursePipeline:
             try:
                 parts.append(
                     self._assess_batch(
-                        common=common,
                         settings_snapshot=settings_snapshot,
                         course_plan=plan_part,
                         writer=writer_part,
-                        qa_feedback=qa_feedback,
-                        revision=revision * 1000 + offset,
+                        iteration=AgentRevision(
+                            common=common,
+                            qa_feedback=qa_feedback,
+                            revision=revision * 1000 + offset,
+                        ),
                     )
                 )
             except HTTPException as exc:
@@ -611,26 +679,42 @@ class AgenticCoursePipeline:
                     part_plan, part_writer = slice_curriculum(course_plan, writer, {lesson.id})
                     parts.append(
                         self._assess_batch(
-                            common=common,
                             settings_snapshot=settings_snapshot,
                             course_plan=part_plan,
                             writer=part_writer,
-                            qa_feedback=qa_feedback,
-                            revision=revision * 1000 + offset + step,
+                            iteration=AgentRevision(
+                                common=common,
+                                qa_feedback=qa_feedback,
+                                revision=revision * 1000 + offset + step,
+                            ),
                         )
                     )
         return merge_assessments(parts)
 
+    def _validate_assessment_coverage(self, assessment, course_plan, settings_snapshot):
+        if settings_snapshot["module_tests_enabled"]:
+            tested_modules = {
+                item.target_id for item in assessment.questions if item.scope == "module"
+            }
+            missing = {item.id for item in course_plan.modules} - tested_modules
+            if missing:
+                raise ValueError(f"Assessment Agent omitted module tests: {sorted(missing)}")
+        if settings_snapshot["final_test_enabled"] and not any(
+            item.scope == "final" for item in assessment.questions
+        ):
+            raise ValueError("Assessment Agent omitted the final test")
+
     def _assess_batch(
         self,
         *,
-        common: dict,
         settings_snapshot: dict,
         course_plan: CoursePlan,
         writer: WriterArtifact,
-        qa_feedback: QAArtifact | None,
-        revision: int,
+        iteration: AgentRevision,
     ) -> AssessmentArtifact:
+        common = iteration.common
+        qa_feedback = iteration.qa_feedback
+        revision = iteration.revision
         from app.services.regulation_assessment import validate_regulation_assessment
 
         mode = settings_snapshot.get("regulation_assessment_mode")
@@ -675,29 +759,31 @@ class AgenticCoursePipeline:
                 )
 
         assessment = self.runtime.execute(
-            agent="assessment",
-            artifact="assessment_set",
-            sequence=revision,
-            template_name="assessment_agent_prompt.j2",
-            response_model=AssessmentArtifact,
-            prompt_context={
-                **common,
-                "course_plan_json": _json(course_plan),
-                "writer_artifact_json": _json(writer),
-                "module_tests_enabled": settings_snapshot["module_tests_enabled"],
-                "final_test_enabled": settings_snapshot["final_test_enabled"],
-                "assessment_settings_json": _json(
-                    {
-                        "module_tests_enabled": settings_snapshot["module_tests_enabled"],
-                        "final_test_enabled": settings_snapshot["final_test_enabled"],
-                        "regulation_assessment_mode": mode,
-                    }
-                ),
-                "source_catalog_json": _json(course_plan.source_refs),
-                "qa_feedback_json": _json(qa_feedback) if qa_feedback else "null",
-            },
-            max_tokens=8000 if mode else 4096,
-            validator=validate_assessment,
+            request=AgentInvocation(
+                agent="assessment",
+                artifact="assessment_set",
+                sequence=revision,
+                template_name="assessment_agent_prompt.j2",
+                response_model=AssessmentArtifact,
+                prompt_context={
+                    **common,
+                    "course_plan_json": _json(course_plan),
+                    "writer_artifact_json": _json(writer),
+                    "module_tests_enabled": settings_snapshot["module_tests_enabled"],
+                    "final_test_enabled": settings_snapshot["final_test_enabled"],
+                    "assessment_settings_json": _json(
+                        {
+                            "module_tests_enabled": settings_snapshot["module_tests_enabled"],
+                            "final_test_enabled": settings_snapshot["final_test_enabled"],
+                            "regulation_assessment_mode": mode,
+                        }
+                    ),
+                    "source_catalog_json": _json(course_plan.source_refs),
+                    "qa_feedback_json": _json(qa_feedback) if qa_feedback else "null",
+                },
+                max_tokens=8000 if mode else 4096,
+                validator=validate_assessment,
+            )
         )
         _canonical_sources(
             "assessment",
@@ -705,32 +791,25 @@ class AgenticCoursePipeline:
             list(self.runtime.source_catalog.values()),
         )
         validate_regulation_assessment(assessment, mode)
-        if settings_snapshot["module_tests_enabled"]:
-            tested_modules = {
-                item.target_id for item in assessment.questions if item.scope == "module"
-            }
-            missing = {item.id for item in course_plan.modules} - tested_modules
-            if missing:
-                raise ValueError(f"Assessment Agent omitted module tests: {sorted(missing)}")
-        if settings_snapshot["final_test_enabled"] and not any(
-            item.scope == "final" for item in assessment.questions
-        ):
-            raise ValueError("Assessment Agent omitted the final test")
+        self._validate_assessment_coverage(assessment, course_plan, settings_snapshot)
         return assessment
 
-    def _review(
-        self, *, common, ingestion, competency_map, course_plan, writer, assessment, revision
-    ):
-        # Start with pairs; evidence-heavy pairs split further before any paid call.
+    def _review(self, *, course_plan, writer, assessment, review_context: ReviewContext):
+        common = review_context.common
+        ingestion = review_context.ingestion
+        competency_map = review_context.competency_map
+        revision = review_context.revision
         if len(writer.lessons) == 1:
             return self._review_batch(
-                common=common,
-                ingestion=ingestion,
-                competency_map=competency_map,
                 course_plan=course_plan,
                 writer=writer,
                 assessment=assessment,
-                revision=revision,
+                review_context=ReviewContext(
+                    common=common,
+                    ingestion=ingestion,
+                    competency_map=competency_map,
+                    revision=revision,
+                ),
             )
         from app.ai.curriculum import assessment_excerpt, slice_curriculum
 
@@ -742,13 +821,15 @@ class AgenticCoursePipeline:
             try:
                 reports.append(
                     self._review_batch(
-                        common=common,
-                        ingestion=ingestion,
-                        competency_map=competency_map,
                         course_plan=partial_plan,
                         writer=partial,
                         assessment=assessment_excerpt(assessment, partial_plan),
-                        revision=revision * 1000 + offset,
+                        review_context=ReviewContext(
+                            common=common,
+                            ingestion=ingestion,
+                            competency_map=competency_map,
+                            revision=revision * 1000 + offset,
+                        ),
                     )
                 )
             except HTTPException as exc:
@@ -762,13 +843,15 @@ class AgenticCoursePipeline:
                     part_plan, part_writer = slice_curriculum(course_plan, writer, {lesson.id})
                     reports.append(
                         self._review_batch(
-                            common=common,
-                            ingestion=ingestion,
-                            competency_map=competency_map,
                             course_plan=part_plan,
                             writer=part_writer,
                             assessment=assessment_excerpt(assessment, part_plan),
-                            revision=revision * 1000 + offset + step,
+                            review_context=ReviewContext(
+                                common=common,
+                                ingestion=ingestion,
+                                competency_map=competency_map,
+                                revision=revision * 1000 + offset + step,
+                            ),
                         )
                     )
         payload = reports[0].model_dump(mode="json")
@@ -811,30 +894,19 @@ class AgenticCoursePipeline:
     def _review_batch(
         self,
         *,
-        common: dict,
-        ingestion: IngestionArtifact,
-        competency_map: CompetencyMapArtifact,
         course_plan: CoursePlan,
         writer: WriterArtifact,
         assessment: AssessmentArtifact,
-        revision: int,
+        review_context: ReviewContext,
     ) -> QAArtifact:
+        common = review_context.common
+        ingestion = review_context.ingestion
+        competency_map = review_context.competency_map
+        revision = review_context.revision
         known_ids = set()
 
-        def collect_ids(value):
-            if hasattr(value, "model_dump"):
-                value = value.model_dump(mode="json")
-            if isinstance(value, dict):
-                if isinstance(value.get("id"), str):
-                    known_ids.add(value["id"])
-                for item in value.values():
-                    collect_ids(item)
-            elif isinstance(value, list):
-                for item in value:
-                    collect_ids(item)
-
         for artifact in (ingestion, competency_map, course_plan, writer, assessment):
-            collect_ids(artifact)
+            _collect_ids(artifact, known_ids)
 
         def validate_qa(value):
             claimed = set(value.checked_artifact_ids) | {
@@ -873,45 +945,35 @@ class AgenticCoursePipeline:
         # Include every referenced quote in the batch, not only writer citations.
         cited = set()
 
-        def collect_refs(value):
-            if isinstance(value, dict):
-                if str(value.get("id", "")).startswith("src:"):
-                    cited.add(value["id"])
-                for key, item in value.items():
-                    if key.endswith("source_ref_ids") and isinstance(item, list):
-                        cited.update(item)
-                    collect_refs(item)
-            elif isinstance(value, list):
-                for item in value:
-                    collect_refs(item)
-
-        collect_refs(candidate)
+        _collect_refs(candidate, cited)
         qa = self.runtime.execute(
-            agent="critic_qa",
-            artifact="qa_report",
-            sequence=revision,
-            template_name="critic_qa_prompt.j2",
-            response_model=QAArtifact,
-            prompt_context={
-                **common,
-                "ingestion_artifact_json": _json(ingestion),
-                "competency_map_json": _json(competency_map),
-                "course_plan_json": _json(course_plan),
-                "writer_artifact_json": _json(writer),
-                "assessment_artifact_json": _json(assessment),
-                "candidate_artifacts_json": _json(candidate),
-                "source_catalog_json": _json(
-                    [ref for ref in ingestion.source_refs if ref.id in cited]
-                ),
-                "qa_policy_json": _json(
-                    {
-                        "minimum_score": settings.AI_QA_MIN_SCORE,
-                        "scope": "Check only the supplied curriculum batch. Other lessons and assessments are reviewed separately.",
-                    }
-                ),
-            },
-            max_tokens=4096,
-            validator=validate_qa,
+            request=AgentInvocation(
+                agent="critic_qa",
+                artifact="qa_report",
+                sequence=revision,
+                template_name="critic_qa_prompt.j2",
+                response_model=QAArtifact,
+                prompt_context={
+                    **common,
+                    "ingestion_artifact_json": _json(ingestion),
+                    "competency_map_json": _json(competency_map),
+                    "course_plan_json": _json(course_plan),
+                    "writer_artifact_json": _json(writer),
+                    "assessment_artifact_json": _json(assessment),
+                    "candidate_artifacts_json": _json(candidate),
+                    "source_catalog_json": _json(
+                        [ref for ref in ingestion.source_refs if ref.id in cited]
+                    ),
+                    "qa_policy_json": _json(
+                        {
+                            "minimum_score": settings.AI_QA_MIN_SCORE,
+                            "scope": "Check only the supplied curriculum batch. Other lessons and assessments are reviewed separately.",
+                        }
+                    ),
+                },
+                max_tokens=4096,
+                validator=validate_qa,
+            )
         )
         _canonical_sources(
             "critic_qa",
@@ -919,6 +981,45 @@ class AgenticCoursePipeline:
             [item.model_dump(mode="json") for item in ingestion.source_refs],
         )
         return qa
+
+    @staticmethod
+    def _group_assessment_questions(result, settings_snapshot, module_for_lesson):
+        plan = result.course_plan
+        questions_by_target: dict[tuple[str, str], list] = {}
+        for question in result.assessment.questions:
+            if settings_snapshot.get("regulation_assessment_mode"):
+                key = ("final", plan.id)
+            elif question.scope == "final":
+                if not settings_snapshot["final_test_enabled"]:
+                    continue
+                key = ("final", plan.id)
+            else:
+                if not settings_snapshot["module_tests_enabled"]:
+                    continue
+                module_id = (
+                    question.target_id
+                    if question.scope == "module"
+                    else module_for_lesson[question.target_id]
+                )
+                key = ("module", module_id)
+            questions_by_target.setdefault(key, []).append(question)
+        return questions_by_target
+
+    @staticmethod
+    def _append_plan_edges(plan, edges):
+        for module in plan.modules:
+            for lesson_id in module.lesson_ids:
+                edges.append({"source": module.id, "target": lesson_id, "relation": "contains"})
+            for previous, current in zip(module.lesson_ids, module.lesson_ids[1:], strict=False):
+                edges.append({"source": previous, "target": current, "relation": "precedes"})
+        for previous, current in zip(plan.modules, plan.modules[1:], strict=False):
+            edges.append({"source": previous.id, "target": current.id, "relation": "precedes"})
+        for module in plan.modules:
+            for prerequisite in module.prerequisite_module_ids:
+                edges.append({"source": prerequisite, "target": module.id, "relation": "requires"})
+        for lesson in plan.lessons:
+            for prerequisite in lesson.prerequisite_lesson_ids:
+                edges.append({"source": prerequisite, "target": lesson.id, "relation": "requires"})
 
     @staticmethod
     def _to_graph(
@@ -995,39 +1096,10 @@ class AgenticCoursePipeline:
                 }
             )
 
-        for module in plan.modules:
-            for lesson_id in module.lesson_ids:
-                edges.append({"source": module.id, "target": lesson_id, "relation": "contains"})
-            for previous, current in zip(module.lesson_ids, module.lesson_ids[1:]):
-                edges.append({"source": previous, "target": current, "relation": "precedes"})
-        for previous, current in zip(plan.modules, plan.modules[1:]):
-            edges.append({"source": previous.id, "target": current.id, "relation": "precedes"})
-        for module in plan.modules:
-            for prerequisite in module.prerequisite_module_ids:
-                edges.append({"source": prerequisite, "target": module.id, "relation": "requires"})
-        for lesson in plan.lessons:
-            for prerequisite in lesson.prerequisite_lesson_ids:
-                edges.append({"source": prerequisite, "target": lesson.id, "relation": "requires"})
-
-        questions_by_target: dict[tuple[str, str], list] = {}
-        for question in result.assessment.questions:
-            if settings_snapshot.get("regulation_assessment_mode"):
-                key = ("final", plan.id)
-            elif question.scope == "final":
-                if not settings_snapshot["final_test_enabled"]:
-                    continue
-                key = ("final", plan.id)
-            else:
-                if not settings_snapshot["module_tests_enabled"]:
-                    continue
-                module_id = (
-                    question.target_id
-                    if question.scope == "module"
-                    else module_for_lesson[question.target_id]
-                )
-                key = ("module", module_id)
-            questions_by_target.setdefault(key, []).append(question)
-
+        AgenticCoursePipeline._append_plan_edges(plan, edges)
+        questions_by_target = AgenticCoursePipeline._group_assessment_questions(
+            result, settings_snapshot, module_for_lesson
+        )
         for (scope, target_id), questions in questions_by_target.items():
             test_id = f"test:{scope}:{target_id}"
             question_payloads = []

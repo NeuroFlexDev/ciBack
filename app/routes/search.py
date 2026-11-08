@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 # app/routes/search.py
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -11,7 +13,7 @@ from app.schemas.retrieval import RetrievalResponse
 from app.services.auth_service import get_current_user
 from app.services.course_access import course_access_filter
 from app.services.embedding_service import get_vector_store, search
-from app.services.retrieval_service import RetrievalService
+from app.services.retrieval_service import RetrievalQuery, RetrievalService
 from app.services.vector_store import VectorStore
 
 router = APIRouter()
@@ -35,6 +37,14 @@ def semantic_search(
     return {"results": results}
 
 
+@dataclass
+class RetrievalFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    q: str = Query(..., min_length=1, max_length=2000)
+    limit: int = Query(default=5, ge=1, le=20)
+
+
 @router.get(
     "/courses/{course_id}/retrieval",
     response_model=RetrievalResponse,
@@ -42,17 +52,15 @@ def semantic_search(
 )
 def retrieve_course_documents(
     course_id: int,
-    q: str = Query(..., min_length=1, max_length=2000),
-    limit: int = Query(default=5, ge=1, le=20),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     vector_store: VectorStore = Depends(get_vector_store),
+    filters: RetrievalFilters = Depends(),
 ):
     return RetrievalService.search_course(
         db,
         course_id=course_id,
         owner_id=current_user.id,
-        query=q,
-        limit=limit,
         vector_store=vector_store,
+        search_query=RetrievalQuery(query=filters.q, limit=filters.limit),
     )

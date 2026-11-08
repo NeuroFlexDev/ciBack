@@ -79,21 +79,7 @@ def ingestion_sources(catalog: list[dict]) -> list[dict]:
     ]
 
 
-def complete_ingestion_inventories(raw: dict, catalog: list[dict]) -> dict:
-    """Derive redundant indexes, never invent, repair or discard semantic claims."""
-    from app.services.agent_runtime import expand_source_refs
-
-    if not isinstance(raw, dict):
-        raise ValueError("Ingestion must be an object")
-    for name in ("source_refs", "documents", "knowledge_items"):
-        if name in raw and not isinstance(raw[name], list):
-            raise ValueError(f"{name} must be a list")
-    canonical = {source["id"]: source for source in catalog}
-    # Even optional inventories may not introduce unknown or changed evidence.
-    expand_source_refs({"source_refs": raw.get("source_refs", [])}, canonical)
-    grouped = {}
-    for source in catalog:
-        grouped.setdefault((source["document_id"], source["document_version"]), []).append(source)
+def _ingestion_summaries(raw, grouped):
     summaries = {}
     for doc in raw.get("documents", []):
         if (
@@ -111,12 +97,20 @@ def complete_ingestion_inventories(raw: dict, catalog: list[dict]) -> dict:
         if set(doc.get("source_ref_ids", [])) - {s["id"] for s in grouped[key]}:
             raise ValueError("Unknown document citation")
         summaries[key] = doc
+    return summaries
+
+
+def _ingestion_knowledge(raw, canonical):
     items = raw.get("knowledge_items", [])
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("source_ref_ids"), list):
             raise ValueError("Knowledge items require source citations")
         if any(not isinstance(ref, str) or ref not in canonical for ref in item["source_ref_ids"]):
             raise ValueError("Unknown knowledge citation")
+    return items
+
+
+def _ingestion_documents(grouped, summaries, items):
     documents = []
     for (doc_id, version), sources in grouped.items():
         refs = {s["id"] for s in sources}
@@ -139,6 +133,27 @@ def complete_ingestion_inventories(raw: dict, catalog: list[dict]) -> dict:
                 "knowledge_item_ids": [item.get("id") for item in linked],
             }
         )
+    return documents
+
+
+def complete_ingestion_inventories(raw: dict, catalog: list[dict]) -> dict:
+    """Derive redundant indexes, never invent, repair or discard semantic claims."""
+    from app.services.agent_runtime import expand_source_refs
+
+    if not isinstance(raw, dict):
+        raise ValueError("Ingestion must be an object")
+    for name in ("source_refs", "documents", "knowledge_items"):
+        if name in raw and not isinstance(raw[name], list):
+            raise ValueError(f"{name} must be a list")
+    canonical = {source["id"]: source for source in catalog}
+    # Even optional inventories may not introduce unknown or changed evidence.
+    expand_source_refs({"source_refs": raw.get("source_refs", [])}, canonical)
+    grouped = {}
+    for source in catalog:
+        grouped.setdefault((source["document_id"], source["document_version"]), []).append(source)
+    summaries = _ingestion_summaries(raw, grouped)
+    items = _ingestion_knowledge(raw, canonical)
+    documents = _ingestion_documents(grouped, summaries, items)
     return {**raw, "source_refs": list(canonical), "documents": documents}
 
 

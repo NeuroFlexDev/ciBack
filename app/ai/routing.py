@@ -78,20 +78,53 @@ class RouteDecision:
     selected_provider: str = "vsellm"
 
 
+@dataclass(frozen=True, kw_only=True)
+class RouteContext:
+    """Parameters for choose_route, preserving its original defaults."""
+
+    history: Iterable[dict] = ()
+    excluded_models: set[str] | None = None
+    min_tier: int = 0
+    now: float | None = None
+    available_providers: set[str] | None = None
+    forecast: dict | None = None
+    requested_model: str | None = None
+    input_estimates: dict[str, int] | None = None
+
+
+def _route_health(samples, now):
+    # Three recent transport failures open a temporary circuit. Validation
+    # failures are handled by the pass-rate floor and per-step escalation.
+    if (
+        len(samples) >= 3
+        and all(row["outcome"] == "provider_error" for row in samples[:3])
+        and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS
+    ):
+        return 0, True
+    # Two failed structured responses among the last three are enough to
+    # stop spending on that route temporarily, even before ten samples exist.
+    if (
+        sum(row["outcome"] == "contract_fail" for row in samples[:3]) >= 2
+        and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS
+    ):
+        return 0, True
+    contracts = [row for row in samples if row["outcome"] != "provider_error"]
+    passes = sum(row["outcome"] == "contract_pass" for row in contracts)
+    if (
+        len(contracts) >= ai_control.policy()["min_samples"]
+        and passes / len(contracts) < ai_control.policy()["min_pass_rate"]
+    ):
+        return 0, True
+    return passes, False
+
+
 def choose_route(
     *,
     role: str,
     baseline_model: str,
     input_tokens: int,
     output_tokens: int,
-    history: Iterable[dict] = (),
-    excluded_models: set[str] | None = None,
-    min_tier: int = 0,
-    now: float | None = None,
-    available_providers: set[str] | None = None,
-    forecast: dict | None = None,
-    requested_model: str | None = None,
-    input_estimates: dict[str, int] | None = None,
+    routing_context: RouteContext | None = None,
 ) -> RouteDecision:
     """Rank explicitly approved candidates by estimated cost per contract pass.
 
@@ -99,6 +132,12 @@ def choose_route(
     policy and input-size bucket participate; API success alone is not a pass.
     The existing static policy is the recovery path when no candidate qualifies.
     """
+    routing_context = routing_context or RouteContext()
+    history = routing_context.history
+    excluded_models = routing_context.excluded_models
+    min_tier = routing_context.min_tier
+    now = routing_context.now
+    available_providers = routing_context.available_providers
     now = time.time() if now is None else now
     signature = policy_fingerprint()
     bucket = token_bucket(input_tokens)
@@ -122,7 +161,10 @@ def choose_route(
     ):
         candidates.append(baseline)
     for candidate in candidates:
-        if requested_model is not None and candidate.model != requested_model:
+        if (
+            routing_context.requested_model is not None
+            and candidate.model != routing_context.requested_model
+        ):
             continue
         if (
             candidate.model in (excluded_models or set())
@@ -132,7 +174,7 @@ def choose_route(
             continue
         if available_providers is not None and candidate.provider not in available_providers:
             continue
-        candidate_input = (input_estimates or {}).get(
+        candidate_input = (routing_context.input_estimates or {}).get(
             route_id(candidate.provider, candidate.model), input_tokens
         )
         if (
@@ -151,35 +193,16 @@ def choose_route(
             key=lambda row: row.get("finished_at", 0),
             reverse=True,
         )
-        # Three recent transport failures open a temporary circuit. Validation
-        # failures are handled by the pass-rate floor and per-step escalation.
-        if (
-            len(samples) >= 3
-            and all(row["outcome"] == "provider_error" for row in samples[:3])
-            and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS
-        ):
-            unhealthy.add(route_id(candidate.provider, candidate.model))
-            continue
-        # Two failed structured responses among the last three are enough to
-        # stop spending on that route temporarily, even before ten samples exist.
-        if (
-            sum(row["outcome"] == "contract_fail" for row in samples[:3]) >= 2
-            and now - samples[0].get("finished_at", 0) < settings.AI_ROUTING_COOLDOWN_SECONDS
-        ):
-            unhealthy.add(route_id(candidate.provider, candidate.model))
-            continue
-        contracts = [row for row in samples if row["outcome"] != "provider_error"]
-        passes = sum(row["outcome"] == "contract_pass" for row in contracts)
-        if (
-            len(contracts) >= ai_control.policy()["min_samples"]
-            and passes / len(contracts) < ai_control.policy()["min_pass_rate"]
-        ):
+        passes, unhealthy_route = _route_health(samples, now)
+        if unhealthy_route:
             unhealthy.add(route_id(candidate.provider, candidate.model))
             continue
         # A fixed 9/10 prior avoids certainty from one success. This is a ranking
         # heuristic; it is not a calibrated probability of final course quality.
         probability = Decimal(9 + passes) / Decimal(10 + len(samples))
-        predicted = (forecast or {}).get(route_id(candidate.provider, candidate.model), {})
+        predicted = (routing_context.forecast or {}).get(
+            route_id(candidate.provider, candidate.model), {}
+        )
         cost = estimate_cost(
             candidate,
             predicted.get("input_tokens", candidate_input),

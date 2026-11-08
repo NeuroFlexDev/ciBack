@@ -11,7 +11,7 @@ from app.models.document import Document, DocumentChunk
 from app.models.domain_enums import CourseStatus
 from app.models.generation_run import GenerationRun
 from app.models.user import User
-from app.services.pipeline_service import PipelineRunFailed, PipelineService
+from app.services.pipeline_service import PipelineRunFailed, PipelineService, ReindexOptions
 from tests.generated_graph_fixture import concrete_graph
 
 
@@ -121,10 +121,18 @@ def test_reindex_request_queues_run_and_keeps_indexed_document_available(
     monkeypatch.setattr("app.services.job_queue.enqueue_document_index", queued.append)
 
     first = PipelineService.reindex_document(
-        db_session, document_id=document.id, owner_id=auth_user.id, storage=storage, queue_only=True
+        db_session,
+        document_id=document.id,
+        owner_id=auth_user.id,
+        storage=storage,
+        options=ReindexOptions(queue_only=True),
     )
     again = PipelineService.reindex_document(
-        db_session, document_id=document.id, owner_id=auth_user.id, storage=storage, queue_only=True
+        db_session,
+        document_id=document.id,
+        owner_id=auth_user.id,
+        storage=storage,
+        options=ReindexOptions(queue_only=True),
     )
 
     assert first.status == "queued"
@@ -153,7 +161,11 @@ def test_queued_document_is_processed_by_worker_and_releases_capacity(
         "app.services.pipeline_service.replace_document_embeddings", _fake_embeddings
     )
     run = PipelineService.reindex_document(
-        db_session, document_id=document.id, owner_id=auth_user.id, storage=storage, queue_only=True
+        db_session,
+        document_id=document.id,
+        owner_id=auth_user.id,
+        storage=storage,
+        options=ReindexOptions(queue_only=True),
     )
     assert queued == [run.id]
 

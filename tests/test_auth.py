@@ -5,6 +5,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.security import (
+    AccessTokenClaims,
     TokenExpiredError,
     TokenValidationError,
     create_access_token,
@@ -173,10 +174,9 @@ def test_web_session_renewal_preserves_login_boundary_and_mfa(client, auth_user)
     token = create_access_token(
         auth_user.id,
         auth_user.auth_version,
-        amr=["pwd", "otp"],
-        mfa_at=start,
-        wsid="test-web-session",
-        web_started_at=start,
+        claims=AccessTokenClaims(
+            amr=["pwd", "otp"], mfa_at=start, wsid="test-web-session", web_started_at=start
+        ),
     )
     response = client.post("/api/auth/renew", headers={"Authorization": "Bearer " + token})
     assert response.status_code == 200, response.text
@@ -191,7 +191,7 @@ def test_web_renewal_rejects_expired_revoked_and_legacy_tokens(client, auth_user
     import time
 
     start = int(time.time()) - 8 * 3600
-    expired = create_access_token(auth_user.id, web_started_at=start)
+    expired = create_access_token(auth_user.id, claims=AccessTokenClaims(web_started_at=start))
     legacy = _encode(_payload(sub=str(auth_user.id)))
     for token in [expired, legacy]:
         assert (
@@ -211,7 +211,9 @@ def test_web_renewal_cannot_extend_past_absolute_workday(client, auth_user):
     import time
 
     start = int(time.time()) - 8 * 3600 + 40
-    token = create_access_token(auth_user.id, wsid="bounded", web_started_at=start)
+    token = create_access_token(
+        auth_user.id, claims=AccessTokenClaims(wsid="bounded", web_started_at=start)
+    )
     response = client.post("/api/auth/renew", headers={"Authorization": "Bearer " + token})
     assert response.status_code == 200
     claims = decode_access_token(response.json()["access_token"])

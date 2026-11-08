@@ -310,6 +310,48 @@ def openrouter_details(items, ids):
     return details[:500]
 
 
+def _fetch_provider_catalog(provider, probe, headers, result):
+    openrouter = str(provider.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
+    with http_client(probe) as client:
+        # /models is public on OpenRouter and cannot prove credential validity.
+        authorization = (
+            client.get(str(provider.base_url).rstrip("/") + "/key", headers=headers)
+            if openrouter
+            else None
+        )
+        if authorization is not None and authorization.status_code != 200:
+            response = authorization
+        else:
+            if authorization is not None:
+                auth_data = authorization.json().get("data")
+                if not isinstance(auth_data, dict):
+                    raise ValueError("Invalid authorization response")
+                result["credential_verified"] = True
+            response = client.get(str(provider.base_url).rstrip("/") + "/models", headers=headers)
+    return response, openrouter
+
+
+def _checked_provider_entry(provider, stored, result):
+    item = (
+        {**stored, "last_check": result}
+        if stored
+        else {
+            "name": provider.id,
+            "config": provider.model_dump(mode="json"),
+            "sealed_key": None,
+            "last_check": result,
+        }
+    )
+    return item
+
+
+def _provider_headers(provider, key):
+    headers = {"Authorization": "Bearer " + key}
+    if provider.project:
+        headers["OpenAI-Project"] = provider.project
+    return headers
+
+
 def check_provider(db, actor, provider_id, payload):
     row = row_for(db, payload.expected_revision)
     provider, stored = provider_object(row, provider_id)
@@ -318,9 +360,7 @@ def check_provider(db, actor, provider_id, payload):
     key = providers.credential(provider)
     if not key:
         raise HTTPException(422, "Сначала сохраните API-ключ.")
-    headers = {"Authorization": "Bearer " + key}
-    if provider.project:
-        headers["OpenAI-Project"] = provider.project
+    headers = _provider_headers(provider, key)
     probe = provider.model_copy(update={"timeout_seconds": min(provider.timeout_seconds, 10)})
     result = {
         "status": "unavailable",
@@ -328,25 +368,7 @@ def check_provider(db, actor, provider_id, payload):
         "models": [],
     }
     try:
-        openrouter = str(provider.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
-        with http_client(probe) as client:
-            # /models is public on OpenRouter and cannot prove credential validity.
-            authorization = (
-                client.get(str(provider.base_url).rstrip("/") + "/key", headers=headers)
-                if openrouter
-                else None
-            )
-            if authorization is not None and authorization.status_code != 200:
-                response = authorization
-            else:
-                if authorization is not None:
-                    auth_data = authorization.json().get("data")
-                    if not isinstance(auth_data, dict):
-                        raise ValueError("Invalid authorization response")
-                    result["credential_verified"] = True
-                response = client.get(
-                    str(provider.base_url).rstrip("/") + "/models", headers=headers
-                )
+        response, openrouter = _fetch_provider_catalog(provider, probe, headers, result)
         if response.status_code == 200:
             data = response.json()
             if not isinstance(data, dict) or not isinstance(data.get("data"), list):
@@ -373,16 +395,7 @@ def check_provider(db, actor, provider_id, payload):
         pass  # Never persist or echo remote bodies, headers or exception text.
     db.expire_all()
     row = row_for(db, payload.expected_revision)
-    item = (
-        {**stored, "last_check": result}
-        if stored
-        else {
-            "name": provider.id,
-            "config": provider.model_dump(mode="json"),
-            "sealed_key": None,
-            "last_check": result,
-        }
-    )
+    item = _checked_provider_entry(provider, stored, result)
     rows = [entry for entry in row.providers if entry["config"]["id"] != provider_id] + [item]
     return {**save(db, actor, row, "ai.provider.checked", provider_id, providers=rows), **result}
 

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
@@ -9,6 +11,18 @@ from app.models.module import Module
 from app.models.task import Task
 from app.models.test import Test
 from app.services.course_access import course_access_filter, related_course_access
+
+
+@dataclass(frozen=True, kw_only=True)
+class DocumentQuery:
+    """Parameters for list_documents, preserving its original defaults."""
+
+    limit: int
+    offset: int
+    statuses: tuple[str, ...] | None
+    source_type: str | None
+    sort_by: str
+    sort_order: str
 
 
 class CourseContentRepository:
@@ -127,17 +141,14 @@ class CourseContentRepository:
 
     @staticmethod
     def list_documents(
-        db: Session,
-        *,
-        course_id: int,
-        owner_id: int,
-        limit: int,
-        offset: int,
-        statuses: tuple[str, ...] | None,
-        source_type: str | None,
-        sort_by: str,
-        sort_order: str,
+        db: Session, *, course_id: int, owner_id: int, query_options: DocumentQuery
     ) -> tuple[list[Document], int]:
+        limit = query_options.limit
+        offset = query_options.offset
+        statuses = query_options.statuses
+        source_type = query_options.source_type
+        sort_by = query_options.sort_by
+        sort_order = query_options.sort_order
         query = db.query(Document).filter(
             Document.course_id == course_id,
             related_course_access(Document.course_id, owner_id),

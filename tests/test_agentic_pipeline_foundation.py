@@ -9,14 +9,14 @@ from app.models.course_update_proposal import CourseUpdateProposal
 from app.models.document import Document, DocumentChunk
 from app.models.generation_run import GenerationRun
 from app.models.user import User
-from app.services.agent_runtime import AgentRuntime
+from app.services.agent_runtime import AgentInvocation, AgentRuntime
 from app.services.agentic_course_pipeline import AgenticCoursePipeline
 from app.services.course_update_service import CourseUpdateService
 from app.services.source_catalog_service import (
     build_source_catalog,
     graph_source_links,
 )
-from tests.factories import make_course
+from tests.factories import make_course, unpack_call_options
 
 
 class ExampleArtifact(BaseModel):
@@ -37,6 +37,7 @@ def test_agent_runtime_persists_and_reuses_typed_artifact(db_session, auth_user)
     calls = []
 
     def generate(*args, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         calls.append((args, kwargs))
         return {"value": 7, "_model": "scripted"}
 
@@ -47,22 +48,26 @@ def test_agent_runtime_persists_and_reuses_typed_artifact(db_session, auth_user)
         generate=generate,
     )
     first = runtime.execute(
-        agent="ingestion",
-        artifact="example",
-        sequence=0,
-        template_name="unused.j2",
-        response_model=ExampleArtifact,
-        prompt_context={"input": "same"},
-        max_tokens=100,
+        request=AgentInvocation(
+            agent="ingestion",
+            artifact="example",
+            sequence=0,
+            template_name="unused.j2",
+            response_model=ExampleArtifact,
+            prompt_context={"input": "same"},
+            max_tokens=100,
+        )
     )
     second = runtime.execute(
-        agent="ingestion",
-        artifact="example",
-        sequence=0,
-        template_name="unused.j2",
-        response_model=ExampleArtifact,
-        prompt_context={"input": "same"},
-        max_tokens=100,
+        request=AgentInvocation(
+            agent="ingestion",
+            artifact="example",
+            sequence=0,
+            template_name="unused.j2",
+            response_model=ExampleArtifact,
+            prompt_context={"input": "same"},
+            max_tokens=100,
+        )
     )
 
     assert first == second == ExampleArtifact(value=7)
@@ -461,6 +466,7 @@ def test_agentic_pipeline_runs_all_typed_stages_and_passes_qa(
     calls = []
 
     def generate(template_name, **kwargs):
+        kwargs = unpack_call_options(kwargs)
         calls.append(template_name)
         import copy
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
@@ -116,9 +117,20 @@ def _question_payload(test_node: dict) -> list[dict]:
     return result
 
 
+@dataclass
+class _MaterializedCanvas:
+    persisted_ids: dict[str, list[str]] = field(default_factory=dict)
+    canvas_nodes: list[dict] = field(default_factory=list)
+    canvas_edges: list[dict] = field(default_factory=list)
+    lesson_count: int = 0
+    test_count: int = 0
+    task_count: int = 0
+    rubric_count: int = 0
+
+
 class CourseMaterializationService:
     @staticmethod
-    def materialize_learning_map(db: Session, *, course: Course, result) -> dict:
+    def _retire_learning_map(course):
         for item in course.competencies:
             if not item.is_deleted:
                 item.is_deleted = True
@@ -126,6 +138,9 @@ class CourseMaterializationService:
             if not item.is_deleted:
                 item.is_deleted = True
 
+    @staticmethod
+    def materialize_learning_map(db: Session, *, course: Course, result) -> dict:
+        CourseMaterializationService._retire_learning_map(course)
         roles_by_competency: dict[str, list[str]] = {}
         for role in result.competency_map.roles:
             for competency_id in role.competency_ids:
@@ -172,7 +187,7 @@ class CourseMaterializationService:
         }
 
     @staticmethod
-    def materialize(db: Session, *, course: Course, nodes: list[dict], edges: list[dict]) -> dict:
+    def _graph_membership(nodes, edges):
         by_id = {str(node["id"]): node for node in nodes}
         module_ids = _ordered_ids(nodes, edges, "module")
         lesson_ids = set(_ordered_ids(nodes, edges, "lesson"))
@@ -193,19 +208,26 @@ class CourseMaterializationService:
             raise ValueError("every generated lesson must belong to exactly one module")
         if sum(len(items) for items in contains.values()) != len(assigned_lessons):
             raise ValueError("generated lesson belongs to more than one module")
+        return by_id, module_ids, contains, module_tests
 
+    @staticmethod
+    def _retire_module(old_module):
+        old_module.is_deleted = True
+        for lesson in old_module.lessons:
+            lesson.is_deleted = True
+            if lesson.theory is not None:
+                lesson.theory.is_deleted = True
+        for test in old_module.tests:
+            test.is_deleted = True
+        for task in old_module.tasks:
+            task.is_deleted = True
+
+    @staticmethod
+    def _retire_course_content(course):
         for old_module in course.modules:
             if old_module.is_deleted:
                 continue
-            old_module.is_deleted = True
-            for lesson in old_module.lessons:
-                lesson.is_deleted = True
-                if lesson.theory is not None:
-                    lesson.theory.is_deleted = True
-            for test in old_module.tests:
-                test.is_deleted = True
-            for task in old_module.tasks:
-                task.is_deleted = True
+            CourseMaterializationService._retire_module(old_module)
         for test in course.final_tests:
             if not test.is_deleted:
                 test.is_deleted = True
@@ -213,14 +235,184 @@ class CourseMaterializationService:
             if not rubric.is_deleted:
                 rubric.is_deleted = True
 
+    @staticmethod
+    def _materialize_practices(db, course, lesson, lesson_node, canvas):
+        lesson_id = str(lesson_node["id"])
+        lesson_canvas_id = f"lesson:{lesson.id}"
+        assessment_items = [("practice", item) for item in lesson_node.get("practices", [])] + [
+            ("case", item) for item in lesson_node.get("cases", [])
+        ]
+        for kind, item in assessment_items:
+            if kind == "practice":
+                description = "\n\n".join(
+                    value
+                    for value in (
+                        item.get("instructions"),
+                        f"Результат: {item.get('deliverable')}"
+                        if item.get("deliverable")
+                        else None,
+                    )
+                    if value
+                )
+            else:
+                description = "\n\n".join(
+                    value
+                    for value in (
+                        item.get("scenario"),
+                        "\n".join(item.get("prompts") or []),
+                    )
+                    if value
+                )
+            task = Task(
+                module_id=lesson.module_id,
+                name=str(item.get("title") or item.get("id") or "Задание"),
+                description=description,
+            )
+            db.add(task)
+            db.flush()
+            task_logical_id = str(item.get("id") or f"{lesson_id}:{kind}:{task.id}")
+            task_canvas_id = f"task:{task.id}"
+            canvas.persisted_ids[task_logical_id] = [task_canvas_id]
+            canvas.canvas_nodes.append(
+                {
+                    "id": task_canvas_id,
+                    "logical_id": task_logical_id,
+                    "type": "task",
+                    "label": task.name,
+                    "description": task.description or "",
+                    "source_refs": list(item.get("source_ref_ids") or []),
+                }
+            )
+            canvas.canvas_edges.append(
+                {
+                    "source": lesson_canvas_id,
+                    "target": task_canvas_id,
+                    "relation": "contains",
+                }
+            )
+            canvas.task_count += 1
+            rubric = item.get("rubric")
+            if rubric:
+                normalized = [
+                    {
+                        "id": criterion["id"],
+                        "title": criterion["title"],
+                        "description": criterion.get("description", ""),
+                        "max_points": criterion["weight"]
+                        * max(level["score"] for level in criterion["levels"]),
+                        "levels": [
+                            {
+                                "title": level["title"],
+                                "description": level.get("description", ""),
+                                "points": criterion["weight"] * level["score"],
+                            }
+                            for level in criterion["levels"]
+                        ],
+                    }
+                    for criterion in rubric.get("criteria", [])
+                ]
+                if not normalized or any(criterion["max_points"] <= 0 for criterion in normalized):
+                    raise ValueError("generated practice requires positive rubric criteria")
+                db.add(
+                    AssessmentDefinition(
+                        task_id=task.id,
+                        question_type="open",
+                        grading_mode="manual",
+                        correct_answers=[item["expected_response"]]
+                        if item.get("expected_response")
+                        else [],
+                        max_points=sum(criterion["max_points"] for criterion in normalized),
+                        criteria=normalized,
+                    )
+                )
+                levels = [
+                    {"criterion_id": criterion.get("id"), **level}
+                    for criterion in rubric.get("criteria", [])
+                    for level in criterion.get("levels", [])
+                ]
+                db.add(
+                    AssessmentRubric(
+                        course_id=course.id,
+                        task_id=task.id,
+                        criteria=rubric.get("criteria", []),
+                        levels=levels,
+                    )
+                )
+                canvas.rubric_count += 1
+
+    @staticmethod
+    def _materialize_final_tests(db, course, nodes, canvas):
+        final_nodes = [
+            node
+            for node in nodes
+            if node.get("type") == "test" and node.get("assessment_scope") == "final"
+        ]
+        for final_node in final_nodes:
+            for position, question in enumerate(_question_payload(final_node)):
+                test = Test(
+                    course_id=course.id,
+                    assessment_scope="final",
+                    position=position,
+                    question=question["question"],
+                    answers=json.dumps(question["answers"], ensure_ascii=False),
+                    correct_answer=question["correct"],
+                )
+                db.add(test)
+                db.flush()
+                db.add(AssessmentDefinition(test_id=test.id, **question["definition"]))
+                test_canvas_id = f"test:{test.id}"
+                logical_test_id = str(final_node["id"])
+                canvas.persisted_ids.setdefault(logical_test_id, []).append(test_canvas_id)
+                canvas.persisted_ids[question["logical_id"]] = [test_canvas_id]
+                canvas.canvas_nodes.append(
+                    {
+                        "id": test_canvas_id,
+                        "logical_id": question["logical_id"],
+                        "type": "test",
+                        "assessment_scope": "final",
+                        "label": question["question"],
+                        "question": question["question"],
+                        "answers": question["answers"],
+                        "correct_answer": question["correct"],
+                        "question_type": question["definition"]["question_type"],
+                        "correct_answers": question["definition"]["correct_answers"],
+                        "position": position,
+                        "source_refs": question["source_refs"],
+                    }
+                )
+                canvas.test_count += 1
+
+    @staticmethod
+    def _materialized_edges(edges, canvas):
+        for edge in edges:
+            sources = canvas.persisted_ids.get(str(edge["source"]), [])
+            targets = canvas.persisted_ids.get(str(edge["target"]), [])
+            for source in sources:
+                for target in targets:
+                    canvas.canvas_edges.append(
+                        {
+                            "source": source,
+                            "target": target,
+                            "relation": edge.get("relation") or "contains",
+                        }
+                    )
+        unique_edges = []
+        seen_edges = set()
+        for edge in canvas.canvas_edges:
+            key = (edge["source"], edge["target"], edge["relation"])
+            if key not in seen_edges:
+                seen_edges.add(key)
+                unique_edges.append(edge)
+        return unique_edges
+
+    @staticmethod
+    def materialize(db: Session, *, course: Course, nodes: list[dict], edges: list[dict]) -> dict:
+        by_id, module_ids, contains, module_tests = CourseMaterializationService._graph_membership(
+            nodes, edges
+        )
+        CourseMaterializationService._retire_course_content(course)
+        canvas = _MaterializedCanvas()
         materialized_modules: list[Module] = []
-        persisted_ids: dict[str, list[str]] = {}
-        canvas_nodes: list[dict] = []
-        canvas_edges: list[dict] = []
-        lesson_count = 0
-        test_count = 0
-        task_count = 0
-        rubric_count = 0
         for module_position, module_id in enumerate(module_ids):
             node = by_id[module_id]
             module = Module(
@@ -233,8 +425,8 @@ class CourseMaterializationService:
             db.flush()
             materialized_modules.append(module)
             module_canvas_id = f"module:{module.id}"
-            persisted_ids[module_id] = [module_canvas_id]
-            canvas_nodes.append(
+            canvas.persisted_ids[module_id] = [module_canvas_id]
+            canvas.canvas_nodes.append(
                 {
                     "id": module_canvas_id,
                     "logical_id": module_id,
@@ -259,10 +451,10 @@ class CourseMaterializationService:
                 db.add(lesson)
                 db.flush()
                 lesson_canvas_id = f"lesson:{lesson.id}"
-                persisted_ids[lesson_id] = [lesson_canvas_id]
+                canvas.persisted_ids[lesson_id] = [lesson_canvas_id]
                 content = str(lesson_node.get("content") or lesson_node.get("description") or "")
                 db.add(Theory(lesson_id=lesson.id, content=content))
-                canvas_nodes.append(
+                canvas.canvas_nodes.append(
                     {
                         "id": lesson_canvas_id,
                         "logical_id": lesson_id,
@@ -274,109 +466,10 @@ class CourseMaterializationService:
                         "source_refs": list(lesson_node.get("source_refs") or []),
                     }
                 )
-                assessment_items = [
-                    ("practice", item) for item in lesson_node.get("practices", [])
-                ] + [("case", item) for item in lesson_node.get("cases", [])]
-                for kind, item in assessment_items:
-                    if kind == "practice":
-                        description = "\n\n".join(
-                            value
-                            for value in (
-                                item.get("instructions"),
-                                f"Результат: {item.get('deliverable')}"
-                                if item.get("deliverable")
-                                else None,
-                            )
-                            if value
-                        )
-                    else:
-                        description = "\n\n".join(
-                            value
-                            for value in (
-                                item.get("scenario"),
-                                "\n".join(item.get("prompts") or []),
-                            )
-                            if value
-                        )
-                    task = Task(
-                        module_id=module.id,
-                        name=str(item.get("title") or item.get("id") or "Задание"),
-                        description=description,
-                    )
-                    db.add(task)
-                    db.flush()
-                    task_logical_id = str(item.get("id") or f"{lesson_id}:{kind}:{task.id}")
-                    task_canvas_id = f"task:{task.id}"
-                    persisted_ids[task_logical_id] = [task_canvas_id]
-                    canvas_nodes.append(
-                        {
-                            "id": task_canvas_id,
-                            "logical_id": task_logical_id,
-                            "type": "task",
-                            "label": task.name,
-                            "description": task.description or "",
-                            "source_refs": list(item.get("source_ref_ids") or []),
-                        }
-                    )
-                    canvas_edges.append(
-                        {
-                            "source": lesson_canvas_id,
-                            "target": task_canvas_id,
-                            "relation": "contains",
-                        }
-                    )
-                    task_count += 1
-                    rubric = item.get("rubric")
-                    if rubric:
-                        normalized = [
-                            {
-                                "id": criterion["id"],
-                                "title": criterion["title"],
-                                "description": criterion.get("description", ""),
-                                "max_points": criterion["weight"]
-                                * max(level["score"] for level in criterion["levels"]),
-                                "levels": [
-                                    {
-                                        "title": level["title"],
-                                        "description": level.get("description", ""),
-                                        "points": criterion["weight"] * level["score"],
-                                    }
-                                    for level in criterion["levels"]
-                                ],
-                            }
-                            for criterion in rubric.get("criteria", [])
-                        ]
-                        if not normalized or any(
-                            criterion["max_points"] <= 0 for criterion in normalized
-                        ):
-                            raise ValueError("generated practice requires positive rubric criteria")
-                        db.add(
-                            AssessmentDefinition(
-                                task_id=task.id,
-                                question_type="open",
-                                grading_mode="manual",
-                                correct_answers=[item["expected_response"]]
-                                if item.get("expected_response")
-                                else [],
-                                max_points=sum(criterion["max_points"] for criterion in normalized),
-                                criteria=normalized,
-                            )
-                        )
-                        levels = [
-                            {"criterion_id": criterion.get("id"), **level}
-                            for criterion in rubric.get("criteria", [])
-                            for level in criterion.get("levels", [])
-                        ]
-                        db.add(
-                            AssessmentRubric(
-                                course_id=course.id,
-                                task_id=task.id,
-                                criteria=rubric.get("criteria", []),
-                                levels=levels,
-                            )
-                        )
-                        rubric_count += 1
-                lesson_count += 1
+                CourseMaterializationService._materialize_practices(
+                    db, course, lesson, lesson_node, canvas
+                )
+                canvas.lesson_count += 1
             for test_node_id in module_tests[module_id]:
                 for position, question in enumerate(_question_payload(by_id[test_node_id])):
                     test = Test(
@@ -391,9 +484,9 @@ class CourseMaterializationService:
                     db.flush()
                     db.add(AssessmentDefinition(test_id=test.id, **question["definition"]))
                     test_canvas_id = f"test:{test.id}"
-                    persisted_ids.setdefault(test_node_id, []).append(test_canvas_id)
-                    persisted_ids[question["logical_id"]] = [test_canvas_id]
-                    canvas_nodes.append(
+                    canvas.persisted_ids.setdefault(test_node_id, []).append(test_canvas_id)
+                    canvas.persisted_ids[question["logical_id"]] = [test_canvas_id]
+                    canvas.canvas_nodes.append(
                         {
                             "id": test_canvas_id,
                             "logical_id": question["logical_id"],
@@ -409,74 +502,18 @@ class CourseMaterializationService:
                             "source_refs": question["source_refs"],
                         }
                     )
-                    test_count += 1
+                    canvas.test_count += 1
 
-        final_nodes = [
-            node
-            for node in nodes
-            if node.get("type") == "test" and node.get("assessment_scope") == "final"
-        ]
-        for final_node in final_nodes:
-            for position, question in enumerate(_question_payload(final_node)):
-                test = Test(
-                    course_id=course.id,
-                    assessment_scope="final",
-                    position=position,
-                    question=question["question"],
-                    answers=json.dumps(question["answers"], ensure_ascii=False),
-                    correct_answer=question["correct"],
-                )
-                db.add(test)
-                db.flush()
-                db.add(AssessmentDefinition(test_id=test.id, **question["definition"]))
-                test_canvas_id = f"test:{test.id}"
-                logical_test_id = str(final_node["id"])
-                persisted_ids.setdefault(logical_test_id, []).append(test_canvas_id)
-                persisted_ids[question["logical_id"]] = [test_canvas_id]
-                canvas_nodes.append(
-                    {
-                        "id": test_canvas_id,
-                        "logical_id": question["logical_id"],
-                        "type": "test",
-                        "assessment_scope": "final",
-                        "label": question["question"],
-                        "question": question["question"],
-                        "answers": question["answers"],
-                        "correct_answer": question["correct"],
-                        "question_type": question["definition"]["question_type"],
-                        "correct_answers": question["definition"]["correct_answers"],
-                        "position": position,
-                        "source_refs": question["source_refs"],
-                    }
-                )
-                test_count += 1
-        for edge in edges:
-            sources = persisted_ids.get(str(edge["source"]), [])
-            targets = persisted_ids.get(str(edge["target"]), [])
-            for source in sources:
-                for target in targets:
-                    canvas_edges.append(
-                        {
-                            "source": source,
-                            "target": target,
-                            "relation": edge.get("relation") or "contains",
-                        }
-                    )
-        unique_edges = []
-        seen_edges = set()
-        for edge in canvas_edges:
-            key = (edge["source"], edge["target"], edge["relation"])
-            if key not in seen_edges:
-                seen_edges.add(key)
-                unique_edges.append(edge)
+        CourseMaterializationService._materialize_final_tests(db, course, nodes, canvas)
+        unique_edges = CourseMaterializationService._materialized_edges(edges, canvas)
         db.flush()
         return {
             "module_ids": [module.id for module in materialized_modules],
             "module_count": len(materialized_modules),
-            "lesson_count": lesson_count,
-            "test_question_count": test_count,
-            "task_count": task_count,
-            "rubric_count": rubric_count,
-            "canvas_nodes": canvas_nodes,
+            "lesson_count": canvas.lesson_count,
+            "test_question_count": canvas.test_count,
+            "task_count": canvas.task_count,
+            "rubric_count": canvas.rubric_count,
+            "canvas_nodes": canvas.canvas_nodes,
             "canvas_edges": unique_edges,
         }

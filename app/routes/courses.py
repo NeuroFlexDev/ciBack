@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,10 +9,6 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.course import Course
 from app.models.domain_enums import CourseStatus
-from app.models.lesson import Lesson
-from app.models.module import Module
-from app.models.task import Task
-from app.models.test import Test
 from app.models.user import User
 from app.schemas.course import CourseDraftResponse
 from app.schemas.course_publication import CourseListItem, CoursePublishResponse
@@ -161,32 +158,39 @@ def create_course(
     except Exception as e:
         db.rollback()
         logger.error("Ошибка при создании курса: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка при создании курса")
+        raise HTTPException(status_code=500, detail="Ошибка при создании курса") from e
+
+
+@dataclass
+class CourseListFilters:
+    """Validated request parameters, resolved independently for each request."""
+
+    publication_status: str | None = Query(default=None, pattern="^(draft|published)$")
+    limit: int = Query(default=20, ge=1, le=100)
+    offset: int = Query(default=0, ge=0)
 
 
 @router.get("/courses/", summary="Получение всех курсов", response_model=list[CourseListItem])
 def get_all_courses(
     response: Response,
-    publication_status: str | None = Query(default=None, pattern="^(draft|published)$"),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    filters: CourseListFilters = Depends(),
 ):
     """
     Возвращает список всех курсов, сохраненных в базе данных.
     """
     try:
         items, total = CoursePublicationService.list_courses(
-            db, current_user.id, publication_status, limit, offset
+            db, current_user.id, filters.publication_status, filters.limit, filters.offset
         )
         response.headers["X-Total-Count"] = str(total)
-        response.headers["X-Limit"] = str(limit)
-        response.headers["X-Offset"] = str(offset)
+        response.headers["X-Limit"] = str(filters.limit)
+        response.headers["X-Offset"] = str(filters.offset)
         return items
     except Exception as e:
         logger.error("Ошибка при получении курсов: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка при получении курсов")
+        raise HTTPException(status_code=500, detail="Ошибка при получении курсов") from e
 
 
 @router.post(
@@ -199,6 +203,28 @@ def publish_course(
     course_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
     return CoursePublicationService.publish(db, course_id, current_user.id)
+
+
+def _apply_course_fields(db, course, update_data):
+    if course.position_id and "title" in update_data and update_data["title"] != course.name:
+        # A wizard opened before this rename must not silently restore its
+        # stale title when saving its generation settings.
+        from app.models.course_generation_settings import CourseGenerationSettings
+
+        generation = db.query(CourseGenerationSettings).filter_by(course_id=course.id).first()
+        if generation:
+            generation.revision += 1
+
+    for field, value in update_data.items():
+        # Если поле 'title' передается, оно маппится на поле 'name' в модели Course
+        if field == "title":
+            course.name = value
+        else:
+            setattr(course, field, value)
+    previous_revision = course.content_revision
+    CoursePublicationService.prepare_for_edit(course)
+    if course.content_revision == previous_revision:
+        course.content_revision += 1
 
 
 @router.put("/courses/{course_id}", summary="Обновление курса", response_model=CourseResponse)
@@ -246,26 +272,7 @@ def update_course(
         if not update_data:
             raise HTTPException(status_code=400, detail="Нет данных для обновления")
 
-        if course.position_id and "title" in update_data and update_data["title"] != course.name:
-            # A wizard opened before this rename must not silently restore its
-            # stale title when saving its generation settings.
-            from app.models.course_generation_settings import CourseGenerationSettings
-
-            generation = db.query(CourseGenerationSettings).filter_by(course_id=course.id).first()
-            if generation:
-                generation.revision += 1
-
-        for field, value in update_data.items():
-            # Если поле 'title' передается, оно маппится на поле 'name' в модели Course
-            if field == "title":
-                setattr(course, "name", value)
-            else:
-                setattr(course, field, value)
-        previous_revision = course.content_revision
-        CoursePublicationService.prepare_for_edit(course)
-        if course.content_revision == previous_revision:
-            course.content_revision += 1
-
+        _apply_course_fields(db, course, update_data)
         db.commit()
         db.refresh(course)
         logger.info("Курс обновлен: ID=%s, поля=%s", course.id, sorted(update_data))
@@ -282,7 +289,7 @@ def update_course(
     except Exception as e:
         db.rollback()
         logger.error("Ошибка при обновлении курса: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка при обновлении курса")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении курса") from e
 
 
 @router.delete("/courses/{course_id}", summary="Удаление курса")
@@ -343,7 +350,7 @@ def delete_course(
     except Exception as e:
         db.rollback()
         logger.error("Ошибка при удалении курса: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка при удалении курса")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении курса") from e
 
 
 @router.get("/courses/{course_id}/load_modules", summary="Получение полной структуры курса")

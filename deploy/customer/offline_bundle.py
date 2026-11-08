@@ -65,6 +65,23 @@ def inside(root, relative):
     return path
 
 
+def _validate_component_files(item):
+    license_info = item.get("license", {})
+    if (
+        not license_info.get("identifier")
+        or not isinstance(license_info.get("redistribution_review"), str)
+        or not license_info["redistribution_review"].strip()
+    ):
+        raise ValueError("Record license identifier and actual redistribution review reference")
+    for artifact in [license_info] + item.get("files", []):
+        if not re.fullmatch(r"[a-f0-9]{64}", artifact.get("sha256", "")) or not artifact.get(
+            "path"
+        ):
+            raise ValueError("Every file and license needs a pinned SHA-256 and path")
+    if not item.get("files"):
+        raise ValueError("An empty component is not an offline artifact")
+
+
 def validate_manifest(manifest):
     if (
         manifest.get("schema") != 1
@@ -95,20 +112,7 @@ def validate_manifest(manifest):
                 raise ValueError(
                     "A container component must contain exactly one docker-save archive"
                 )
-        license_info = item.get("license", {})
-        if (
-            not license_info.get("identifier")
-            or not isinstance(license_info.get("redistribution_review"), str)
-            or not license_info["redistribution_review"].strip()
-        ):
-            raise ValueError("Record license identifier and actual redistribution review reference")
-        for artifact in [license_info] + item.get("files", []):
-            if not re.fullmatch(r"[a-f0-9]{64}", artifact.get("sha256", "")) or not artifact.get(
-                "path"
-            ):
-                raise ValueError("Every file and license needs a pinned SHA-256 and path")
-        if not item.get("files"):
-            raise ValueError("An empty component is not an offline artifact")
+        _validate_component_files(item)
     if roles != REQUIRED:
         raise ValueError("Missing offline roles: " + ", ".join(sorted(REQUIRED - roles)))
 

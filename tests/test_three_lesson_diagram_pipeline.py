@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 """Local provider-boundary regression: real contracts, batching and persistence."""
 
 import json
@@ -290,6 +292,7 @@ def test_three_mermaid_lessons_reach_assessment_qa_and_persistence(
     monkeypatch.setattr(gateway, "invoke_messages", provider)
 
     def generate(template_name, **kwargs):
+        request = kwargs.pop("request")
         calls.append(template_name)
         if template_name == "ingestion_agent_prompt.j2":
             payload = ingestion
@@ -353,8 +356,10 @@ def test_three_mermaid_lessons_reach_assessment_qa_and_persistence(
         else:
             pytest.fail(f"Unexpected template: {template_name}")
         reply["payload"] = payload
-        kwargs.update(engine="vsellm", include_external_context=False, use_feedback=False)
-        return generate_from_prompt(template_name, **kwargs)
+        request = replace(
+            request, engine="vsellm", include_external_context=False, use_feedback=False
+        )
+        return generate_from_prompt(template_name, request=request, **kwargs)
 
     snapshot = {
         "goal": plan["goal"],

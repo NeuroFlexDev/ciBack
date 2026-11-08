@@ -101,6 +101,50 @@ def request_payload(query: str) -> dict:
     }
 
 
+def _append_text_citations(part, sources, seen):
+    text = part["text"]
+    previous_end, previous_passage = 0, ""
+    annotations = sorted(
+        part.get("annotations", []),
+        key=lambda item: (
+            item.get("start_index", -1) if isinstance(item.get("start_index"), int) else -1
+        ),
+    )
+    for annotation in annotations:
+        if annotation.get("type") != "url_citation":
+            continue
+        url = public_url(annotation.get("url", ""))
+        end = annotation.get("end_index")
+        start = annotation.get("start_index")
+        if (
+            not isinstance(start, int)
+            or not isinstance(end, int)
+            or not previous_end <= start < end <= len(text)
+        ):
+            continue
+        # Preserve the claim immediately before this citation; never
+        # attribute all other providers' claims to each cited page.
+        boundary = max(text.rfind("\n\n", 0, start), text.rfind("\n- ", 0, start))
+        passage = text[max(previous_end, boundary, 0) : start].strip()[-1800:]
+        passage = re.sub(r"\ue200[^\ue201]*\ue201|\[[^\]]*\]\([^)]*\)", "", passage).strip()
+        # Consecutive citations may support the same claim. A new claim
+        # starts after the previous annotation, even in one paragraph.
+        if not re.search(r"\w", passage):
+            passage = previous_passage
+        previous_end, previous_passage = end, passage
+        if not url or url in seen:
+            continue
+        if not passage:
+            continue
+        title = re.sub(r"[\x00-\x1f]", " ", str(annotation.get("title") or urlsplit(url).hostname))[
+            :512
+        ]
+        sources.append({"url": url, "title": title, "summary": passage})
+        seen.add(url)
+        if len(sources) == 5:
+            break
+
+
 def parse_response(data: dict) -> dict:
     usage_raw = data.get("usage") or {}
     usage = (
@@ -122,47 +166,7 @@ def parse_response(data: dict) -> dict:
         for part in message.get("content", []):
             if part.get("type") != "output_text" or not isinstance(part.get("text"), str):
                 continue
-            text = part["text"]
-            previous_end, previous_passage = 0, ""
-            annotations = sorted(
-                part.get("annotations", []),
-                key=lambda item: (
-                    item.get("start_index", -1) if isinstance(item.get("start_index"), int) else -1
-                ),
-            )
-            for annotation in annotations:
-                if annotation.get("type") != "url_citation":
-                    continue
-                url = public_url(annotation.get("url", ""))
-                end = annotation.get("end_index")
-                start = annotation.get("start_index")
-                if (
-                    not isinstance(start, int)
-                    or not isinstance(end, int)
-                    or not previous_end <= start < end <= len(text)
-                ):
-                    continue
-                # Preserve the claim immediately before this citation; never
-                # attribute all other providers' claims to each cited page.
-                boundary = max(text.rfind("\n\n", 0, start), text.rfind("\n- ", 0, start))
-                passage = text[max(previous_end, boundary, 0) : start].strip()[-1800:]
-                passage = re.sub(r"\ue200[^\ue201]*\ue201|\[[^\]]*\]\([^)]*\)", "", passage).strip()
-                # Consecutive citations may support the same claim. A new claim
-                # starts after the previous annotation, even in one paragraph.
-                if not re.search(r"\w", passage):
-                    passage = previous_passage
-                previous_end, previous_passage = end, passage
-                if not url or url in seen:
-                    continue
-                if not passage:
-                    continue
-                title = re.sub(
-                    r"[\x00-\x1f]", " ", str(annotation.get("title") or urlsplit(url).hostname)
-                )[:512]
-                sources.append({"url": url, "title": title, "summary": passage})
-                seen.add(url)
-                if len(sources) == 5:
-                    break
+            _append_text_citations(part, sources, seen)
     if not sources:
         raise SearchUnavailable("web_search_no_citations", request_sent=True, usage=usage)
     return {

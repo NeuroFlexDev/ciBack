@@ -12,6 +12,7 @@ from app.ai.evidence import rank_sources
 from app.core.config import settings
 from app.models.ai_state import ChunkEmbedding
 from app.repositories.retrieval import RetrievalRepository
+from app.services.ai_resources import ResourceOutcome, ResourceReservation
 from app.services.vector_store import VectorMatch, VectorSearchFilters
 
 logger = logging.getLogger(__name__)
@@ -34,13 +35,15 @@ def metered_embedding(db, owner_id, course_id, texts, *, query=False):
     rate = Decimal(0) if provider.local else settings.EMBEDDING_RUB_PER_MILLION
     resource = reserve(
         db,
-        owner_id=owner_id,
-        course_id=course_id,
-        operation="embedding",
-        lane="interactive" if query else "metered",
-        tokens=tokens,
-        cost=tokens * rate / Decimal(1000000),
-        timeout=60,
+        reservation=ResourceReservation(
+            owner_id=owner_id,
+            course_id=course_id,
+            operation="embedding",
+            lane="interactive" if query else "metered",
+            tokens=tokens,
+            cost=tokens * rate / Decimal(1000000),
+            timeout=60,
+        ),
     )
     db.commit()
     try:
@@ -49,7 +52,7 @@ def metered_embedding(db, owner_id, course_id, texts, *, query=False):
         finish(db, resource)
         return result
     except Exception:
-        finish(db, resource, failed=True)
+        finish(db, resource, outcome=ResourceOutcome(failed=True))
         raise
 
 
@@ -206,7 +209,7 @@ class PersistentVectorStore:
                         other_norm = math.sqrt(sum(x * x for x in row.vector)) or 1
                         candidates.append(
                             (
-                                sum(a * b for a, b in zip(vector, row.vector))
+                                sum(a * b for a, b in zip(vector, row.vector, strict=True))
                                 / (norm * other_norm),
                                 row.chunk_id,
                             )

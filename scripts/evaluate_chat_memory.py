@@ -29,7 +29,7 @@ def main():
     from app.models.ai_state import ChatMemory
     from app.models.chat import Chat
     from app.models.course import Course
-    from app.services.chat_service import chat_generate
+    from app.services.chat_service import ChatGenerationRequest, chat_generate
 
     session = SessionLocal()
     course = session.query(Course).one()
@@ -55,9 +55,8 @@ def main():
             answer = chat_generate(
                 chat_id=chat.id,
                 user_id=course.owner_id,
-                text=question,
                 db=session,
-                engine_name="vsellm",
+                request=ChatGenerationRequest(text=question, engine_name="vsellm"),
             )
             memory = session.get(ChatMemory, chat.id)
             report["messages"].append(

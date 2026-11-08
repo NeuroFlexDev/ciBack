@@ -17,8 +17,8 @@ from app.models.materials import LearnerAssistantMessage, OrganizationMaterialPo
 from app.models.user import User
 from app.services.ai_resources import usage_summary
 from app.services.interactive_quota import monthly_requests
-from app.services.learner_assistant_service import send_message
-from app.services.scoped_ai import tracked_completion
+from app.services.learner_assistant_service import AssistantMessage, send_message
+from app.services.scoped_ai import TrackedCompletionRequest, tracked_completion
 from tests.test_learning_runtime import assign, publish, world
 
 
@@ -35,11 +35,11 @@ def ask(db, user, **kwargs):
         db,
         user.id,
         None,
-        "chat",
-        [{"role": "user", "content": "Explain"}],
-        invoke=response,
         max_tokens=50,
         **kwargs,
+        request=TrackedCompletionRequest(
+            role="chat", messages=[{"role": "user", "content": "Explain"}], invoke=response
+        ),
     )
 
 
@@ -130,10 +130,18 @@ def test_learner_receipt_is_frozen_idempotent_and_counts_with_author_chat(
 
     monkeypatch.setattr("app.ai.gateway.invoke_messages", invoke)
     first = send_message(
-        db_session, world["learner"], assignment["id"], lesson.id, "Explain", "quota-learner-123"
+        db_session,
+        world["learner"],
+        assignment["id"],
+        lesson.id,
+        message=AssistantMessage(question="Explain", request_id="quota-learner-123"),
     )
     retry = send_message(
-        db_session, world["learner"], assignment["id"], lesson.id, "Explain", "quota-learner-123"
+        db_session,
+        world["learner"],
+        assignment["id"],
+        lesson.id,
+        message=AssistantMessage(question="Explain", request_id="quota-learner-123"),
     )
     assert first.id == retry.id and calls == [True]
     assert first.organization_id == world["org"].id and first.scope_status == "captured"
@@ -144,8 +152,7 @@ def test_learner_receipt_is_frozen_idempotent_and_counts_with_author_chat(
             world["learner"],
             assignment["id"],
             lesson.id,
-            "Another",
-            "quota-learner-456",
+            message=AssistantMessage(question="Another", request_id="quota-learner-456"),
         )
     assert exhausted.value.status_code == 429
     db_session.rollback()
@@ -176,11 +183,13 @@ def test_membership_change_between_receipt_and_provider_cannot_charge_new_tenant
     complete = ai_resources.completion
     calls = []
 
-    def transfer_before_reservation(db, owner_id, course_id, role, messages, **kwargs):
+    def transfer_before_reservation(db, owner_id, course_id, *, context, **kwargs):
+        from dataclasses import replace
+
         world["author"].organization_id = world["other_org"].id
         db.commit()
-        kwargs["invoke"] = lambda *args, **kw: calls.append(True)
-        return complete(db, owner_id, course_id, role, messages, **kwargs)
+        context = replace(context, invoke=lambda *args, **kw: calls.append(True))
+        return complete(db, owner_id, course_id, context=context, **kwargs)
 
     monkeypatch.setattr(ai_resources, "completion", transfer_before_reservation)
     with pytest.raises(HTTPException) as denied:

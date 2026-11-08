@@ -9,7 +9,7 @@ from app.database.db import Base
 from app.models.integrations import MobileRefreshToken, MobileSession
 from app.models.user import User
 from app.routes.mobile_auth import LoginInput, RefreshInput, login, refresh
-from app.services.mobile_sessions import issue
+from app.services.mobile_sessions import MobileSessionOptions, issue
 from tests.test_identity_locks_postgres import pg_sessions  # noqa: F401
 
 
@@ -56,7 +56,7 @@ def test_login_refresh_and_failed_issue_are_atomic_with_constraints(constrained_
             == 1
         )
         # Issuance must not commit independently: a later failure rolls back both rows.
-        issue(db, user, device_name="Rolled back")
+        issue(db, user, options=MobileSessionOptions(device_name="Rolled back"))
         db.rollback()
         assert db.scalar(select(func.count()).select_from(MobileSession)) == 1
         assert db.scalar(select(func.count()).select_from(MobileRefreshToken)) == 2

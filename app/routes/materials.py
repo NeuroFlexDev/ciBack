@@ -10,8 +10,10 @@ from app.core.config import settings
 from app.database.db import get_db
 from app.models.materials import CourseImage
 from app.services import image_service as images
+from app.services.ai_resources import ResourceOutcome
 from app.services.auth_service import get_current_user, require_admin
 from app.services.feature_access import feature_enabled, require_feature
+from app.services.learning_service import LearningScope
 
 router = APIRouter()
 
@@ -190,7 +192,10 @@ def list_images(
         course.organization_id
         and settings_for(db, course.organization_id).rules.get("require_independent_approval")
     )
-    reviewer = bool(course.organization_id and can_scope(db, user, "reviewer", course_id=course.id))
+    reviewer = bool(
+        course.organization_id
+        and can_scope(db, user, scope=LearningScope(role="reviewer", course_id=course.id))
+    )
     query = (
         db.query(CourseImage)
         .filter_by(course_id=course_id)
@@ -266,7 +271,10 @@ def list_video(
     course = images.course_access(db, user, course_id, allow_reviewer=True)
     from app.services.learning_service import can_scope
 
-    reviewer = bool(course.organization_id and can_scope(db, user, "reviewer", course_id=course_id))
+    reviewer = bool(
+        course.organization_id
+        and can_scope(db, user, scope=LearningScope(role="reviewer", course_id=course_id))
+    )
     enabled = feature_enabled(db, user.organization_id, "images")
     query = db.query(CourseImage).filter(
         CourseImage.course_id == course_id, CourseImage.mime_type.like("video/%")
@@ -356,7 +364,7 @@ def get_image(image_id: int, db: Session = Depends(get_db), user=Depends(get_cur
         db.commit()
         from app.services.ai_resources import finish
 
-        finish(db, f"image:{item.id}", failed=True)
+        finish(db, f"image:{item.id}", outcome=ResourceOutcome(failed=True))
     result = images.image_out(item)
     try:
         images.course_access(db, user, item.course_id, allow_reviewer=True)
@@ -403,7 +411,7 @@ def review_image(
         course = db.get(Course, item.course_id)
         if settings_for(db, user.organization_id).rules.get("require_independent_approval") and (
             user.id in {item.owner_id, course.owner_id}
-            or not can_scope(db, user, "reviewer", course_id=course.id)
+            or not can_scope(db, user, scope=LearningScope(role="reviewer", course_id=course.id))
         ):
             raise HTTPException(403, "Иллюстрацию должен утвердить независимый проверяющий курса")
     if item.status != "pending_review":
@@ -440,7 +448,7 @@ class MaterialPolicyInput(BaseModel):
 def get_policy(organization_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
     from app.models.materials import OrganizationMaterialPolicy
     from app.services.material_quota import used_disk_bytes
-    from app.services.organization_access import lock_org, member_ids
+    from app.services.organization_access import lock_org
 
     lock_org(db, organization_id)
     row = db.get(OrganizationMaterialPolicy, organization_id)

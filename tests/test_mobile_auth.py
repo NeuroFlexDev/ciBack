@@ -97,9 +97,11 @@ def test_mobile_bootstrap_reports_deployment_overrides(client, monkeypatch):
     ],
 )
 def test_mobile_release_settings_reject_invalid_values(overrides):
+    from pydantic import ValidationError
+
     from app.core.config import Settings
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings(_env_file=None, DATABASE_URL="sqlite://", JWT_SECRET="x" * 40, **overrides)
 
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 from fastapi import HTTPException
@@ -28,6 +29,7 @@ from app.repositories.pipeline import PipelineRepository
 from app.schemas.pipeline import GeneratedGraphPayload
 from app.services.agent_runtime import AgentRuntime
 from app.services.agentic_course_pipeline import AgenticCoursePipeline
+from app.services.ai_resources import ResourceOutcome, ResourceReservation
 from app.services.course_generation_settings_service import (
     generation_settings_snapshot,
     settings_not_found,
@@ -104,6 +106,23 @@ def _apply_assessment_settings(
     return nodes, edges
 
 
+@dataclass(frozen=True, kw_only=True)
+class GraphGenerationRequest:
+    """Parameters for prepare_graph_generation, preserving its original defaults."""
+
+    document_ids: list[int]
+    request_id: str | None = None
+    web_search_enabled: bool = True
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReindexOptions:
+    """Parameters for reindex_document, preserving its original defaults."""
+
+    run_id: int | None = None
+    queue_only: bool = False
+
+
 class PipelineService:
     GENERATION_STAGES = (
         ("ingestion", "Извлечение структуры документов"),
@@ -151,14 +170,11 @@ class PipelineService:
 
     @staticmethod
     def prepare_graph_generation(
-        db: Session,
-        *,
-        course_id: int,
-        owner_id: int,
-        document_ids: list[int],
-        request_id: str | None = None,
-        web_search_enabled: bool = True,
+        db: Session, *, course_id: int, owner_id: int, request: GraphGenerationRequest
     ) -> GenerationRun:
+        document_ids = request.document_ids
+        request_id = request.request_id
+        web_search_enabled = request.web_search_enabled
         course = PipelineRepository.get_owned_course(db, course_id, owner_id, for_update=True)
         if course is None:
             raise HTTPException(status_code=404, detail="Курс не найден")
@@ -240,13 +256,15 @@ class PipelineService:
 
             reserve(
                 db,
-                owner_id=owner_id,
-                course_id=course_id,
-                operation="generation",
-                lane="background",
-                key=f"generation:{run.id}",
-                run_id=run.id,
-                queued=True,
+                reservation=ResourceReservation(
+                    owner_id=owner_id,
+                    course_id=course_id,
+                    operation="generation",
+                    lane="background",
+                    key=f"generation:{run.id}",
+                    run_id=run.id,
+                    queued=True,
+                ),
             )
             db.commit()
         except IntegrityError as exc:
@@ -470,242 +488,9 @@ class PipelineService:
         document_id: int,
         owner_id: int,
         storage: FileStorage,
-        run_id: int | None = None,
-        queue_only: bool = False,
+        options: ReindexOptions | None = None,
     ) -> GenerationRun:
-        document = PipelineRepository.get_owned_document(db, document_id, owner_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if document.source_type == "web_search":
-            raise HTTPException(
-                409,
-                {
-                    "code": "web_snapshot_immutable",
-                    "message": "Снимок интернет-источника неизменяем. Новый поиск создаёт новый снимок.",
-                },
-            )
-        if document.status == DocumentStatus.ARCHIVED.value:
-            raise HTTPException(status_code=409, detail="Документ архивирован")
-
-        if run_id is not None:
-            run = db.get(GenerationRun, run_id)
-            if (
-                run is None
-                or run.run_type != GenerationRunType.DOCUMENT_INDEX.value
-                or run.document_id != document.id
-                or run.owner_id != owner_id
-                or run.status
-                not in {GenerationRunStatus.QUEUED.value, GenerationRunStatus.RUNNING.value}
-            ):
-                return run
-            from app.models.ai_resources import AIResourceUsage
-
-            resource = db.query(AIResourceUsage).filter_by(key=f"document:{run.id}").first()
-            if resource is None:
-                from app.services.ai_resources import reserve
-
-                resource = reserve(
-                    db,
-                    owner_id=owner_id,
-                    course_id=document.course_id,
-                    operation="document",
-                    lane="background",
-                    key=f"document:{run.id}",
-                    run_id=run.id,
-                    timeout=settings.AI_JOB_TIMEOUT_SECONDS,
-                    partial_ocr=True,
-                    pages=settings.AI_OCR_MAX_PAGES
-                    if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED
-                    else 0,
-                )
-            run.status = GenerationRunStatus.RUNNING.value
-            if document.status != DocumentStatus.INDEXED.value:
-                document.status = DocumentStatus.PROCESSING.value
-            db.commit()
-        else:
-            active_run = (
-                db.query(GenerationRun)
-                .filter(
-                    GenerationRun.document_id == document.id,
-                    GenerationRun.run_type == GenerationRunType.DOCUMENT_INDEX.value,
-                    GenerationRun.status.in_(
-                        (GenerationRunStatus.QUEUED.value, GenerationRunStatus.RUNNING.value)
-                    ),
-                    GenerationRun.is_deleted.is_(False),
-                )
-                .order_by(GenerationRun.id.desc())
-                .first()
-            )
-            if active_run is not None:
-                return active_run
-            fingerprint = hashlib.sha256(
-                f"{document.id}:{document.version}:{document.content_hash}".encode()
-            ).hexdigest()
-            input_docs = [
-                {
-                    "document_id": document.id,
-                    "version": document.version,
-                    "content_hash": document.content_hash,
-                }
-            ]
-            run = GenerationRun(
-                owner_id=owner_id,
-                course_id=document.course_id,
-                document_id=document.id,
-                run_type=GenerationRunType.DOCUMENT_INDEX.value,
-                status=GenerationRunStatus.QUEUED.value,
-                input_docs=input_docs,
-                input_fingerprint=fingerprint,
-            )
-            if document.status != DocumentStatus.INDEXED.value:
-                document.status = DocumentStatus.QUEUED.value
-            document.processing_error = None
-            db.add(run)
-            db.flush()
-            from app.services.ai_resources import reserve
-
-            resource = reserve(
-                db,
-                owner_id=owner_id,
-                course_id=document.course_id,
-                operation="document",
-                lane="background",
-                key=f"document:{run.id}",
-                run_id=run.id,
-                queued=queue_only,
-                timeout=settings.AI_JOB_TIMEOUT_SECONDS,
-                partial_ocr=True,
-                pages=settings.AI_OCR_MAX_PAGES
-                if document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED
-                else 0,
-            )
-            db.commit()
-            db.refresh(run)
-            run_id = run.id
-            if queue_only:
-                from app.services.job_queue import enqueue_document_index
-
-                enqueue_document_index(run.id)
-                return run
-
-        started = time.perf_counter()
-        try:
-            from app.services.ai_resources import finish
-
-            content = storage.read_bytes(document.storage_key)
-            blocks, extraction_usage = extract_blocks(
-                content, document.mime_type, with_usage=True, ocr_page_limit=resource.ocr_pages
-            )
-            resource.ocr_pages = extraction_usage.get("ocr_pages", resource.ocr_pages)
-            db.commit()
-            if sum(len(block.text) for block in blocks) > settings.DOCUMENT_MAX_EXTRACTED_CHARS:
-                raise ValueError("Извлечённый текст превышает лимит; разделите документ")
-            chunks = chunk_blocks(
-                blocks,
-                max_chars=settings.DOCUMENT_CHUNK_CHARS,
-                overlap_chars=settings.DOCUMENT_CHUNK_OVERLAP_CHARS,
-            )
-            if not chunks:
-                raise ValueError("В документе не найден текст для индексации")
-
-            chunk_models = PipelineRepository.replace_chunks(db, document, chunks)
-            vector_chunks = [
-                {
-                    "chunk_id": chunk_model.id,
-                    "chunk_index": chunk_model.chunk_index,
-                    "text": chunk_model.text,
-                    "page": chunk_model.page,
-                    "section": chunk_model.section,
-                    "source": document.original_filename,
-                    "source_type": document.source_type,
-                    "owner_id": document.owner_id,
-                    "organization_id": document.course.organization_id,
-                    "course_id": document.course_id,
-                }
-                for chunk_model in chunk_models
-            ]
-            from app.ai import gateway
-
-            if gateway.configured() or settings.ENV != "test":
-                from app.ai.retrieval import persist_embeddings
-
-                embedding_ids = persist_embeddings(db, chunk_models)
-            else:
-                embedding_ids = replace_document_embeddings(
-                    document.id, document.version, vector_chunks
-                )
-            for chunk_model, embedding_id in zip(chunk_models, embedding_ids, strict=True):
-                chunk_model.embedding_id = embedding_id
-
-            if document.supersedes_document_id is not None:
-                previous = db.get(Document, document.supersedes_document_id)
-                if previous is None or previous.document_key != document.document_key:
-                    raise ValueError("Некорректная цепочка версий документа")
-                if previous.learner_visible:
-                    course = PipelineRepository.get_owned_course(
-                        db, document.course_id, owner_id, for_update=True
-                    )
-                    course.content_revision += 1
-                previous.is_current = False
-                db.flush()
-                document.is_current = True
-
-            document.status = DocumentStatus.INDEXED.value
-            document.processing_error = None
-            run.status = GenerationRunStatus.SUCCEEDED.value
-            run.latency_ms = _elapsed_ms(started)
-            run.output = {
-                "document_id": document.id,
-                "document_version": document.version,
-                "chunk_count": len(chunk_models),
-                "embedding_count": len(embedding_ids),
-                "semantic_embedding_count": sum(value.startswith("db:") for value in embedding_ids),
-                "ocr_pages": resource.ocr_pages,
-            }
-            db.commit()
-            finish(db, resource)
-            if document.supersedes_document_id is not None:
-                try:
-                    proposal = CourseUpdateService.analyze_replacement(
-                        db,
-                        document=document,
-                        run=run,
-                        generate=generate_from_prompt,
-                    )
-                    if proposal is not None:
-                        run.output = {
-                            **(run.output or {}),
-                            "update_proposal_id": proposal.id,
-                        }
-                        db.commit()
-                except Exception as update_exc:
-                    db.rollback()
-                    logger.warning(
-                        "Update impact analysis failed run_id=%s error=%s",
-                        run.id,
-                        update_exc.__class__.__name__,
-                    )
-            db.refresh(run)
-            return run
-        except Exception as exc:
-            db.rollback()
-            error = _safe_error(exc)
-            failed_run = db.get(GenerationRun, run_id)
-            failed_document = PipelineRepository.get_owned_document(db, document_id, owner_id)
-            if failed_run is not None:
-                failed_run.status = GenerationRunStatus.FAILED.value
-                failed_run.error = error
-                failed_run.latency_ms = _elapsed_ms(started)
-            if (
-                failed_document is not None
-                and failed_document.status != DocumentStatus.INDEXED.value
-            ):
-                failed_document.status = DocumentStatus.FAILED.value
-                failed_document.processing_error = _safe_document_error(exc)
-            db.commit()
-            finish(db, resource, failed=True)
-            status_code = 422 if isinstance(exc, (ValueError, UnicodeError)) else 503
-            raise PipelineRunFailed(run_id, error, status_code) from exc
+        return _DocumentIndexing(db, document_id, owner_id, storage, options).execute()
 
     @staticmethod
     def generate_graph(
@@ -716,16 +501,301 @@ class PipelineService:
         force: bool,
         prepared_run_id: int | None = None,
     ) -> GenerationRun:
-        course = PipelineRepository.get_owned_course(db, course_id, owner_id)
-        if course is None:
-            raise HTTPException(status_code=404, detail="Курс не найден")
-        prepared_run = (
-            db.get(GenerationRun, prepared_run_id) if prepared_run_id is not None else None
+        return _GraphGeneration(db, course_id, owner_id, force, prepared_run_id).execute()
+
+
+class _DocumentIndexing:
+    def __init__(self, db, document_id, owner_id, storage, options):
+        self.db = db
+        self.document_id = document_id
+        self.owner_id = owner_id
+        self.storage = storage
+        self.options = options
+
+    def _activate_document_version(self):
+        if self.document.supersedes_document_id is not None:
+            previous = self.db.get(Document, self.document.supersedes_document_id)
+            if previous is None or previous.document_key != self.document.document_key:
+                raise ValueError("Некорректная цепочка версий документа")
+            if previous.learner_visible:
+                course = PipelineRepository.get_owned_course(
+                    self.db, self.document.course_id, self.owner_id, for_update=True
+                )
+                course.content_revision += 1
+            previous.is_current = False
+            self.db.flush()
+            self.document.is_current = True
+
+    def _index_chunks(self, chunks):
+        chunk_models = PipelineRepository.replace_chunks(self.db, self.document, chunks)
+        vector_chunks = [
+            {
+                "chunk_id": chunk_model.id,
+                "chunk_index": chunk_model.chunk_index,
+                "text": chunk_model.text,
+                "page": chunk_model.page,
+                "section": chunk_model.section,
+                "source": self.document.original_filename,
+                "source_type": self.document.source_type,
+                "owner_id": self.document.owner_id,
+                "organization_id": self.document.course.organization_id,
+                "course_id": self.document.course_id,
+            }
+            for chunk_model in chunk_models
+        ]
+        from app.ai import gateway
+
+        if gateway.configured() or settings.ENV != "test":
+            from app.ai.retrieval import persist_embeddings
+
+            embedding_ids = persist_embeddings(self.db, chunk_models)
+        else:
+            embedding_ids = replace_document_embeddings(
+                self.document.id, self.document.version, vector_chunks
+            )
+        for chunk_model, embedding_id in zip(chunk_models, embedding_ids, strict=True):
+            chunk_model.embedding_id = embedding_id
+        return chunk_models, embedding_ids
+
+    def _analyze_replacement(self):
+        if self.document.supersedes_document_id is not None:
+            try:
+                proposal = CourseUpdateService.analyze_replacement(
+                    self.db,
+                    document=self.document,
+                    run=self.run,
+                    generate=generate_from_prompt,
+                )
+                if proposal is not None:
+                    self.run.output = {
+                        **(self.run.output or {}),
+                        "update_proposal_id": proposal.id,
+                    }
+                    self.db.commit()
+            except Exception as update_exc:
+                self.db.rollback()
+                logger.warning(
+                    "Update impact analysis failed run_id=%s error=%s",
+                    self.run.id,
+                    update_exc.__class__.__name__,
+                )
+
+    def _record_index_failure(self, exc):
+        from app.services.ai_resources import finish
+
+        self.db.rollback()
+        error = _safe_error(exc)
+        failed_run = self.db.get(GenerationRun, self.run_id)
+        failed_document = PipelineRepository.get_owned_document(
+            self.db, self.document_id, self.owner_id
         )
-        generation_settings = PipelineRepository.get_generation_settings(db, course_id)
-        if generation_settings is None:
+        if failed_run is not None:
+            failed_run.status = GenerationRunStatus.FAILED.value
+            failed_run.error = error
+            failed_run.latency_ms = _elapsed_ms(self.started)
+        if failed_document is not None and failed_document.status != DocumentStatus.INDEXED.value:
+            failed_document.status = DocumentStatus.FAILED.value
+            failed_document.processing_error = _safe_document_error(exc)
+        self.db.commit()
+        finish(self.db, self.resource, outcome=ResourceOutcome(failed=True))
+        return error
+
+    def _prepare_index_run(self):
+        if self.run_id is not None:
+            self.run = self.db.get(GenerationRun, self.run_id)
+            if (
+                self.run is None
+                or self.run.run_type != GenerationRunType.DOCUMENT_INDEX.value
+                or self.run.document_id != self.document.id
+                or self.run.owner_id != self.owner_id
+                or self.run.status
+                not in {GenerationRunStatus.QUEUED.value, GenerationRunStatus.RUNNING.value}
+            ):
+                return False
+            from app.models.ai_resources import AIResourceUsage
+
+            self.resource = (
+                self.db.query(AIResourceUsage).filter_by(key=f"document:{self.run.id}").first()
+            )
+            if self.resource is None:
+                from app.services.ai_resources import reserve
+
+                self.resource = reserve(
+                    self.db,
+                    reservation=ResourceReservation(
+                        owner_id=self.owner_id,
+                        course_id=self.document.course_id,
+                        operation="document",
+                        lane="background",
+                        key=f"document:{self.run.id}",
+                        run_id=self.run.id,
+                        timeout=settings.AI_JOB_TIMEOUT_SECONDS,
+                        partial_ocr=True,
+                        pages=settings.AI_OCR_MAX_PAGES
+                        if self.document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED
+                        else 0,
+                    ),
+                )
+            self.run.status = GenerationRunStatus.RUNNING.value
+            if self.document.status != DocumentStatus.INDEXED.value:
+                self.document.status = DocumentStatus.PROCESSING.value
+            self.db.commit()
+        else:
+            active_run = (
+                self.db.query(GenerationRun)
+                .filter(
+                    GenerationRun.document_id == self.document.id,
+                    GenerationRun.run_type == GenerationRunType.DOCUMENT_INDEX.value,
+                    GenerationRun.status.in_(
+                        (GenerationRunStatus.QUEUED.value, GenerationRunStatus.RUNNING.value)
+                    ),
+                    GenerationRun.is_deleted.is_(False),
+                )
+                .order_by(GenerationRun.id.desc())
+                .first()
+            )
+            if active_run is not None:
+                self.run = active_run
+                return False
+            fingerprint = hashlib.sha256(
+                f"{self.document.id}:{self.document.version}:{self.document.content_hash}".encode()
+            ).hexdigest()
+            input_docs = [
+                {
+                    "document_id": self.document.id,
+                    "version": self.document.version,
+                    "content_hash": self.document.content_hash,
+                }
+            ]
+            self.run = GenerationRun(
+                owner_id=self.owner_id,
+                course_id=self.document.course_id,
+                document_id=self.document.id,
+                run_type=GenerationRunType.DOCUMENT_INDEX.value,
+                status=GenerationRunStatus.QUEUED.value,
+                input_docs=input_docs,
+                input_fingerprint=fingerprint,
+            )
+            if self.document.status != DocumentStatus.INDEXED.value:
+                self.document.status = DocumentStatus.QUEUED.value
+            self.document.processing_error = None
+            self.db.add(self.run)
+            self.db.flush()
+            from app.services.ai_resources import reserve
+
+            self.resource = reserve(
+                self.db,
+                reservation=ResourceReservation(
+                    owner_id=self.owner_id,
+                    course_id=self.document.course_id,
+                    operation="document",
+                    lane="background",
+                    key=f"document:{self.run.id}",
+                    run_id=self.run.id,
+                    queued=self.queue_only,
+                    timeout=settings.AI_JOB_TIMEOUT_SECONDS,
+                    partial_ocr=True,
+                    pages=settings.AI_OCR_MAX_PAGES
+                    if self.document.mime_type == "application/pdf" and settings.AI_OCR_ENABLED
+                    else 0,
+                ),
+            )
+            self.db.commit()
+            self.db.refresh(self.run)
+            self.run_id = self.run.id
+            if self.queue_only:
+                from app.services.job_queue import enqueue_document_index
+
+                enqueue_document_index(self.run.id)
+                return False
+        return True
+
+    def execute(self):
+        self.options = self.options or ReindexOptions()
+        self.run_id = self.options.run_id
+        self.queue_only = self.options.queue_only
+        self.document = PipelineRepository.get_owned_document(
+            self.db, self.document_id, self.owner_id
+        )
+        if self.document is None:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if self.document.source_type == "web_search":
+            raise HTTPException(
+                409,
+                {
+                    "code": "web_snapshot_immutable",
+                    "message": "Снимок интернет-источника неизменяем. Новый поиск создаёт новый снимок.",
+                },
+            )
+        if self.document.status == DocumentStatus.ARCHIVED.value:
+            raise HTTPException(status_code=409, detail="Документ архивирован")
+
+        proceed = self._prepare_index_run()
+        if not proceed:
+            return self.run
+        self.started = time.perf_counter()
+        try:
+            from app.services.ai_resources import finish
+
+            content = self.storage.read_bytes(self.document.storage_key)
+            blocks, extraction_usage = extract_blocks(
+                content,
+                self.document.mime_type,
+                with_usage=True,
+                ocr_page_limit=self.resource.ocr_pages,
+            )
+            self.resource.ocr_pages = extraction_usage.get("ocr_pages", self.resource.ocr_pages)
+            self.db.commit()
+            if sum(len(block.text) for block in blocks) > settings.DOCUMENT_MAX_EXTRACTED_CHARS:
+                raise ValueError("Извлечённый текст превышает лимит; разделите документ")
+            chunks = chunk_blocks(
+                blocks,
+                max_chars=settings.DOCUMENT_CHUNK_CHARS,
+                overlap_chars=settings.DOCUMENT_CHUNK_OVERLAP_CHARS,
+            )
+            if not chunks:
+                raise ValueError("В документе не найден текст для индексации")
+
+            chunk_models, embedding_ids = self._index_chunks(chunks)
+            self._activate_document_version()
+            self.document.status = DocumentStatus.INDEXED.value
+            self.document.processing_error = None
+            self.run.status = GenerationRunStatus.SUCCEEDED.value
+            self.run.latency_ms = _elapsed_ms(self.started)
+            self.run.output = {
+                "document_id": self.document.id,
+                "document_version": self.document.version,
+                "chunk_count": len(chunk_models),
+                "embedding_count": len(embedding_ids),
+                "semantic_embedding_count": sum(value.startswith("db:") for value in embedding_ids),
+                "ocr_pages": self.resource.ocr_pages,
+            }
+            self.db.commit()
+            finish(self.db, self.resource)
+            self._analyze_replacement()
+            self.db.refresh(self.run)
+            return self.run
+        except Exception as exc:
+            error = self._record_index_failure(exc)
+            status_code = 422 if isinstance(exc, (ValueError, UnicodeError)) else 503
+            raise PipelineRunFailed(self.run_id, error, status_code) from exc
+
+
+class _GraphGeneration:
+    def __init__(self, db, course_id, owner_id, force, prepared_run_id):
+        self.db = db
+        self.course_id = course_id
+        self.owner_id = owner_id
+        self.force = force
+        self.prepared_run_id = prepared_run_id
+
+    def _prepare_graph_inputs(self):
+        self.generation_settings = PipelineRepository.get_generation_settings(
+            self.db, self.course_id
+        )
+        if self.generation_settings is None:
             raise settings_not_found()
-        if course.status == CourseStatus.GENERATING.value and prepared_run is None:
+        if self.course.status == CourseStatus.GENERATING.value and self.prepared_run is None:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -733,7 +803,7 @@ class PipelineService:
                     "message": "Генерация курса уже выполняется",
                 },
             )
-        if prepared_run is None and course.status not in {
+        if self.prepared_run is None and self.course.status not in {
             CourseStatus.CONFIGURED.value,
             CourseStatus.GENERATION_FAILED.value,
             CourseStatus.READY.value,
@@ -745,303 +815,336 @@ class PipelineService:
                     "message": "Курс не готов к генерации",
                 },
             )
-        settings_snapshot = (
-            prepared_run.settings_snapshot
-            if prepared_run is not None
-            else generation_settings_snapshot(course, generation_settings)
+        self.settings_snapshot = (
+            self.prepared_run.settings_snapshot
+            if self.prepared_run is not None
+            else generation_settings_snapshot(self.course, self.generation_settings)
         )
-        if prepared_run is None:
+        if self.prepared_run is None:
             from app.services.organization_ai_context import organization_ai_context
 
-            settings_snapshot["organization_context"] = organization_ai_context(
-                db, course.organization_id
+            self.settings_snapshot["organization_context"] = organization_ai_context(
+                self.db, self.course.organization_id
             )
-        if prepared_run is not None:
-            documents = PipelineRepository.documents_for_snapshot(
-                db,
-                course_id,
-                owner_id,
-                prepared_run.input_documents_snapshot,
+        if self.prepared_run is not None:
+            self.documents = PipelineRepository.documents_for_snapshot(
+                self.db,
+                self.course_id,
+                self.owner_id,
+                self.prepared_run.input_documents_snapshot,
             )
         else:
-            documents = PipelineRepository.indexed_documents(db, course_id, owner_id)
-        if not documents:
+            self.documents = PipelineRepository.indexed_documents(
+                self.db, self.course_id, self.owner_id
+            )
+        if not self.documents:
             raise HTTPException(status_code=409, detail="У курса нет проиндексированных документов")
 
-        input_docs = [
+        self.input_docs = [
             {
                 "document_id": document.id,
                 "version": document.version,
                 "content_hash": document.content_hash,
             }
-            for document in documents
+            for document in self.documents
         ]
         documents_fingerprint = "|".join(
-            f"{item['document_id']}:{item['version']}:{item['content_hash']}" for item in input_docs
+            f"{item['document_id']}:{item['version']}:{item['content_hash']}"
+            for item in self.input_docs
         )
         fingerprint_source = (
             documents_fingerprint
             + "|"
-            + json.dumps(settings_snapshot, ensure_ascii=False, sort_keys=True)
+            + json.dumps(self.settings_snapshot, ensure_ascii=False, sort_keys=True)
             + "|agentic-pipeline-v2:"
             + runtime_signature()
         )
-        fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
-        if not force:
+        self.fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
+
+    def _build_graph(self):
+        self.run.status = GenerationRunStatus.RUNNING.value
+        self.run.started_at = datetime.utcnow()
+        source_chars = sum(
+            len(str(chunk.text or "").strip())
+            for document in self.documents
+            for chunk in document.chunks
+        )
+        if source_chars > settings.AI_MAX_SOURCE_CHARS:
+            raise ValueError("Source corpus exceeds AI_MAX_SOURCE_CHARS; split it into courses")
+        self.source_catalog = build_source_catalog(
+            self.documents, max_chars=settings.AI_MAX_SOURCE_CHARS
+        )
+        if not self.source_catalog:
+            raise ValueError("В документах нет доступных фрагментов для генерации")
+        runtime = AgentRuntime(
+            db=self.db,
+            run_id=self.run.id,
+            course_id=self.course_id,
+            generate=generate_from_prompt,
+        )
+        pipeline = AgenticCoursePipeline(
+            runtime=runtime,
+            checkpoint=lambda stage, progress: PipelineService._checkpoint(
+                self.db, self.run, stage, progress
+            ),
+        )
+        self.build = pipeline.run(
+            course_title=self.course.name,
+            settings_snapshot=self.settings_snapshot,
+            source_catalog=self.source_catalog,
+        )
+        payload = GeneratedGraphPayload.model_validate(
+            {"nodes": self.build.nodes, "edges": self.build.edges}
+        )
+        self.nodes, self.edges = payload.json_payload()
+        generated_lessons = sum(node.get("type") == "lesson" for node in self.nodes)
+        if generated_lessons != self.settings_snapshot["lesson_count"]:
+            raise ValueError("Generated lesson count does not match generation settings")
+        if self.build.legacy_fallback:
+            self.nodes, self.edges = _apply_assessment_settings(
+                self.nodes, self.edges, self.settings_snapshot
+            )
+
+    def _materialize_graph(self):
+        self.locked_course = PipelineRepository.get_owned_course(
+            self.db, self.course_id, self.owner_id, for_update=True
+        )
+        from app.services.generation_control import check_cancelled
+
+        check_cancelled(self.db, self.run.id)
+        if self.locked_course is None:
+            raise ValueError("Курс был удалён во время генерации")
+        self.graph = CourseGraph(
+            course_id=self.course_id,
+            version=PipelineRepository.next_graph_version(self.db, self.course_id),
+            nodes=[],
+            edges=[],
+            created_by=self.owner_id,
+            status=CourseGraphStatus.DRAFT.value,
+        )
+        if (
+            self.locked_course.current_graph is not None
+            and self.locked_course.current_graph.status == CourseGraphStatus.DRAFT.value
+        ):
+            self.locked_course.current_graph.status = CourseGraphStatus.ARCHIVED.value
+        self.db.add(self.graph)
+        self.db.flush()
+        self.locked_course.current_graph = self.graph
+        self.materialized = CourseMaterializationService.materialize(
+            self.db, course=self.locked_course, nodes=self.nodes, edges=self.edges
+        )
+        self.persisted_nodes = self.materialized.pop("canvas_nodes")
+        self.persisted_edges = self.materialized.pop("canvas_edges")
+        self.graph.nodes = self.persisted_nodes
+        self.graph.edges = self.persisted_edges
+        self.learning_map = (
+            CourseMaterializationService.materialize_learning_map(
+                self.db, course=self.locked_course, result=self.build.result
+            )
+            if self.build.result is not None
+            else {"competency_count": 0, "learning_objective_count": 0}
+        )
+        self.link_payloads = graph_source_links(self.persisted_nodes, self.source_catalog)
+        PipelineRepository.add_source_links(
+            self.db,
+            [
+                CourseSourceLink(
+                    course_id=self.course_id,
+                    graph_id=self.graph.id,
+                    run_id=self.run.id,
+                    **item,
+                )
+                for item in self.link_payloads
+            ],
+        )
+        self.locked_course.status = CourseStatus.READY.value
+
+    def _describe_graph_failure(self, failed_run, exc):
+        if getattr(exc, "ai_failure_kind", None) == "invalid_json":
+            failed_run.error_code = "ai_invalid_response"
+            failed_run.error_message = "Ответ AI не соответствует формату учебного материала. Завершённые этапы сохранены; можно повторить оставшийся этап."
+        if isinstance(exc, HTTPException) and exc.status_code in {402, 413, 422}:
+            failed_run.error_code = {
+                402: "ai_budget_exhausted",
+                413: "ai_context_exceeded",
+                422: "ai_request_rejected",
+            }[exc.status_code]
+            failed_run.error_message = {
+                402: "Исчерпан лимит AI-запуска. Уменьшите курс или измените бюджет в настройках сервера.",
+                413: "Не удалось безопасно разместить один учебный блок в доступном контексте AI. Источники и завершённые этапы сохранены; скорректируйте блок или согласованные ограничения модели.",
+                422: "AI-сервис отклонил запрос. Измените материалы или параметры генерации.",
+            }[exc.status_code]
+            failed_run.retryable = False
+            if exc.status_code == 413 and getattr(exc, "ai_failure_kind", None) == "context_length":
+                failed_run.error_message = (
+                    "AI-провайдер отклонил размер запроса. Источники и завершённые этапы сохранены; автоматический повтор остановлен."
+                    if getattr(exc, "request_sent", False)
+                    else "Один учебный блок и резерв ответа превышают установленный лимит контекста. Источники и завершённые этапы сохранены; проверьте размер блока или согласованные ограничения модели."
+                )
+
+    def _record_graph_failure(self, exc):
+        self.db.rollback()
+        error = _safe_error(exc)
+        failed_run = self.db.get(GenerationRun, self.run_id)
+        failed_course = PipelineRepository.get_owned_course(
+            self.db, self.course_id, self.owner_id, for_update=True
+        )
+        if failed_run is not None:
+            failed_run.status = GenerationRunStatus.FAILED.value
+            failed_run.error = error
+            failed_run.error_code = "generation_failed"
+            failed_run.error_message = "Не удалось сгенерировать курс"
+            failed_run.retryable = True
+            self._describe_graph_failure(failed_run, exc)
+            failed_run.finished_at = datetime.utcnow()
+            failed_run.latency_ms = _elapsed_ms(self.started)
+        if failed_course is not None:
+            failed_course.status = CourseStatus.GENERATION_FAILED.value
+        from app.ai.providers import AIUnavailable
+        from app.services.generation_control import GenerationCancelled
+
+        if isinstance(exc, GenerationCancelled) and failed_run is not None:
+            failed_run.status = GenerationRunStatus.PAUSED.value
+            failed_run.error_code = exc.code
+            failed_run.error_message = str(exc)
+            failed_run.retryable = True
+            if failed_course is not None:
+                failed_course.status = (
+                    CourseStatus.READY.value
+                    if failed_course.current_graph
+                    else CourseStatus.CONFIGURED.value
+                )
+        if isinstance(exc, AIUnavailable) and failed_run is not None:
+            from app.ai.offline import GENERATION_PAUSED
+
+            failed_run.status = GenerationRunStatus.PAUSED.value
+            failed_run.error_code = "ai_unavailable"
+            failed_run.error_message = GENERATION_PAUSED
+            if failed_course is not None:
+                failed_course.status = (
+                    CourseStatus.READY.value
+                    if failed_course.current_graph
+                    else CourseStatus.CONFIGURED.value
+                )
+        if failed_run is not None:
+            from app.services.notifications import generation_finished
+
+            generation_finished(self.db, failed_run, failed_course)
+        self.db.commit()
+        return error
+
+    def execute(self):
+        self.course = PipelineRepository.get_owned_course(self.db, self.course_id, self.owner_id)
+        if self.course is None:
+            raise HTTPException(status_code=404, detail="Курс не найден")
+        self.prepared_run = (
+            self.db.get(GenerationRun, self.prepared_run_id)
+            if self.prepared_run_id is not None
+            else None
+        )
+        self._prepare_graph_inputs()
+        if not self.force:
             existing = PipelineRepository.latest_successful_graph_run(
-                db, owner_id, course_id, fingerprint
+                self.db, self.owner_id, self.course_id, self.fingerprint
             )
             graph_id = (existing.output or {}).get("graph_id") if existing else None
             if (
                 existing is not None
                 and isinstance(graph_id, int)
-                and PipelineRepository.graph_by_id(db, graph_id) is not None
+                and PipelineRepository.graph_by_id(self.db, graph_id) is not None
             ):
-                course.status = CourseStatus.READY.value
-                db.commit()
+                self.course.status = CourseStatus.READY.value
+                self.db.commit()
                 return existing
 
-        if prepared_run is None:
+        if self.prepared_run is None:
             from app.services.ai_entitlements import unlimited_ai
             from app.services.generation_preflight import require_preflight
 
             require_preflight(
-                documents, settings_snapshot, unlimited=unlimited_ai(db, course.organization_id)
+                self.documents,
+                self.settings_snapshot,
+                unlimited=unlimited_ai(self.db, self.course.organization_id),
             )
             from app.services.organization_access import check_generation_limit
 
-            check_generation_limit(db, owner_id)
-        run = prepared_run or GenerationRun(
-            owner_id=owner_id,
-            course_id=course_id,
+            check_generation_limit(self.db, self.owner_id)
+        self.run = self.prepared_run or GenerationRun(
+            owner_id=self.owner_id,
+            course_id=self.course_id,
             run_type=GenerationRunType.GRAPH_GENERATION.value,
             status=GenerationRunStatus.QUEUED.value,
             prompt="agentic-pipeline-v2:" + runtime_signature(),
             model=DEFAULT_ENGINE,
-            input_docs=input_docs,
-            settings_snapshot=settings_snapshot,
-            input_fingerprint=fingerprint,
+            input_docs=self.input_docs,
+            settings_snapshot=self.settings_snapshot,
+            input_fingerprint=self.fingerprint,
         )
-        if prepared_run is None:
-            db.add(run)
-            db.flush()
+        if self.prepared_run is None:
+            self.db.add(self.run)
+            self.db.flush()
             from app.services.ai_resources import reserve
 
             reserve(
-                db,
-                owner_id=owner_id,
-                course_id=course_id,
-                operation="generation",
-                lane="background",
-                key=f"generation:{run.id}",
-                run_id=run.id,
-                timeout=settings.AI_JOB_TIMEOUT_SECONDS,
-            )
-        course.status = CourseStatus.GENERATING.value
-        db.commit()
-        db.refresh(run)
-        run_id = run.id
-
-        started = time.perf_counter()
-        try:
-            run.status = GenerationRunStatus.RUNNING.value
-            run.started_at = datetime.utcnow()
-            source_chars = sum(
-                len(str(chunk.text or "").strip())
-                for document in documents
-                for chunk in document.chunks
-            )
-            if source_chars > settings.AI_MAX_SOURCE_CHARS:
-                raise ValueError("Source corpus exceeds AI_MAX_SOURCE_CHARS; split it into courses")
-            source_catalog = build_source_catalog(documents, max_chars=settings.AI_MAX_SOURCE_CHARS)
-            if not source_catalog:
-                raise ValueError("В документах нет доступных фрагментов для генерации")
-            runtime = AgentRuntime(
-                db=db,
-                run_id=run.id,
-                course_id=course_id,
-                generate=generate_from_prompt,
-            )
-            pipeline = AgenticCoursePipeline(
-                runtime=runtime,
-                checkpoint=lambda stage, progress: PipelineService._checkpoint(
-                    db, run, stage, progress
+                self.db,
+                reservation=ResourceReservation(
+                    owner_id=self.owner_id,
+                    course_id=self.course_id,
+                    operation="generation",
+                    lane="background",
+                    key=f"generation:{self.run.id}",
+                    run_id=self.run.id,
+                    timeout=settings.AI_JOB_TIMEOUT_SECONDS,
                 ),
             )
-            build = pipeline.run(
-                course_title=course.name,
-                settings_snapshot=settings_snapshot,
-                source_catalog=source_catalog,
-            )
-            payload = GeneratedGraphPayload.model_validate(
-                {"nodes": build.nodes, "edges": build.edges}
-            )
-            nodes, edges = payload.json_payload()
-            generated_lessons = sum(node.get("type") == "lesson" for node in nodes)
-            if generated_lessons != settings_snapshot["lesson_count"]:
-                raise ValueError("Generated lesson count does not match generation settings")
-            if build.legacy_fallback:
-                nodes, edges = _apply_assessment_settings(nodes, edges, settings_snapshot)
+        self.course.status = CourseStatus.GENERATING.value
+        self.db.commit()
+        self.db.refresh(self.run)
+        self.run_id = self.run.id
 
-            locked_course = PipelineRepository.get_owned_course(
-                db, course_id, owner_id, for_update=True
-            )
-            from app.services.generation_control import check_cancelled
-
-            check_cancelled(db, run.id)
-            if locked_course is None:
-                raise ValueError("Курс был удалён во время генерации")
-            graph = CourseGraph(
-                course_id=course_id,
-                version=PipelineRepository.next_graph_version(db, course_id),
-                nodes=[],
-                edges=[],
-                created_by=owner_id,
-                status=CourseGraphStatus.DRAFT.value,
-            )
-            if (
-                locked_course.current_graph is not None
-                and locked_course.current_graph.status == CourseGraphStatus.DRAFT.value
-            ):
-                locked_course.current_graph.status = CourseGraphStatus.ARCHIVED.value
-            db.add(graph)
-            db.flush()
-            locked_course.current_graph = graph
-            materialized = CourseMaterializationService.materialize(
-                db, course=locked_course, nodes=nodes, edges=edges
-            )
-            persisted_nodes = materialized.pop("canvas_nodes")
-            persisted_edges = materialized.pop("canvas_edges")
-            graph.nodes = persisted_nodes
-            graph.edges = persisted_edges
-            learning_map = (
-                CourseMaterializationService.materialize_learning_map(
-                    db, course=locked_course, result=build.result
-                )
-                if build.result is not None
-                else {"competency_count": 0, "learning_objective_count": 0}
-            )
-            link_payloads = graph_source_links(persisted_nodes, source_catalog)
-            PipelineRepository.add_source_links(
-                db,
-                [
-                    CourseSourceLink(
-                        course_id=course_id,
-                        graph_id=graph.id,
-                        run_id=run.id,
-                        **item,
-                    )
-                    for item in link_payloads
-                ],
-            )
-            locked_course.status = CourseStatus.READY.value
-
-            run.status = (
+        self.started = time.perf_counter()
+        try:
+            self._build_graph()
+            self._materialize_graph()
+            self.run.status = (
                 GenerationRunStatus.COMPLETED.value
-                if prepared_run is not None
+                if self.prepared_run is not None
                 else GenerationRunStatus.SUCCEEDED.value
             )
-            run.current_stage = "completed"
-            run.progress_percent = 100
-            run.finished_at = datetime.utcnow()
-            run.latency_ms = _elapsed_ms(started)
-            run.output = {
-                "graph_id": graph.id,
-                "graph_version": graph.version,
-                "node_count": len(persisted_nodes),
-                "edge_count": len(persisted_edges),
+            self.run.current_stage = "completed"
+            self.run.progress_percent = 100
+            self.run.finished_at = datetime.utcnow()
+            self.run.latency_ms = _elapsed_ms(self.started)
+            self.run.output = {
+                "graph_id": self.graph.id,
+                "graph_version": self.graph.version,
+                "node_count": len(self.persisted_nodes),
+                "edge_count": len(self.persisted_edges),
                 "agentic_pipeline_version": "2.0-langgraph",
-                "legacy_fallback": build.legacy_fallback,
-                "qa": build.qa_summary,
-                "source_link_count": len(link_payloads),
-                **learning_map,
-                **materialized,
+                "legacy_fallback": self.build.legacy_fallback,
+                "qa": self.build.qa_summary,
+                "source_link_count": len(self.link_payloads),
+                **self.learning_map,
+                **self.materialized,
             }
             from app.services.notifications import generation_finished
 
-            generation_finished(db, run, locked_course)
-            db.commit()
-            db.refresh(run)
-            return run
+            generation_finished(self.db, self.run, self.locked_course)
+            self.db.commit()
+            self.db.refresh(self.run)
+            return self.run
         except Exception as exc:
-            db.rollback()
-            error = _safe_error(exc)
-            failed_run = db.get(GenerationRun, run_id)
-            failed_course = PipelineRepository.get_owned_course(
-                db, course_id, owner_id, for_update=True
-            )
-            if failed_run is not None:
-                failed_run.status = GenerationRunStatus.FAILED.value
-                failed_run.error = error
-                failed_run.error_code = "generation_failed"
-                failed_run.error_message = "Не удалось сгенерировать курс"
-                failed_run.retryable = True
-                if getattr(exc, "ai_failure_kind", None) == "invalid_json":
-                    failed_run.error_code = "ai_invalid_response"
-                    failed_run.error_message = "Ответ AI не соответствует формату учебного материала. Завершённые этапы сохранены; можно повторить оставшийся этап."
-                if isinstance(exc, HTTPException) and exc.status_code in {402, 413, 422}:
-                    failed_run.error_code = {
-                        402: "ai_budget_exhausted",
-                        413: "ai_context_exceeded",
-                        422: "ai_request_rejected",
-                    }[exc.status_code]
-                    failed_run.error_message = {
-                        402: "Исчерпан лимит AI-запуска. Уменьшите курс или измените бюджет в настройках сервера.",
-                        413: "Не удалось безопасно разместить один учебный блок в доступном контексте AI. Источники и завершённые этапы сохранены; скорректируйте блок или согласованные ограничения модели.",
-                        422: "AI-сервис отклонил запрос. Измените материалы или параметры генерации.",
-                    }[exc.status_code]
-                    failed_run.retryable = False
-                    if (
-                        exc.status_code == 413
-                        and getattr(exc, "ai_failure_kind", None) == "context_length"
-                    ):
-                        failed_run.error_message = (
-                            "AI-провайдер отклонил размер запроса. Источники и завершённые этапы сохранены; автоматический повтор остановлен."
-                            if getattr(exc, "request_sent", False)
-                            else "Один учебный блок и резерв ответа превышают установленный лимит контекста. Источники и завершённые этапы сохранены; проверьте размер блока или согласованные ограничения модели."
-                        )
-                failed_run.finished_at = datetime.utcnow()
-                failed_run.latency_ms = _elapsed_ms(started)
-            if failed_course is not None:
-                failed_course.status = CourseStatus.GENERATION_FAILED.value
-            from app.ai.providers import AIUnavailable
-            from app.services.generation_control import GenerationCancelled
-
-            if isinstance(exc, GenerationCancelled) and failed_run is not None:
-                failed_run.status = GenerationRunStatus.PAUSED.value
-                failed_run.error_code = exc.code
-                failed_run.error_message = str(exc)
-                failed_run.retryable = True
-                if failed_course is not None:
-                    failed_course.status = (
-                        CourseStatus.READY.value
-                        if failed_course.current_graph
-                        else CourseStatus.CONFIGURED.value
-                    )
-            if isinstance(exc, AIUnavailable) and failed_run is not None:
-                from app.ai.offline import GENERATION_PAUSED
-
-                failed_run.status = GenerationRunStatus.PAUSED.value
-                failed_run.error_code = "ai_unavailable"
-                failed_run.error_message = GENERATION_PAUSED
-                if failed_course is not None:
-                    failed_course.status = (
-                        CourseStatus.READY.value
-                        if failed_course.current_graph
-                        else CourseStatus.CONFIGURED.value
-                    )
-            if failed_run is not None:
-                from app.services.notifications import generation_finished
-
-                generation_finished(db, failed_run, failed_course)
-            db.commit()
-            raise PipelineRunFailed(run_id, error, 502) from exc
+            error = self._record_graph_failure(exc)
+            raise PipelineRunFailed(self.run_id, error, 502) from exc
         finally:
-            if prepared_run is None:
+            if self.prepared_run is None:
                 from app.services.ai_resources import finish
 
                 finish(
-                    db,
-                    f"generation:{run_id}",
-                    failed=db.get(GenerationRun, run_id).status not in {"succeeded", "completed"},
+                    self.db,
+                    f"generation:{self.run_id}",
+                    outcome=ResourceOutcome(
+                        failed=self.db.get(GenerationRun, self.run_id).status
+                        not in {"succeeded", "completed"}
+                    ),
                 )

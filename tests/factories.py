@@ -1,10 +1,33 @@
 # tests/factories.py
 import json
+from dataclasses import fields, is_dataclass
 
 from app.models.course import Course
 from app.models.course_structure import CourseStructure
 from app.models.lesson import Lesson
 from app.models.module import Module
+
+
+def unpack_call_options(kwargs):
+    """Let recording fakes inspect semantic fields of typed invocation objects.
+
+    The production boundary receives the objects unchanged. This view keeps
+    assertions about model choice, retries and token limits explicit in tests.
+    """
+    result = dict(kwargs)
+    for name in ("request", "options"):
+        value = result.get(name)
+        if value is None or not is_dataclass(value):
+            continue
+        result.pop(name)
+        result.update(
+            {
+                field.name: getattr(value, field.name)
+                for field in fields(value)
+                if getattr(value, field.name) is not None
+            }
+        )
+    return result
 
 
 def make_course(db, **kwargs):

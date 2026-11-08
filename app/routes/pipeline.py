@@ -19,7 +19,12 @@ from app.services.course_generation_settings_service import CourseGenerationSett
 from app.services.course_update_service import CourseUpdateService
 from app.services.file_storage import FileStorage, get_file_storage
 from app.services.job_queue import enqueue_generation
-from app.services.pipeline_service import PipelineRunFailed, PipelineService
+from app.services.pipeline_service import (
+    GraphGenerationRequest,
+    PipelineRunFailed,
+    PipelineService,
+    ReindexOptions,
+)
 
 router = APIRouter()
 
@@ -208,9 +213,11 @@ def launch_generation(
         db,
         course_id=course_id,
         owner_id=current_user.id,
-        document_ids=payload.document_ids,
-        request_id=payload.request_id,
-        web_search_enabled=payload.web_search_enabled,
+        request=GraphGenerationRequest(
+            document_ids=payload.document_ids,
+            request_id=payload.request_id,
+            web_search_enabled=payload.web_search_enabled,
+        ),
     )
     try:
         enqueue_generation(run.id)
@@ -290,10 +297,10 @@ def reindex_document(
             document_id=document_id,
             owner_id=current_user.id,
             storage=storage,
-            queue_only=True,
+            options=ReindexOptions(queue_only=True),
         )
     except PipelineRunFailed as exc:
-        raise _translate_failure(exc)
+        raise _translate_failure(exc) from exc
 
 
 @router.post("/courses/{course_id}/generate-graph", response_model=GenerationRunOut)
@@ -312,7 +319,7 @@ def generate_graph(
 
         if isinstance(exc.__cause__, AIUnavailable):
             return PipelineService.get_run(db, exc.run_id, current_user.id)
-        raise _translate_failure(exc)
+        raise _translate_failure(exc) from exc
 
 
 @router.get("/generation-runs/{run_id}", response_model=GenerationRunStatusOut)

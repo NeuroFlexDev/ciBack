@@ -67,8 +67,10 @@ def begin(db, provider, link_user_id=None):
 def verify_id_token(encoded, provider, nonce_hash):
     try:
         jwks = integration_http.request_json("GET", provider.jwks_uri)
-    except Exception:
-        raise HTTPException(503, "Не удалось проверить ключи сервиса входа. Повторите вход позже")
+    except Exception as _error_cause:
+        raise HTTPException(
+            503, "Не удалось проверить ключи сервиса входа. Повторите вход позже"
+        ) from _error_cause
     try:
         header = jwt.get_unverified_header(encoded)
         if header.get("alg") not in {"RS256", "ES256"} or not isinstance(header.get("kid"), str):
@@ -102,8 +104,38 @@ def verify_id_token(encoded, provider, nonce_hash):
         ):
             raise ValueError()
         return claims
-    except (jwt.PyJWTError, ValueError, TypeError, KeyError):
-        raise HTTPException(401, "Сервис входа вернул неподтверждённые данные")
+    except (jwt.PyJWTError, ValueError, TypeError, KeyError) as _error_cause:
+        raise HTTPException(401, "Сервис входа вернул неподтверждённые данные") from _error_cause
+
+
+def _provision_identity_user(db, provider, claims, org):
+    if not provider.allow_provisioning:
+        raise HTTPException(
+            403, "Сначала войдите обычным способом и свяжите внешний аккаунт в профиле"
+        )
+    email = claims.get("email")
+    if claims.get("email_verified") is not True or not isinstance(email, str) or "@" not in email:
+        raise HTTPException(403, "Сервис входа не подтвердил адрес почты")
+    email = normalize_email(email)
+    if email.rsplit("@", 1)[1] not in provider.allowed_domains:
+        raise HTTPException(403, "Домен почты не разрешён для этой организации")
+    # Even a signed, verified email is not proof of ownership of an existing local account.
+    if db.query(User.id).filter_by(email=email).first():
+        raise HTTPException(
+            409,
+            "Аккаунт уже существует. Войдите паролем и явно свяжите внешний аккаунт в профиле",
+        )
+    check_seat(db, org)
+    user = User(
+        email=email,
+        password_hash=hash_password(secrets.token_urlsafe(48)),
+        full_name=str(claims.get("name", ""))[:160],
+        organization_id=org.id,
+        organization_role="member",
+    )
+    db.add(user)
+    db.flush()
+    return user
 
 
 def resolve_identity(db, provider, claims, link_user_id=None):
@@ -128,36 +160,7 @@ def resolve_identity(db, provider, claims, link_user_id=None):
         if not user or not user.is_active or user.organization_id != org.id:
             raise HTTPException(403, "Нельзя связать учётную запись")
     else:
-        if not provider.allow_provisioning:
-            raise HTTPException(
-                403, "Сначала войдите обычным способом и свяжите внешний аккаунт в профиле"
-            )
-        email = claims.get("email")
-        if (
-            claims.get("email_verified") is not True
-            or not isinstance(email, str)
-            or "@" not in email
-        ):
-            raise HTTPException(403, "Сервис входа не подтвердил адрес почты")
-        email = normalize_email(email)
-        if email.rsplit("@", 1)[1] not in provider.allowed_domains:
-            raise HTTPException(403, "Домен почты не разрешён для этой организации")
-        # Even a signed, verified email is not proof of ownership of an existing local account.
-        if db.query(User.id).filter_by(email=email).first():
-            raise HTTPException(
-                409,
-                "Аккаунт уже существует. Войдите паролем и явно свяжите внешний аккаунт в профиле",
-            )
-        check_seat(db, org)
-        user = User(
-            email=email,
-            password_hash=hash_password(secrets.token_urlsafe(48)),
-            full_name=str(claims.get("name", ""))[:160],
-            organization_id=org.id,
-            organization_role="member",
-        )
-        db.add(user)
-        db.flush()
+        user = _provision_identity_user(db, provider, claims, org)
     db.add(ExternalIdentity(provider_id=provider.id, subject=claims["sub"], user_id=user.id))
     audit(
         db,
@@ -212,8 +215,10 @@ def complete(db, raw_state, code, browser):
             body,
             {"Content-Type": "application/x-www-form-urlencoded"},
         )
-    except Exception:
-        raise HTTPException(503, "Сервис входа временно недоступен. Повторите вход")
+    except Exception as _error_cause:
+        raise HTTPException(
+            503, "Сервис входа временно недоступен. Повторите вход"
+        ) from _error_cause
     claims = verify_id_token(token_response.get("id_token", ""), provider, row.nonce_hash)
     user = resolve_identity(db, provider, claims, row.link_user_id)
     ensure_organization_active(user)

@@ -6,7 +6,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import app.models  # Register all models without creating tables.
+import app.models  # Register all models without creating tables.  # noqa: F401 -- register ORM mappings
 from app.database.db import SessionLocal
 from app.services.outbox_service import process_one
 

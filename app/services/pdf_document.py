@@ -1,10 +1,8 @@
 """Branded, paginated course documents from immutable structured course content."""
 
-import re
 import textwrap
 from html import escape
 from io import BytesIO
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
 from time import monotonic
@@ -347,6 +345,23 @@ class ContentBuilder:
         p._toc = (level, title, f"entry-{self.heading_id}")
         return p
 
+    def _append_inline_image(self, token, max_width, output):
+        source = token.attrGet("src") or ""
+        if source.startswith("videos/"):
+            output.append(
+                escape("Видео / Video: " + token.content + " — просмотр доступен в Лерниуме.")
+            )
+            return
+        if source not in self.images:
+            raise PDFRenderError(
+                "Внешняя или недоступная иллюстрация: загрузите её в курс перед публикацией."
+            )
+        path, width, height = self.images[source]
+        scale = min(max_width / width, 350 / height, 1)
+        output.append(
+            f'<br/><img src="{escape(str(path), quote=True)}" width="{width * scale}" height="{height * scale}"/><br/>'
+        )
+
     def inline(self, children, max_width=CONTENT_WIDTH):
         output = []
         for token in children or []:
@@ -388,26 +403,158 @@ class ContentBuilder:
                     f'<img src="{escape(str(path), quote=True)}" width="{width * scale}" height="{height * scale}" valign="middle"/>'
                 )
             elif token.type == "image":
-                source = token.attrGet("src") or ""
-                if source.startswith("videos/"):
-                    output.append(
-                        escape(
-                            "Видео / Video: " + token.content + " — просмотр доступен в Лерниуме."
-                        )
-                    )
-                    continue
-                if source not in self.images:
-                    raise PDFRenderError(
-                        "Внешняя или недоступная иллюстрация: загрузите её в курс перед публикацией."
-                    )
-                path, width, height = self.images[source]
-                scale = min(max_width / width, 350 / height, 1)
-                output.append(
-                    f'<br/><img src="{escape(str(path), quote=True)}" width="{width * scale}" height="{height * scale}"/><br/>'
-                )
+                self._append_inline_image(token, max_width, output)
             else:
                 output.append(escape(token.content))
         return "".join(output)
+
+    def _append_table(self, tokens, index, output):
+        rows, row = [], []
+        index += 1
+        while tokens[index].type != "table_close":
+            current = tokens[index]
+            if current.type == "tr_open":
+                row = []
+            elif current.type == "inline":
+                row.append(current.children or [])
+            elif current.type == "tr_close":
+                rows.append(row)
+            index += 1
+        if rows:
+            columns = max(map(len, rows))
+            if columns > 12:
+                raise PDFRenderError("Таблица шире 12 столбцов. Разделите её перед PDF-экспортом.")
+            weights = [
+                min(
+                    4,
+                    max(
+                        1,
+                        max(
+                            sum(len(token.content) for token in row[c]) if c < len(row) else 0
+                            for row in rows
+                        )
+                        / 18,
+                    ),
+                )
+                for c in range(columns)
+            ]
+            widths = [CONTENT_WIDTH * weight / sum(weights) for weight in weights]
+            # Render after measuring columns: media must fit the cell's
+            # actual content box, including the horizontal padding.
+            cells = [
+                [
+                    Paragraph(self.inline(children, widths[c] - 16), self.styles["cell"])
+                    for c, children in enumerate(row)
+                ]
+                for row in rows
+            ]
+            table = Table(
+                cells,
+                colWidths=widths,
+                repeatRows=1,
+                hAlign="LEFT",
+                splitByRow=1,
+                splitInRow=1,
+            )
+            table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9f2d2")),
+                        (
+                            "ROWBACKGROUNDS",
+                            (0, 1),
+                            (-1, -1),
+                            [colors.white, colors.HexColor("#f5f6f7")],
+                        ),
+                        ("LINEBELOW", (0, 0), (-1, 0), 1, colors.HexColor("#a2b77c")),
+                        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d7dce1")),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                        ("TOPPADDING", (0, 0), (-1, -1), 8),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ]
+                )
+            )
+            output.extend([table, Spacer(1, 14)])
+        return index
+
+    def _append_paragraph(self, tokens, index, quote_depth, lists, bullet):
+        token = tokens[index]
+        inline = tokens[index + 1]
+        kind = "h3" if token.type == "heading_open" else ("quote" if quote_depth else "body")
+        children = inline.children or []
+        if (
+            len(children) == 1
+            and children[0].type == "image"
+            and not (children[0].attrGet("src") or "").startswith("videos/")
+        ):
+            source = children[0].attrGet("src") or ""
+            if source not in self.images:
+                raise PDFRenderError(
+                    "Внешняя иллюстрация не включена в курс. Загрузите её и опубликуйте новую версию."
+                )
+            path, width, height = self.images[source]
+            scale = min(CONTENT_WIDTH / width, 440 / height, 1)
+            image = Image(str(path), width * scale, height * scale)
+            caption = Paragraph(escape(children[0].content), self.styles["small"])
+            paragraph = KeepTogether([Spacer(1, 8), image, Spacer(1, 7), caption])
+        else:
+            style = self.styles[kind]
+            if lists:
+                style = ParagraphStyle(
+                    "List",
+                    parent=style,
+                    leftIndent=16 * len(lists),
+                    bulletIndent=16 * (len(lists) - 1),
+                    bulletFontName="Lernium",
+                )
+            paragraph = Paragraph(self.inline(children), style, bulletText=bullet)
+        return paragraph
+
+    def _append_media(self, token, output):
+        if token.type == "fence":
+            kind = token.info.strip().lower()
+            if kind in KINDS:
+                output.append(VectorDiagram(self.diagrams[diagram_key(kind, token.content)]))
+            else:
+                wrapped = "\n".join(
+                    "\n".join(
+                        textwrap.wrap(
+                            line.expandtabs(4),
+                            88,
+                            replace_whitespace=False,
+                            drop_whitespace=False,
+                        )
+                    )
+                    or " "
+                    for line in token.content.splitlines()
+                )
+                output.append(XPreformatted(escape(wrapped), self.styles["code"]))
+        elif token.type == "math_block":
+            path, width, height = self.maths[token.content]
+            scale = min(1.15, CONTENT_WIDTH / width, 350 / height)
+            formula = Image(str(path), width * scale, height * scale)
+            # Leading Spacer breaks heading.keepWithNext at a page edge.
+            # Attach spacing to the media so heading + content move together.
+            formula.spaceBefore, formula.spaceAfter = 8, 14
+            output.append(formula)
+        elif token.type == "hr":
+            output.append(
+                HRFlowable(
+                    width="100%",
+                    color=colors.HexColor("#d9e1cb"),
+                    spaceBefore=12,
+                    spaceAfter=12,
+                )
+            )
+
+    @staticmethod
+    def _next_bullet(lists):
+        bullet = "•" if lists[-1] is None else f"{lists[-1]}."
+        if lists[-1] is not None:
+            lists[-1] += 1
+        return bullet
 
     def markdown(self, text):
         tokens, output, index = self.md.parse(text or ""), [], 0
@@ -416,37 +563,8 @@ class ContentBuilder:
         while index < len(tokens):
             token = tokens[index]
             if token.type in {"paragraph_open", "heading_open"}:
-                inline = tokens[index + 1]
-                kind = (
-                    "h3" if token.type == "heading_open" else ("quote" if quote_depth else "body")
-                )
-                children = inline.children or []
-                if (
-                    len(children) == 1
-                    and children[0].type == "image"
-                    and not (children[0].attrGet("src") or "").startswith("videos/")
-                ):
-                    source = children[0].attrGet("src") or ""
-                    if source not in self.images:
-                        raise PDFRenderError(
-                            "Внешняя иллюстрация не включена в курс. Загрузите её и опубликуйте новую версию."
-                        )
-                    path, width, height = self.images[source]
-                    scale = min(CONTENT_WIDTH / width, 440 / height, 1)
-                    image = Image(str(path), width * scale, height * scale)
-                    caption = Paragraph(escape(children[0].content), self.styles["small"])
-                    output.append(KeepTogether([Spacer(1, 8), image, Spacer(1, 7), caption]))
-                else:
-                    style = self.styles[kind]
-                    if lists:
-                        style = ParagraphStyle(
-                            "List",
-                            parent=style,
-                            leftIndent=16 * len(lists),
-                            bulletIndent=16 * (len(lists) - 1),
-                            bulletFontName="Lernium",
-                        )
-                    output.append(Paragraph(self.inline(children), style, bulletText=bullet))
+                paragraph = self._append_paragraph(tokens, index, quote_depth, lists, bullet)
+                output.append(paragraph)
                 bullet = None
                 index += 2
             elif token.type in {"bullet_list_open", "ordered_list_open"}:
@@ -456,123 +574,40 @@ class ContentBuilder:
             elif token.type in {"bullet_list_close", "ordered_list_close"}:
                 lists.pop()
             elif token.type == "list_item_open":
-                bullet = "•" if lists[-1] is None else f"{lists[-1]}."
-                if lists[-1] is not None:
-                    lists[-1] += 1
+                bullet = self._next_bullet(lists)
             elif token.type == "blockquote_open":
                 quote_depth += 1
             elif token.type == "blockquote_close":
                 quote_depth -= 1
-            elif token.type == "fence":
-                kind = token.info.strip().lower()
-                if kind in KINDS:
-                    output.append(VectorDiagram(self.diagrams[diagram_key(kind, token.content)]))
-                else:
-                    wrapped = "\n".join(
-                        "\n".join(
-                            textwrap.wrap(
-                                line.expandtabs(4),
-                                88,
-                                replace_whitespace=False,
-                                drop_whitespace=False,
-                            )
-                        )
-                        or " "
-                        for line in token.content.splitlines()
-                    )
-                    output.append(XPreformatted(escape(wrapped), self.styles["code"]))
-            elif token.type == "math_block":
-                path, width, height = self.maths[token.content]
-                scale = min(1.15, CONTENT_WIDTH / width, 350 / height)
-                formula = Image(str(path), width * scale, height * scale)
-                # Leading Spacer breaks heading.keepWithNext at a page edge.
-                # Attach spacing to the media so heading + content move together.
-                formula.spaceBefore, formula.spaceAfter = 8, 14
-                output.append(formula)
-            elif token.type == "hr":
-                output.append(
-                    HRFlowable(
-                        width="100%",
-                        color=colors.HexColor("#d9e1cb"),
-                        spaceBefore=12,
-                        spaceAfter=12,
-                    )
-                )
+            elif token.type in {"fence", "math_block", "hr"}:
+                self._append_media(token, output)
             elif token.type == "table_open":
-                rows, row = [], []
-                index += 1
-                while tokens[index].type != "table_close":
-                    current = tokens[index]
-                    if current.type == "tr_open":
-                        row = []
-                    elif current.type == "inline":
-                        row.append(current.children or [])
-                    elif current.type == "tr_close":
-                        rows.append(row)
-                    index += 1
-                if rows:
-                    columns = max(map(len, rows))
-                    if columns > 12:
-                        raise PDFRenderError(
-                            "Таблица шире 12 столбцов. Разделите её перед PDF-экспортом."
-                        )
-                    weights = [
-                        min(
-                            4,
-                            max(
-                                1,
-                                max(
-                                    sum(len(token.content) for token in row[c])
-                                    if c < len(row)
-                                    else 0
-                                    for row in rows
-                                )
-                                / 18,
-                            ),
-                        )
-                        for c in range(columns)
-                    ]
-                    widths = [CONTENT_WIDTH * weight / sum(weights) for weight in weights]
-                    # Render after measuring columns: media must fit the cell's
-                    # actual content box, including the horizontal padding.
-                    cells = [
-                        [
-                            Paragraph(self.inline(children, widths[c] - 16), self.styles["cell"])
-                            for c, children in enumerate(row)
-                        ]
-                        for row in rows
-                    ]
-                    table = Table(
-                        cells,
-                        colWidths=widths,
-                        repeatRows=1,
-                        hAlign="LEFT",
-                        splitByRow=1,
-                        splitInRow=1,
-                    )
-                    table.setStyle(
-                        TableStyle(
-                            [
-                                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9f2d2")),
-                                (
-                                    "ROWBACKGROUNDS",
-                                    (0, 1),
-                                    (-1, -1),
-                                    [colors.white, colors.HexColor("#f5f6f7")],
-                                ),
-                                ("LINEBELOW", (0, 0), (-1, 0), 1, colors.HexColor("#a2b77c")),
-                                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d7dce1")),
-                                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                                ("TOPPADDING", (0, 0), (-1, -1), 8),
-                                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                            ]
-                        )
-                    )
-                    output.extend([table, Spacer(1, 14)])
+                index = self._append_table(tokens, index, output)
             index += 1
         return output
+
+
+def _assessment(item, builder, s, metadata):
+    result = builder.markdown("### " + item["question"])
+    result.extend(builder.markdown(item.get("description", "")))
+    for answer in item.get("answers", []):
+        result.extend(builder.markdown("[ ]  " + answer))
+    result.append(
+        Paragraph(f"Максимум баллов / Maximum points: {item.get('max_points', 0)}", s["small"])
+    )
+    for criterion in item.get("criteria", []):
+        result.append(
+            Paragraph(escape(f"{criterion['title']} ({criterion['max_points']})"), s["h3"])
+        )
+        result.extend(builder.markdown(criterion.get("description", "")))
+        for level in criterion.get("levels", []):
+            result.append(Paragraph(escape(f"{level['title']} ({level['points']})"), s["body"]))
+            result.extend(builder.markdown(level.get("description", "")))
+    if metadata.get("includes_answer_keys") and item.get("correct_answers"):
+        result.append(Paragraph("Ключ ответа / Instructor answer key", s["h3"]))
+        for answer in item["correct_answers"]:
+            result.extend(builder.markdown(answer))
+    return result
 
 
 def build_pdf(content, images, metadata, diagrams):
@@ -610,32 +645,6 @@ def build_pdf(content, images, metadata, diagrams):
                 ]
             )
 
-        def assessment(item):
-            result = builder.markdown("### " + item["question"])
-            result.extend(builder.markdown(item.get("description", "")))
-            for answer in item.get("answers", []):
-                result.extend(builder.markdown("[ ]  " + answer))
-            result.append(
-                Paragraph(
-                    f"Максимум баллов / Maximum points: {item.get('max_points', 0)}", s["small"]
-                )
-            )
-            for criterion in item.get("criteria", []):
-                result.append(
-                    Paragraph(escape(f"{criterion['title']} ({criterion['max_points']})"), s["h3"])
-                )
-                result.extend(builder.markdown(criterion.get("description", "")))
-                for level in criterion.get("levels", []):
-                    result.append(
-                        Paragraph(escape(f"{level['title']} ({level['points']})"), s["body"])
-                    )
-                    result.extend(builder.markdown(level.get("description", "")))
-            if metadata.get("includes_answer_keys") and item.get("correct_answers"):
-                result.append(Paragraph("Ключ ответа / Instructor answer key", s["h3"]))
-                for answer in item["correct_answers"]:
-                    result.extend(builder.markdown(answer))
-            return result
-
         for mi, module in enumerate(content.get("modules", [])):
             if mi:
                 story.append(PageBreak())
@@ -646,11 +655,11 @@ def build_pdf(content, images, metadata, diagrams):
                 story.extend(builder.markdown(lesson.get("description", "")))
                 story.extend(builder.markdown(lesson.get("content", "")))
             for item in module.get("assessments", []):
-                story.extend(assessment(item))
+                story.extend(_assessment(item, builder, s, metadata))
         if content.get("assessments"):
             story.extend([PageBreak(), builder.heading("Итоговая проверка / Final assessment", 0)])
             for item in content["assessments"]:
-                story.extend(assessment(item))
+                story.extend(_assessment(item, builder, s, metadata))
         story.extend(
             [
                 Spacer(1, 26),

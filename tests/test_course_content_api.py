@@ -11,7 +11,7 @@ from app.models.document import Document
 from app.models.module import Module
 from app.models.user import User
 from app.repositories.course_content import CourseContentRepository
-from app.services.course_content_service import CourseContentService
+from app.services.course_content_service import CourseContentService, DocumentUpload
 from app.services.file_storage import LocalFileStorage, get_file_storage
 from tests.factories import make_course
 
@@ -376,8 +376,8 @@ def test_storage_is_cleaned_when_document_commit_fails(
             db_session,
             course_id=course.id,
             owner_id=auth_user.id,
-            upload=upload,
             storage=storage,
+            document_upload=DocumentUpload(upload=upload),
         )
 
     assert not [path for path in tmp_path.rglob("*") if path.is_file()]

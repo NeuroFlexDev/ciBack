@@ -9,12 +9,14 @@ from app.models.theory import Theory
 from app.services import ai_resources
 from app.services import learner_assistant_service as learner
 from app.services.ai_access_boundary import principal_stamp
+from app.services.ai_resources import ResourceOutcome, ResourceReservation
 from app.services.assistant_context import (
     build_context,
     local_answer,
     resolve_references,
     verify_context,
 )
+from app.services.learner_assistant_service import AssistantMessage
 from tests.test_ai_runtime_v2 import SOURCE
 from tests.test_learning_runtime import assign, publish, world
 
@@ -69,8 +71,7 @@ def test_learner_outage_returns_grounded_local_answer(client, db_session, world,
         world["learner"],
         assignment["id"],
         lesson.id,
-        "published lesson?",
-        "offline-request",
+        message=AssistantMessage(question="published lesson?", request_id="offline-request"),
     )
     assert result.status == "completed" and result.model == "local/extractive"
     assert (
@@ -89,19 +90,28 @@ def test_unlimited_is_metered_and_keeps_capacity_but_not_financial_limits(
     monkeypatch.setattr(settings, "AI_ORG_MONTHLY_TOKENS", 1)
     monkeypatch.setattr(settings, "AI_ORG_MONTHLY_RUB", Decimal("0"))
     record = ai_resources.reserve(
-        db_session, owner_id=world["owner"].id, operation="chat", tokens=100, cost=Decimal("10")
+        db_session,
+        reservation=ResourceReservation(
+            owner_id=world["owner"].id, operation="chat", tokens=100, cost=Decimal("10")
+        ),
     )
     db_session.commit()
-    ai_resources.finish(db_session, record, usage={"input_tokens": 100})
+    ai_resources.finish(db_session, record, outcome=ResourceOutcome(usage={"input_tokens": 100}))
     usage = ai_resources.usage_summary(db_session, world["owner"].id)
     assert usage["ai_unlimited"] and usage["tokens_reserved_or_used"] == 100
     # The exempt organization's consumption cannot exhaust other tenants' pool.
-    ai_resources.reserve(db_session, owner_id=world["foreign"].id, operation="chat", tokens=1)
+    ai_resources.reserve(
+        db_session,
+        reservation=ResourceReservation(owner_id=world["foreign"].id, operation="chat", tokens=1),
+    )
     db_session.commit()
     monkeypatch.setattr(settings, "AI_ORG_INTERACTIVE_LIMIT", 0)
     with pytest.raises(ai_resources.CapacityBusy):
         ai_resources.reserve(
-            db_session, owner_id=world["owner"].id, operation="chat", lane="interactive"
+            db_session,
+            reservation=ResourceReservation(
+                owner_id=world["owner"].id, operation="chat", lane="interactive"
+            ),
         )
 
 

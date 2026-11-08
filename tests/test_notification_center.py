@@ -19,6 +19,7 @@ from app.models.user import User
 from app.services.integration_secrets import seal, unseal
 from app.services.notifications import (
     DeferredDelivery,
+    NotificationEvent,
     deliver_device,
     fanout,
     publish,
@@ -32,13 +33,15 @@ from tests.test_learning_runtime import publish as publish_course
 def note(db, user, key="event:1"):
     return publish(
         db,
-        user_id=user.id,
-        organization_id=user.organization_id,
-        event_key=key,
-        category="generation",
-        resource_type="course",
-        resource_id=1,
-        body="Open your workspace",
+        event=NotificationEvent(
+            user_id=user.id,
+            organization_id=user.organization_id,
+            event_key=key,
+            category="generation",
+            resource_type="course",
+            resource_id=1,
+            body="Open your workspace",
+        ),
     )
 
 

@@ -134,7 +134,7 @@ def test_chat_memory_still_summarizes_with_disabled_installation_cap(
     calls = []
 
     def summarize(*args, **kwargs):
-        calls.append(args[4])
+        calls.append(kwargs["request"].messages)
         return {"text": "Сохранить моё условие"}
 
     monkeypatch.setattr(scoped_ai, "tracked_completion", summarize)

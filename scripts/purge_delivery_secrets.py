@@ -2,9 +2,9 @@
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, update
+from sqlalchemy import update
 
-import app.models
+import app.models  # noqa: F401 -- register ORM mappings
 from app.database.db import SessionLocal
 from app.models.integrations import LTISession, OIDCSession, OutboundMessage
 

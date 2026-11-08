@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.integrations import BillingAccount, Invoice
 from app.services.auth_service import require_admin
-from app.services.billing_service import apply_payment, invoice_dict, reconcile_payment
+from app.services.billing_service import (
+    PaymentSource,
+    apply_payment,
+    invoice_dict,
+    reconcile_payment,
+)
 from app.services.integration_access import billing_owner
 from app.services.organization_access import audit, lock_org
 
@@ -224,10 +229,12 @@ def confirm_invoice(
     apply_payment(
         db,
         row,
-        reference="bank:" + payload.payment_reference,
-        provider="bank",
-        actor=admin,
-        reason=payload.reason,
+        confirmation=PaymentSource(
+            reference="bank:" + payload.payment_reference,
+            provider="bank",
+            actor=admin,
+            reason=payload.reason,
+        ),
     )
     db.commit()
     return invoice_dict(row)
@@ -244,8 +251,8 @@ def payment_notification(payload: YooKassaNotification, db: Session = Depends(ge
     payment_id = payload.object.get("id", "")
     try:
         uuid.UUID(payment_id)
-    except (ValueError, TypeError, AttributeError):
-        raise HTTPException(422, "Некорректный идентификатор платежа")
+    except (ValueError, TypeError, AttributeError) as _error_cause:
+        raise HTTPException(422, "Некорректный идентификатор платежа") from _error_cause
     # The notification body is only a wake-up signal. State, metadata and amount come from authenticated provider API.
     if payload.event != "payment.succeeded":
         return {"received": True, "applied": False}

@@ -8,6 +8,24 @@ from starlette.responses import JSONResponse
 from app.core.config import settings
 
 
+class _BoundedUploadReceive:
+    """Replay the spooled body once, then delegate disconnect events."""
+
+    def __init__(self, body, receive, size):
+        self.body = body
+        self.receive = receive
+        self.remaining = size
+        self.supplied = False
+
+    async def __call__(self):
+        if self.remaining or not self.supplied:
+            self.supplied = True
+            chunk = await run_in_threadpool(self.body.read, 1024 * 1024)
+            self.remaining -= len(chunk)
+            return {"type": "http.request", "body": chunk, "more_body": self.remaining > 0}
+        return await self.receive()
+
+
 class UploadBodyLimitMiddleware:
     def __init__(self, app):
         self.app = app
@@ -61,16 +79,4 @@ class UploadBodyLimitMiddleware:
                 if not message.get("more_body", False):
                     break
             await run_in_threadpool(body.seek, 0)
-            remaining = size
-            supplied = False
-
-            async def bounded_receive():
-                nonlocal remaining, supplied
-                if remaining or not supplied:
-                    supplied = True
-                    chunk = await run_in_threadpool(body.read, 1024 * 1024)
-                    remaining -= len(chunk)
-                    return {"type": "http.request", "body": chunk, "more_body": remaining > 0}
-                return await receive()
-
-            await self.app(scope, bounded_receive, send)
+            await self.app(scope, _BoundedUploadReceive(body, receive, size), send)

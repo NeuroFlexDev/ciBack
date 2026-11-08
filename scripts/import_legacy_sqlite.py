@@ -31,6 +31,78 @@ ORDER = [
 RENAMES = {"lessons": {"lesson": "title"}}
 
 
+def _default_legacy_column(name, column, values, prepared, now):
+    if column.name not in values:
+        if name == "courses" and column.name == "status":
+            values[column.name] = "ready"
+        elif column.name == "revision" and name in (
+            "modules",
+            "lessons",
+            "tasks",
+            "tests",
+            "theories",
+        ):
+            values[column.name] = 1
+        elif name == "modules" and column.name == "description":
+            values[column.name] = ""
+        elif column.name == "position" and name in (
+            "modules",
+            "lessons",
+            "tasks",
+            "tests",
+        ):
+            group_key = "course_id" if name == "modules" else "module_id"
+            values[column.name] = sum(
+                1 for previous in prepared if previous.get(group_key) == values.get(group_key)
+            )
+        elif column.name in ("created_at", "updated_at"):
+            values[column.name] = now
+        elif column.name == "is_deleted":
+            values[column.name] = False
+        elif not column.nullable and column.server_default is None and not column.primary_key:
+            raise ValueError(
+                "Required destination column has no default: " + name + "." + column.name
+            )
+        return
+
+
+def _prepare_legacy_rows(name, rows, table, now):
+    prepared = []
+    for row in rows:
+        values = {RENAMES.get(name, {}).get(key, key): row[key] for key in row.keys()}
+        unknown = set(values) - set(table.c.keys())
+        if unknown:
+            raise ValueError("Unmapped source columns: " + name + ": " + ",".join(sorted(unknown)))
+        for column in table.columns:
+            if column.name not in values:
+                _default_legacy_column(name, column, values, prepared, now)
+                continue
+            value = values[column.name]
+            if value is not None and isinstance(column.type, DateTime) and isinstance(value, str):
+                values[column.name] = datetime.fromisoformat(value)
+            if value is not None and isinstance(column.type, Boolean):
+                if value not in (0, 1, False, True):
+                    raise ValueError("Invalid boolean: " + name + "." + column.name)
+                values[column.name] = bool(value)
+        prepared.append(values)
+    return prepared
+
+
+def _validate_source_tables(source, names):
+    for name in names:
+        if name not in ORDER and name not in ("sqlite_sequence", "alembic_version"):
+            if source.execute('SELECT count(*) FROM "' + name.replace('"', '""') + '"').fetchone()[
+                0
+            ]:
+                raise ValueError("Unknown nonempty source table: " + name)
+
+
+def _require_empty_destination(metadata, dest):
+    for name, table in metadata.tables.items():
+        if name != "alembic_version" and dest.execute(table.select().limit(1)).first():
+            raise ValueError("Destination is not empty: " + name)
+
+
 def import_snapshot(path: Path, target_url: str):
     if not target_url.startswith("postgresql"):
         raise ValueError("Destination must be PostgreSQL")
@@ -40,18 +112,11 @@ def import_snapshot(path: Path, target_url: str):
     engine = create_engine(target_url, hide_parameters=True)
     metadata = MetaData()
     metadata.reflect(bind=engine)
-    for name in names:
-        if name not in ORDER and name not in ("sqlite_sequence", "alembic_version"):
-            if source.execute('SELECT count(*) FROM "' + name.replace('"', '""') + '"').fetchone()[
-                0
-            ]:
-                raise ValueError("Unknown nonempty source table: " + name)
+    _validate_source_tables(source, names)
     counts = {}
     now = datetime.now(timezone.utc)
     with engine.begin() as dest:
-        for name, table in metadata.tables.items():
-            if name != "alembic_version" and dest.execute(table.select().limit(1)).first():
-                raise ValueError("Destination is not empty: " + name)
+        _require_empty_destination(metadata, dest)
         for name in ORDER:
             if name not in names:
                 continue
@@ -62,68 +127,7 @@ def import_snapshot(path: Path, target_url: str):
             if name not in metadata.tables:
                 raise ValueError("Missing destination table: " + name)
             table = metadata.tables[name]
-            prepared = []
-            for row in rows:
-                values = {RENAMES.get(name, {}).get(key, key): row[key] for key in row.keys()}
-                unknown = set(values) - set(table.c.keys())
-                if unknown:
-                    raise ValueError(
-                        "Unmapped source columns: " + name + ": " + ",".join(sorted(unknown))
-                    )
-                for column in table.columns:
-                    if column.name not in values:
-                        if name == "courses" and column.name == "status":
-                            values[column.name] = "ready"
-                        elif column.name == "revision" and name in (
-                            "modules",
-                            "lessons",
-                            "tasks",
-                            "tests",
-                            "theories",
-                        ):
-                            values[column.name] = 1
-                        elif name == "modules" and column.name == "description":
-                            values[column.name] = ""
-                        elif column.name == "position" and name in (
-                            "modules",
-                            "lessons",
-                            "tasks",
-                            "tests",
-                        ):
-                            group_key = "course_id" if name == "modules" else "module_id"
-                            values[column.name] = sum(
-                                1
-                                for previous in prepared
-                                if previous.get(group_key) == values.get(group_key)
-                            )
-                        elif column.name in ("created_at", "updated_at"):
-                            values[column.name] = now
-                        elif column.name == "is_deleted":
-                            values[column.name] = False
-                        elif (
-                            not column.nullable
-                            and column.server_default is None
-                            and not column.primary_key
-                        ):
-                            raise ValueError(
-                                "Required destination column has no default: "
-                                + name
-                                + "."
-                                + column.name
-                            )
-                        continue
-                    value = values[column.name]
-                    if (
-                        value is not None
-                        and isinstance(column.type, DateTime)
-                        and isinstance(value, str)
-                    ):
-                        values[column.name] = datetime.fromisoformat(value)
-                    if value is not None and isinstance(column.type, Boolean):
-                        if value not in (0, 1, False, True):
-                            raise ValueError("Invalid boolean: " + name + "." + column.name)
-                        values[column.name] = bool(value)
-                prepared.append(values)
+            prepared = _prepare_legacy_rows(name, rows, table, now)
             dest.execute(table.insert(), prepared)
             counts[name] = len(prepared)
             if "id" in table.c:

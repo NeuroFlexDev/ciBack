@@ -1,5 +1,6 @@
 import codecs
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -39,6 +40,28 @@ def _invalid_file() -> HTTPException:
     return HTTPException(status_code=400, detail="Файл пустой или повреждён")
 
 
+def _validate_text_upload(source):
+    decoder = codecs.getincrementaldecoder("utf-8-sig")("strict")
+    total = 0
+    while chunk := source.read(1024 * 1024):
+        total += len(chunk)
+        if total > settings.max_document_bytes:
+            raise UploadTooLargeError
+        if b"\x00" in chunk:
+            raise _invalid_file()
+        decoder.decode(chunk)
+    decoder.decode(b"", final=True)
+
+
+def _validate_docx_upload(source):
+    try:
+        with zipfile.ZipFile(source) as archive:
+            if not DOCX_REQUIRED_MEMBERS.issubset(archive.namelist()):
+                raise _invalid_file()
+    except (zipfile.BadZipFile, OSError) as _error_cause:
+        raise _invalid_file() from _error_cause
+
+
 def _validate_upload_content(upload: UploadFile, suffix: str) -> None:
     source = upload.file
     try:
@@ -59,29 +82,15 @@ def _validate_upload_content(upload: UploadFile, suffix: str) -> None:
             if source.read(5) != b"%PDF-":
                 raise _invalid_file()
         elif suffix == ".docx":
-            try:
-                with zipfile.ZipFile(source) as archive:
-                    if not DOCX_REQUIRED_MEMBERS.issubset(archive.namelist()):
-                        raise _invalid_file()
-            except (zipfile.BadZipFile, OSError):
-                raise _invalid_file()
+            _validate_docx_upload(source)
         elif suffix in {".txt", ".md"}:
-            decoder = codecs.getincrementaldecoder("utf-8-sig")("strict")
-            total = 0
-            while chunk := source.read(1024 * 1024):
-                total += len(chunk)
-                if total > settings.max_document_bytes:
-                    raise UploadTooLargeError
-                if b"\x00" in chunk:
-                    raise _invalid_file()
-                decoder.decode(chunk)
-            decoder.decode(b"", final=True)
+            _validate_text_upload(source)
     except HTTPException:
         raise
     except UploadTooLargeError:
         raise
-    except (UnicodeError, ValueError):
-        raise _invalid_file()
+    except (UnicodeError, ValueError) as _error_cause:
+        raise _invalid_file() from _error_cause
     finally:
         source.seek(0)
 
@@ -110,6 +119,14 @@ def _canvas_out(course_id: int, graph: CourseGraph | None) -> CanvasOut:
         created_at=graph.created_at,
         updated_at=graph.updated_at,
     )
+
+
+@dataclass(frozen=True, kw_only=True)
+class DocumentUpload:
+    """Parameters for upload_document, preserving its original defaults."""
+
+    upload: UploadFile
+    replace_document_id: int | None = None
 
 
 class CourseContentService:
@@ -223,12 +240,26 @@ class CourseContentService:
             return _canvas_out(course.id, graph)
         except HTTPException:
             raise
-        except IntegrityError:
+        except IntegrityError as _error_cause:
             db.rollback()
-            raise HTTPException(status_code=409, detail="Canvas version conflict")
+            raise HTTPException(status_code=409, detail="Canvas version conflict") from _error_cause
         except Exception:
             db.rollback()
             raise
+
+    @staticmethod
+    def _upload_identity(upload):
+        original_name = "".join(
+            character
+            for character in Path(upload.filename or "").name
+            if character.isprintable() and character not in "\r\n\t"
+        ).strip()[:512]
+        if not original_name:
+            raise HTTPException(status_code=400, detail="Некорректное имя файла")
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in ALLOWED_UPLOADS or upload.content_type not in ALLOWED_UPLOADS[suffix]:
+            raise HTTPException(status_code=415, detail="Неподдерживаемый тип файла")
+        return original_name, suffix
 
     @staticmethod
     def upload_document(
@@ -236,10 +267,11 @@ class CourseContentService:
         *,
         course_id: int,
         owner_id: int,
-        upload: UploadFile,
         storage: FileStorage,
-        replace_document_id: int | None = None,
+        document_upload: DocumentUpload,
     ) -> Document:
+        upload = document_upload.upload
+        replace_document_id = document_upload.replace_document_id
         course = CourseContentRepository.get_owned_course(db, course_id, owner_id)
         if course is None:
             raise _course_not_found()
@@ -259,21 +291,13 @@ class CourseContentService:
             if superseded is None:
                 raise HTTPException(status_code=404, detail="Заменяемый документ не найден")
 
-        original_name = "".join(
-            character
-            for character in Path(upload.filename or "").name
-            if character.isprintable() and character not in "\r\n\t"
-        ).strip()[:512]
-        if not original_name:
-            raise HTTPException(status_code=400, detail="Некорректное имя файла")
-        suffix = Path(original_name).suffix.lower()
-        if suffix not in ALLOWED_UPLOADS or upload.content_type not in ALLOWED_UPLOADS[suffix]:
-            raise HTTPException(status_code=415, detail="Неподдерживаемый тип файла")
-
+        original_name, suffix = CourseContentService._upload_identity(upload)
         try:
             _validate_upload_content(upload, suffix)
-        except UploadTooLargeError:
-            raise HTTPException(status_code=413, detail="Файл превышает допустимый размер")
+        except UploadTooLargeError as _error_cause:
+            raise HTTPException(
+                status_code=413, detail="Файл превышает допустимый размер"
+            ) from _error_cause
 
         storage_key = f"{owner_id}/{course_id}/{uuid4().hex}{suffix}"
         from app.models.user import User
@@ -284,8 +308,10 @@ class CourseContentService:
         upload.file.seek(0)
         try:
             stored = storage.save(upload.file, storage_key)
-        except UploadTooLargeError:
-            raise HTTPException(status_code=413, detail="Файл превышает допустимый размер")
+        except UploadTooLargeError as _error_cause:
+            raise HTTPException(
+                status_code=413, detail="Файл превышает допустимый размер"
+            ) from _error_cause
         if stored.size_bytes == 0:
             storage.delete(storage_key)
             raise _invalid_file()

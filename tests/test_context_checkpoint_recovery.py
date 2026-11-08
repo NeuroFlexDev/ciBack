@@ -7,13 +7,13 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 
 from app.ai import gateway
-from app.ai.context_budget import ContextBudgetExceeded
+from app.ai.context_budget import ContextBudgetExceeded, ContextLimit
 from app.ai.evidence import merge_ingestion
 from app.core.config import settings
 from app.models.agent_artifact import AgentArtifact
 from app.models.ai_state import AICall
 from app.schemas.agentic_pipeline import IngestionArtifact
-from app.services.agentic_course_pipeline import AgenticCoursePipeline
+from app.services.agentic_course_pipeline import AgenticCoursePipeline, AgentRevision, ReviewContext
 from app.services.pipeline_service import PipelineService
 from tests.test_ai_runtime_v2 import SOURCE, execute, make_runtime
 
@@ -216,12 +216,14 @@ def test_provider_context_error_keeps_unknown_usage_reservation(db_session, auth
     def rejected(*a, **k):
         attempts.append(1)
         raise ContextBudgetExceeded(
-            model=settings.AI_MODEL_FAST,
-            input_tokens=100,
-            output_tokens=6000,
-            input_limit=64000,
-            context_window=400000,
             request_sent=True,
+            budget=ContextLimit(
+                model=settings.AI_MODEL_FAST,
+                input_tokens=100,
+                output_tokens=6000,
+                input_limit=64000,
+                context_window=400000,
+            ),
         )
 
     runtime = make_runtime(db_session, auth_user, rejected)
@@ -249,12 +251,14 @@ def test_sent_provider_context_error_does_not_trigger_outer_split(monkeypatch, s
     def rejected(**kwargs):
         attempts.append(kwargs)
         raise ContextBudgetExceeded(
-            model=settings.AI_MODEL_FAST,
-            input_tokens=100,
-            output_tokens=6000,
-            input_limit=64000,
-            context_window=400000,
             request_sent=True,
+            budget=ContextLimit(
+                model=settings.AI_MODEL_FAST,
+                input_tokens=100,
+                output_tokens=6000,
+                input_limit=64000,
+                context_window=400000,
+            ),
         )
 
     monkeypatch.setattr(
@@ -263,22 +267,19 @@ def test_sent_provider_context_error_does_not_trigger_outer_split(monkeypatch, s
     with pytest.raises(ContextBudgetExceeded):
         if stage == "assessment":
             pipeline._create_assessments(
-                common={},
                 settings_snapshot={},
                 course_plan=plan,
                 writer=writer,
-                qa_feedback=None,
-                revision=0,
+                iteration=AgentRevision(common={}, qa_feedback=None, revision=0),
             )
         else:
             pipeline._review(
-                common={},
-                ingestion=None,
-                competency_map=None,
                 course_plan=plan,
                 writer=writer,
                 assessment=None,
-                revision=0,
+                review_context=ReviewContext(
+                    common={}, ingestion=None, competency_map=None, revision=0
+                ),
             )
     assert len(attempts) == 1
 
@@ -307,17 +308,22 @@ def test_assessment_local_context_split_keeps_every_lesson(monkeypatch):
         attempts.append(ids)
         if len(ids) > 1:
             raise ContextBudgetExceeded(
-                model=settings.AI_MODEL_FAST,
-                input_tokens=65000,
-                output_tokens=6000,
-                input_limit=64000,
-                context_window=400000,
+                budget=ContextLimit(
+                    model=settings.AI_MODEL_FAST,
+                    input_tokens=65000,
+                    output_tokens=6000,
+                    input_limit=64000,
+                    context_window=400000,
+                )
             )
         return ids
 
     monkeypatch.setattr(pipeline, "_assess_batch", assessed)
     result = pipeline._create_assessments(
-        common={}, settings_snapshot={}, course_plan=plan, writer=plan, qa_feedback=None, revision=0
+        settings_snapshot={},
+        course_plan=plan,
+        writer=plan,
+        iteration=AgentRevision(common={}, qa_feedback=None, revision=0),
     )
     assert result == [lesson.id for lesson in lessons]
     assert attempts == [

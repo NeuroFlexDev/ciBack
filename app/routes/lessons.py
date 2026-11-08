@@ -6,7 +6,7 @@ from app.models.lesson import Lesson
 from app.models.user import User
 from app.schemas.course_editor import LessonCreateEditor, LessonUpdateEditor, OrderUpdate
 from app.services.auth_service import get_current_user
-from app.services.course_editor_service import CourseEditorService
+from app.services.course_editor_service import CourseEditorService, LessonContent, ReorderTarget
 
 router = APIRouter()
 
@@ -38,9 +38,9 @@ def add_lesson(
             course_id,
             module_id,
             current_user.id,
-            payload.title,
-            payload.description,
-            payload.content,
+            lesson_content=LessonContent(
+                title=payload.title, description=payload.description, content=payload.content
+            ),
         )
     )
 
@@ -75,11 +75,13 @@ def reorder_lessons(
     CourseEditorService._module(db, module_id, current_user.id, True)
     rows = CourseEditorService.reorder(
         db,
-        entity=Lesson,
-        parent_filter=(Lesson.module_id == module_id,),
         items=payload.items,
         owner_id=current_user.id,
-        snapshot=CourseEditorService._lesson_snapshot,
+        target=ReorderTarget(
+            entity=Lesson,
+            parent_filter=(Lesson.module_id == module_id,),
+            snapshot=CourseEditorService._lesson_snapshot,
+        ),
     )
     return [_out(item) for item in rows]
 

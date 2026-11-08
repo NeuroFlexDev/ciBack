@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, replace
 from typing import Any
 
 from fastapi import HTTPException
@@ -14,13 +15,14 @@ from app.ai import control as ai_control
 from app.ai import providers
 from app.ai.context_budget import (
     ContextBudgetExceeded,
+    ContextLimit,
     count_messages,
     limits,
     provider_context_error,
     require_fits,
 )
 from app.ai.models import model_policy
-from app.ai.routing import choose_route, enabled_candidates
+from app.ai.routing import RouteContext, RouteDecision, choose_route, enabled_candidates
 from app.core.config import settings
 
 
@@ -65,33 +67,33 @@ def retryable(exc: Exception) -> bool:
     }
 
 
-def invoke_messages(
-    role: str,
-    messages: list[dict],
-    *,
-    model: str | None = None,
-    max_tokens: int | None = None,
-    json_mode: bool = False,
-    fallback: bool = False,
-    provider: str | None = None,
-    excluded_routes: set[str] | None = None,
-) -> dict:
-    if not configured():
-        raise providers.AIUnavailable()
-    policy = model_policy(role)
-    used_model = policy.fallback if fallback else (model or policy.model)
-    allowed_models = {
-        settings.AI_MODEL_FAST,
-        settings.AI_MODEL_REASONING,
-        settings.AI_MODEL_WRITER,
-        settings.AI_MODEL_CRITIC,
-        settings.AI_MODEL_FALLBACK,
-    }
-    static_models = set(allowed_models)
-    if ai_control.policy()["mode"] == "adaptive":
-        allowed_models.update(item.model for item in enabled_candidates(role))
-    if used_model not in allowed_models:
-        raise HTTPException(422, "This model is not enabled by the server model policy")
+@dataclass(frozen=True, kw_only=True)
+class InvocationOptions:
+    """Parameters for invoke_messages, preserving its original defaults."""
+
+    model: str | None = None
+    max_tokens: int | None = None
+    json_mode: bool = False
+    fallback: bool = False
+    provider: str | None = None
+    excluded_routes: set[str] | None = None
+
+
+@dataclass(frozen=True)
+class ModelSelection:
+    model: str
+    provider: str
+    input_tokens: int
+    output_tokens: int
+    decision: RouteDecision | None = None
+
+
+def _select_route(role, messages, options, policy, used_model):
+    model = options.model
+    max_tokens = options.max_tokens
+    fallback = options.fallback
+    provider = options.provider
+    excluded_routes = options.excluded_routes
     input_estimate = count_messages(messages, used_model)
     output_limit = max_tokens or policy.max_output_tokens
     decision = None
@@ -127,49 +129,21 @@ def invoke_messages(
             baseline_model=used_model,
             input_tokens=input_estimate,
             output_tokens=output_limit,
-            available_providers=available_provider_ids(),
-            excluded_models=excluded_routes,
-            requested_model=model if not fallback else None,
-            forecast=predictions,
-            input_estimates=input_estimates,
+            routing_context=RouteContext(
+                available_providers=available_provider_ids(),
+                excluded_models=excluded_routes,
+                requested_model=model if not fallback else None,
+                forecast=predictions,
+                input_estimates=input_estimates,
+            ),
         )
         provider, used_model = decision.selected_provider, decision.selected_model
-    selected_provider = providers.registry().get(provider)
-    if selected_provider is None or not providers.available(selected_provider):
-        raise providers.AIUnavailable()
-    candidate = next(
-        (
-            item
-            for item in enabled_candidates(role)
-            if item.model == used_model and item.provider == provider
-        ),
-        None,
-    )
-    if candidate is None and not (provider == "vsellm" and used_model in static_models):
-        # Approval is for a provider/model pair. A model approved at another
-        # endpoint must never silently leak into the baseline provider fallback.
-        raise providers.AIUnavailable()
-    if any(
-        item.provider == provider
-        and item.model == used_model
-        and (not item.approved or role not in item.roles)
-        for item in ai_control.candidates()
-    ):
-        raise providers.AIUnavailable()
-    input_estimate = require_fits(messages, used_model, output_limit, provider)
-    llm = ChatOpenAI(
-        model=used_model,
-        api_key=providers.credential(selected_provider),
-        base_url=str(selected_provider.base_url),
-        timeout=selected_provider.timeout_seconds,
-        max_retries=0,
-        max_tokens=output_limit,
-        temperature=None,
-        **providers.client_options(selected_provider),
-        **({"extra_body": candidate.extra_body} if candidate and candidate.extra_body else {}),
-    )
-    if json_mode:
-        llm = llm.bind(response_format={"type": "json_object"})
+    return ModelSelection(used_model, provider, input_estimate, output_limit, decision)
+
+
+def _send_messages(llm, messages, selection, selected_provider):
+    used_model, provider = selection.model, selection.provider
+    input_estimate, output_limit = selection.input_tokens, selection.output_tokens
     constructors = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
     try:
         response = llm.invoke(
@@ -195,12 +169,14 @@ def invoke_messages(
         if provider_context_error(exc):
             max_input, _, context = limits(used_model, provider)
             error = ContextBudgetExceeded(
-                model=used_model,
-                input_tokens=input_estimate,
-                output_tokens=output_limit,
-                input_limit=max_input,
-                context_window=context,
                 request_sent=True,
+                budget=ContextLimit(
+                    model=used_model,
+                    input_tokens=input_estimate,
+                    output_tokens=output_limit,
+                    input_limit=max_input,
+                    context_window=context,
+                ),
             )
             error.ai_provider = provider
             # No usage was reported. Retain the conservative paid reservation;
@@ -214,6 +190,13 @@ def invoke_messages(
             error.ai_provider = provider
             raise error from None
         raise
+    return response
+
+
+def _accepted_response(response, selection):
+    used_model, provider = selection.model, selection.provider
+    input_estimate = selection.input_tokens
+    decision = selection.decision
     usage = response.usage_metadata or {}
     reported_usage = {
         "input_tokens": usage.get("input_tokens", input_estimate),
@@ -254,12 +237,84 @@ def invoke_messages(
     }
 
 
+def invoke_messages(
+    role: str, messages: list[dict], *, options: InvocationOptions | None = None
+) -> dict:
+    options = options or InvocationOptions()
+    model = options.model
+    json_mode = options.json_mode
+    fallback = options.fallback
+    if not configured():
+        raise providers.AIUnavailable()
+    policy = model_policy(role)
+    used_model = policy.fallback if fallback else (model or policy.model)
+    allowed_models = {
+        settings.AI_MODEL_FAST,
+        settings.AI_MODEL_REASONING,
+        settings.AI_MODEL_WRITER,
+        settings.AI_MODEL_CRITIC,
+        settings.AI_MODEL_FALLBACK,
+    }
+    static_models = set(allowed_models)
+    if ai_control.policy()["mode"] == "adaptive":
+        allowed_models.update(item.model for item in enabled_candidates(role))
+    if used_model not in allowed_models:
+        raise HTTPException(422, "This model is not enabled by the server model policy")
+    selection = _select_route(role, messages, options, policy, used_model)
+    used_model, provider = selection.model, selection.provider
+    output_limit = selection.output_tokens
+    selected_provider = providers.registry().get(provider)
+    if selected_provider is None or not providers.available(selected_provider):
+        raise providers.AIUnavailable()
+    candidate = next(
+        (
+            item
+            for item in enabled_candidates(role)
+            if item.model == used_model and item.provider == provider
+        ),
+        None,
+    )
+    if candidate is None and not (provider == "vsellm" and used_model in static_models):
+        # Approval is for a provider/model pair. A model approved at another
+        # endpoint must never silently leak into the baseline provider fallback.
+        raise providers.AIUnavailable()
+    if any(
+        item.provider == provider
+        and item.model == used_model
+        and (not item.approved or role not in item.roles)
+        for item in ai_control.candidates()
+    ):
+        raise providers.AIUnavailable()
+    selection = replace(
+        selection, input_tokens=require_fits(messages, used_model, output_limit, provider)
+    )
+    llm = ChatOpenAI(
+        model=used_model,
+        api_key=providers.credential(selected_provider),
+        base_url=str(selected_provider.base_url),
+        timeout=selected_provider.timeout_seconds,
+        max_retries=0,
+        max_tokens=output_limit,
+        temperature=None,
+        **providers.client_options(selected_provider),
+        **({"extra_body": candidate.extra_body} if candidate and candidate.extra_body else {}),
+    )
+    if json_mode:
+        llm = llm.bind(response_format={"type": "json_object"})
+    response = _send_messages(llm, messages, selection, selected_provider)
+    return _accepted_response(response, selection)
+
+
 def chat_completion(role: str, messages: list[dict], **kwargs) -> dict:
     excluded_routes = set()
     for attempt in range(settings.AI_MAX_ATTEMPTS):
         try:
             return invoke_messages(
-                role, messages, fallback=attempt > 0, excluded_routes=excluded_routes, **kwargs
+                role,
+                messages,
+                options=InvocationOptions(
+                    fallback=attempt > 0, excluded_routes=excluded_routes, **kwargs
+                ),
             )
         except Exception as exc:
             if isinstance(exc, HTTPException) and exc.status_code in {402, 413, 422}:

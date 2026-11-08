@@ -3,9 +3,10 @@ import json
 from app.models.generation_run import GenerationRun
 from app.services import learner_assistant_service as assistant
 from app.services.generation_service import render_prompt
+from app.services.learner_assistant_service import AssistantMessage
 from app.services.learning_service import settings_for
 from app.services.organization_ai_context import organization_ai_context
-from app.services.scoped_ai import tracked_completion
+from app.services.scoped_ai import TrackedCompletionRequest, tracked_completion
 from tests.test_learning_runtime import assign, headers, publish, world
 
 
@@ -37,10 +38,12 @@ def test_interactive_context_is_tenant_scoped_and_preserves_original_contract(db
         db_session,
         world["author"].id,
         None,
-        "canvas",
-        original,
-        invoke=lambda role, messages, **kwargs: (
-            captured.append(messages) or {"text": "Grounded response"}
+        request=TrackedCompletionRequest(
+            role="canvas",
+            messages=original,
+            invoke=lambda role, messages, **kwargs: (
+                captured.append(messages) or {"text": "Grounded response"}
+            ),
         ),
     )
     text = captured[0][0]["content"]
@@ -121,7 +124,11 @@ def test_learner_context_has_preferences_without_answer_keys(
 
     monkeypatch.setattr("app.ai.gateway.invoke_messages", generate)
     result = assistant.send_message(
-        db_session, world["learner"], assignment["id"], lesson.id, "Explain", "learner-org-context"
+        db_session,
+        world["learner"],
+        assignment["id"],
+        lesson.id,
+        message=AssistantMessage(question="Explain", request_id="learner-org-context"),
     )
     assert result.status == "completed"
     prompt = json.dumps(captured)

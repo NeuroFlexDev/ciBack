@@ -78,6 +78,35 @@ def render_inventory(content):
     return list(diagrams.values()), sorted(maths)
 
 
+def _sanitize_svg_attributes(node):
+    for key, value in list(node.attrib.items()):
+        attr = key.split("}")[-1].lower()
+        if (
+            attr.startswith("on")
+            or attr in {"src", "base"}
+            or (attr == "href" and not re.fullmatch(r"#[A-Za-z_][\w:.-]*", value))
+        ):
+            raise PDFRenderError("SVG не должен обращаться к внешним ресурсам.")
+        urls = re.findall(r"url\((.*?)\)", value, re.I)
+        if any(
+            not re.fullmatch(r"#[A-Za-z_][\w:.-]*", url.strip().strip("'\"")) for url in urls
+        ) or re.search(r"@import|javascript:|expression\(", value, re.I):
+            raise PDFRenderError("SVG содержит внешнюю ссылку.")
+        if "currentColor" in value:
+            node.set(key, value.replace("currentColor", "#17191d"))
+        if attr == "stroke-dasharray" and value.strip().lower() != "none":
+            try:
+                lengths = [
+                    float(part.removesuffix("px")) for part in re.split(r"[\s,]+", value.strip())
+                ]
+                if any(length < 0 for length in lengths):
+                    raise ValueError("negative dash")
+                if not any(lengths):
+                    node.set(key, "none")
+            except ValueError as exc:
+                raise PDFRenderError("Некорректный штрих линии SVG.") from exc
+
+
 def safe_svg(source, *, max_bytes=MAX_SVG, allow_use=True):
     if len(source.encode("utf8")) > max_bytes:
         raise PDFRenderError("Схема слишком велика для безопасного экспорта.")
@@ -128,33 +157,7 @@ def safe_svg(source, *, max_bytes=MAX_SVG, allow_use=True):
             )
         if tag not in allowed:
             raise PDFRenderError("SVG содержит неподдерживаемые внешние или исполняемые элементы.")
-        for key, value in list(node.attrib.items()):
-            attr = key.split("}")[-1].lower()
-            if (
-                attr.startswith("on")
-                or attr in {"src", "base"}
-                or (attr == "href" and not re.fullmatch(r"#[A-Za-z_][\w:.-]*", value))
-            ):
-                raise PDFRenderError("SVG не должен обращаться к внешним ресурсам.")
-            urls = re.findall(r"url\((.*?)\)", value, re.I)
-            if any(
-                not re.fullmatch(r"#[A-Za-z_][\w:.-]*", url.strip().strip("'\"")) for url in urls
-            ) or re.search(r"@import|javascript:|expression\(", value, re.I):
-                raise PDFRenderError("SVG содержит внешнюю ссылку.")
-            if "currentColor" in value:
-                node.set(key, value.replace("currentColor", "#17191d"))
-            if attr == "stroke-dasharray" and value.strip().lower() != "none":
-                try:
-                    lengths = [
-                        float(part.removesuffix("px"))
-                        for part in re.split(r"[\s,]+", value.strip())
-                    ]
-                    if any(length < 0 for length in lengths):
-                        raise ValueError("negative dash")
-                    if not any(lengths):
-                        node.set(key, "none")
-                except ValueError as exc:
-                    raise PDFRenderError("Некорректный штрих линии SVG.") from exc
+        _sanitize_svg_attributes(node)
         if tag == "style" and re.search(
             r"@import|url\(|javascript:|expression\(", node.text or "", re.I
         ):
@@ -212,6 +215,98 @@ def drawing_from_svg(source, max_width=470, max_height=570, *, normalize=False, 
         raise PDFRenderError("Не удалось отрисовать схему. Проверьте её в редакторе.") from exc
 
 
+def _namespace_marker_children(clone, clone_id, reference_pattern):
+    local_ids = {
+        child.get("id"): f"{clone_id}-child-{child_index}"
+        for child_index, child in enumerate(list(clone.iter())[1:])
+        if child.get("id")
+    }
+    for child in list(clone.iter())[1:]:
+        if child.get("id") in local_ids:
+            child.set("id", local_ids[child.get("id")])
+        for key, value in list(child.attrib.items()):
+            value = re.sub(
+                reference_pattern,
+                lambda match, local_ids=local_ids: f"url(#{local_ids.get(match[2], match[2])})",
+                value,
+            )
+            if key.split("}")[-1] == "href" and value[1:] in local_ids:
+                value = "#" + local_ids[value[1:]]
+            child.set(key, value)
+
+
+def _reverse_marker_viewport(marker, clone, number):
+    view_box = marker.get("viewBox")
+    coordinates = (
+        [number(value) for value in re.split(r"[\s,]+", view_box.strip())]
+        if view_box
+        else [
+            0,
+            0,
+            number(marker.get("markerWidth", "3")),
+            number(marker.get("markerHeight", "3")),
+        ]
+    )
+    if len(coordinates) != 4 or coordinates[2] <= 0 or coordinates[3] <= 0:
+        raise PDFRenderError("Некорректный viewport наконечника SVG.")
+    x, y, width, height = coordinates
+    clone.set("viewBox", f"{-x - width:g} {-y - height:g} {width:g} {height:g}")
+    clone.set("refX", f"{-number(marker.get('refX', '0')):g}")
+    clone.set("refY", f"{-number(marker.get('refY', '0')):g}")
+    alignment = marker.get("preserveAspectRatio")
+    if alignment:
+        clone.set(
+            "preserveAspectRatio",
+            re.sub(
+                r"[xy](?:Min|Max)",
+                lambda match: match[0][0] + ("Max" if match[0][1:] == "Min" else "Min"),
+                alignment,
+            ),
+        )
+
+
+def _rewrite_marker_references(root, replacements, reference_pattern):
+    def reverse_reference(value):
+        return re.sub(
+            reference_pattern, lambda match: f"url(#{replacements.get(match[2], match[2])})", value
+        )
+
+    for node in root.iter():
+        if node.get("marker-start"):
+            node.set("marker-start", reverse_reference(node.get("marker-start")))
+        if node.get("style"):
+
+            def declaration(match):
+                name, value = match[1].lower(), match[2]
+                if name == "marker":
+                    return f"marker-start:{reverse_reference(value)};marker-mid:{value};marker-end:{value}"
+                return f"marker-start:{reverse_reference(value)}"
+
+            node.set(
+                "style",
+                re.sub(
+                    r"(?i)\b(marker-start|marker)\s*:\s*([^;]+)", declaration, node.get("style")
+                ),
+            )
+
+
+def _marker_start_references(root):
+    start_references = set()
+    reference_pattern = r"url\(\s*([\'\"]?)#([\w:.-]+)\1\s*\)"
+    for node in root.iter():
+        values = [node.get("marker-start", "")]
+        values.extend(
+            match[1]
+            for match in re.findall(
+                r"(?i)\b(marker-start|marker)\s*:\s*([^;]+)", node.get("style", "")
+            )
+        )
+        start_references.update(
+            match[1] for value in values for match in re.findall(reference_pattern, value)
+        )
+    return start_references, reference_pattern
+
+
 def svg1_marker_orientation(data):
     """Preserve SVG2 start/end orientation in resvg's SVG1.1 normalizer.
 
@@ -231,19 +326,7 @@ def svg1_marker_orientation(data):
         return data
     ids = {node.get("id") for node in root.iter()}
     replacements = {}
-    start_references = set()
-    reference_pattern = r"url\(\s*([\'\"]?)#([\w:.-]+)\1\s*\)"
-    for node in root.iter():
-        values = [node.get("marker-start", "")]
-        values.extend(
-            match[1]
-            for match in re.findall(
-                r"(?i)\b(marker-start|marker)\s*:\s*([^;]+)", node.get("style", "")
-            )
-        )
-        start_references.update(
-            match[1] for value in values for match in re.findall(reference_pattern, value)
-        )
+    start_references, reference_pattern = _marker_start_references(root)
     clones = [marker for marker in markers if marker.get("id") in start_references]
     if (
         sum(1 for _ in root.iter()) + sum(sum(1 for _ in marker.iter()) + 1 for marker in clones)
@@ -271,50 +354,8 @@ def svg1_marker_orientation(data):
         clone = deepcopy(marker)
         clone.set("id", clone_id)
         clone.set("orient", "auto")
-        local_ids = {
-            child.get("id"): f"{clone_id}-child-{child_index}"
-            for child_index, child in enumerate(list(clone.iter())[1:])
-            if child.get("id")
-        }
-        for child in list(clone.iter())[1:]:
-            if child.get("id") in local_ids:
-                child.set("id", local_ids[child.get("id")])
-            for key, value in list(child.attrib.items()):
-                value = re.sub(
-                    reference_pattern,
-                    lambda match: f"url(#{local_ids.get(match[2], match[2])})",
-                    value,
-                )
-                if key.split("}")[-1] == "href" and value[1:] in local_ids:
-                    value = "#" + local_ids[value[1:]]
-                child.set(key, value)
-        view_box = marker.get("viewBox")
-        coordinates = (
-            [number(value) for value in re.split(r"[\s,]+", view_box.strip())]
-            if view_box
-            else [
-                0,
-                0,
-                number(marker.get("markerWidth", "3")),
-                number(marker.get("markerHeight", "3")),
-            ]
-        )
-        if len(coordinates) != 4 or coordinates[2] <= 0 or coordinates[3] <= 0:
-            raise PDFRenderError("Некорректный viewport наконечника SVG.")
-        x, y, width, height = coordinates
-        clone.set("viewBox", f"{-x - width:g} {-y - height:g} {width:g} {height:g}")
-        clone.set("refX", f"{-number(marker.get('refX', '0')):g}")
-        clone.set("refY", f"{-number(marker.get('refY', '0')):g}")
-        alignment = marker.get("preserveAspectRatio")
-        if alignment:
-            clone.set(
-                "preserveAspectRatio",
-                re.sub(
-                    r"[xy](?:Min|Max)",
-                    lambda match: match[0][0] + ("Max" if match[0][1:] == "Min" else "Min"),
-                    alignment,
-                ),
-            )
+        _namespace_marker_children(clone, clone_id, reference_pattern)
+        _reverse_marker_viewport(marker, clone, number)
         group = Element(ns + "g", {"transform": "rotate(180)"})
         for child in list(clone):
             clone.remove(child)
@@ -324,28 +365,7 @@ def svg1_marker_orientation(data):
         marker.set("orient", "auto")
         replacements[original_id] = clone_id
 
-    def reverse_reference(value):
-        return re.sub(
-            reference_pattern, lambda match: f"url(#{replacements.get(match[2], match[2])})", value
-        )
-
-    for node in root.iter():
-        if node.get("marker-start"):
-            node.set("marker-start", reverse_reference(node.get("marker-start")))
-        if node.get("style"):
-
-            def declaration(match):
-                name, value = match[1].lower(), match[2]
-                if name == "marker":
-                    return f"marker-start:{reverse_reference(value)};marker-mid:{value};marker-end:{value}"
-                return f"marker-start:{reverse_reference(value)}"
-
-            node.set(
-                "style",
-                re.sub(
-                    r"(?i)\b(marker-start|marker)\s*:\s*([^;]+)", declaration, node.get("style")
-                ),
-            )
+    _rewrite_marker_references(root, replacements, reference_pattern)
     return safe_svg(ET.tostring(root, encoding="unicode"), max_bytes=MAX_NORMALIZED_SVG)
 
 
@@ -374,7 +394,7 @@ def math_images(expressions, folder):
             "Не удалось отрисовать формулу. Проверьте LaTeX и повторите экспорт."
         ) from exc
     values = {}
-    for index, (source, svg) in enumerate(zip(expressions, output)):
+    for index, (source, svg) in enumerate(zip(expressions, output, strict=True)):
         # MathJax uses ex units; explicit points keep the SVG aspect and baseline.
         root = ET.fromstring(svg, forbid_dtd=True)
         _, _, width, height = map(float, root.attrib["viewBox"].split())

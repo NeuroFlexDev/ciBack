@@ -10,7 +10,7 @@ def search_arxiv(query: str, lang: str = "en", limit: int = 5) -> list[str]:
         feed = feedparser.parse(url)
         return [f"{entry.title.strip()}\n{entry.summary.strip()}" for entry in feed.entries]
     except Exception as e:
-        raise RuntimeError(f"Ошибка поиска в arXiv: {e}")
+        raise RuntimeError(f"Ошибка поиска в arXiv: {e}") from e
 
 
 # вызов функции под тест
@@ -36,7 +36,7 @@ def search_crossref(query: str, lang: str = "en", limit: int = 5) -> list[str]:
             if item.get("title")
         ]
     except Exception as e:
-        raise RuntimeError(f"Ошибка поиска в CrossRef: {e}")
+        raise RuntimeError(f"Ошибка поиска в CrossRef: {e}") from e
 
 
 # === OpenAlex ===
@@ -62,7 +62,7 @@ def search_openalex(query: str, limit: int = 5) -> list[str]:
             result.append(f"{title}\n{abstract}")
         return result
     except Exception as e:
-        raise RuntimeError(f"Ошибка поиска в OpenAlex: {e}")
+        raise RuntimeError(f"Ошибка поиска в OpenAlex: {e}") from e
 
 
 def openalex_search(*args, **kwargs):

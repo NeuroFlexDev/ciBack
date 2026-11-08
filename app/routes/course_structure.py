@@ -113,7 +113,7 @@ def create_course_structure(
     except Exception as e:
         db.rollback()
         logger.error(f"Ошибка создания структуры курса: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка создания структуры курса")
+        raise HTTPException(status_code=500, detail="Ошибка создания структуры курса") from e
 
 
 @router.get(
@@ -148,7 +148,7 @@ def get_all_course_structures(
         raise
     except Exception as e:
         logger.error(f"Ошибка получения структур курсов: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка получения структур курсов")
+        raise HTTPException(status_code=500, detail="Ошибка получения структур курсов") from e
 
 
 @router.get(
@@ -185,7 +185,7 @@ def get_course_structure(
         raise
     except Exception as e:
         logger.error(f"Ошибка получения структуры курса: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка получения структуры курса")
+        raise HTTPException(status_code=500, detail="Ошибка получения структуры курса") from e
 
 
 @router.put(
@@ -235,7 +235,7 @@ def update_course_structure(
     except Exception as e:
         db.rollback()
         logger.error(f"Ошибка обновления структуры курса: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка обновления структуры курса")
+        raise HTTPException(status_code=500, detail="Ошибка обновления структуры курса") from e
 
 
 @router.delete("/course-structure/{cs_id}", summary="Удаление структуры курса")
@@ -265,4 +265,4 @@ def delete_course_structure(
     except Exception as e:
         db.rollback()
         logger.error(f"Ошибка удаления структуры курса: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка удаления структуры курса")
+        raise HTTPException(status_code=500, detail="Ошибка удаления структуры курса") from e

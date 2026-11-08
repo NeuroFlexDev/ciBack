@@ -4,15 +4,16 @@ import csv
 import io
 import json
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
-from app.models.administration import AdminEvent, Organization
+from app.models.administration import AdminEvent
 from app.models.course import Course
 from app.models.course_version import CourseVersion
 from app.models.learning import (
@@ -69,6 +70,12 @@ from app.schemas.mobile_contract import (
 )
 from app.services import learning_service as svc
 from app.services.auth_service import get_current_user, require_admin
+from app.services.learning_service import (
+    AnswerCommand,
+    AssignmentAccessPolicy,
+    AssignmentRequest,
+    LearningScope,
+)
 from app.services.organization_access import audit, lock_member, lock_members, lock_org
 from app.services.tenant_lifecycle import (
     DEPARTMENT_FIELDS,
@@ -411,15 +418,17 @@ def add_group_members(
             for e in enrollments:
                 svc.create_assignment(
                     db,
-                    org_id=org_id,
-                    version_id=e.course_version_id,
-                    user_id=target.id,
-                    actor_id=e.assigned_by,
-                    rules=e.rules,
-                    rules_revision=e.rules_revision,
-                    due_at=e.due_at,
-                    group_id=row.id,
-                    cycle_key=e.cycle_key,
+                    request=AssignmentRequest(
+                        org_id=org_id,
+                        version_id=e.course_version_id,
+                        user_id=target.id,
+                        actor_id=e.assigned_by,
+                        rules=e.rules,
+                        rules_revision=e.rules_revision,
+                        due_at=e.due_at,
+                        group_id=row.id,
+                        cycle_key=e.cycle_key,
+                    ),
                 )
     audit(
         db,
@@ -605,7 +614,8 @@ def people(db: Session = Depends(get_db), user: User = Depends(get_current_user)
         rows = [
             r
             for r in rows
-            if r.user_id == user.id or svc.can_scope(db, user, "manager", user_id=r.user_id)
+            if r.user_id == user.id
+            or svc.can_scope(db, user, scope=LearningScope(role="manager", user_id=r.user_id))
         ]
     return {
         "items": [
@@ -728,20 +738,7 @@ def get_roles(user_id: int, db: Session = Depends(get_db), user: User = Depends(
     }
 
 
-@router.post("/team/members/{user_id}/roles", status_code=201)
-def grant_role(
-    user_id: int,
-    payload: RoleInput,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    org_id = svc.require_manager(db, user)
-    user, target = lock_team_members(db, user, org_id, user_id)
-    svc.require_manager(db, user)
-    if target.id == user.id or target.is_admin:
-        raise HTTPException(403, "Нельзя изменять собственные права или права оператора")
-    if payload.role == "admin" and user.organization_role != "owner":
-        raise HTTPException(403, "Только владелец назначает администратора")
+def _validate_role_scope(db, user, payload, org_id):
     if payload.role in {"reviewer", "manager"} and payload.scope_type == "organization":
         raise HTTPException(
             422, "Проверяющему и руководителю нужна явная область: курс, группа или подразделение"
@@ -761,6 +758,23 @@ def grant_role(
             .first()
         ):
             raise HTTPException(404, "Подразделение не найдено")
+
+
+@router.post("/team/members/{user_id}/roles", status_code=201)
+def grant_role(
+    user_id: int,
+    payload: RoleInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    org_id = svc.require_manager(db, user)
+    user, target = lock_team_members(db, user, org_id, user_id)
+    svc.require_manager(db, user)
+    if target.id == user.id or target.is_admin:
+        raise HTTPException(403, "Нельзя изменять собственные права или права оператора")
+    if payload.role == "admin" and user.organization_role != "owner":
+        raise HTTPException(403, "Только владелец назначает администратора")
+    _validate_role_scope(db, user, payload, org_id)
     row = (
         db.query(LearningRoleGrant)
         .filter_by(organization_id=org_id, user_id=user_id, **payload.model_dump())
@@ -1150,18 +1164,7 @@ def catalogue(db: Session = Depends(get_db), user: User = Depends(get_current_us
     }
 
 
-@router.post("/courses/{course_id}/assignments", status_code=201)
-def assign_course(
-    course_id: int,
-    payload: AssignmentInput,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    org_id = svc.organization(user)
-    lock_org(db, org_id)  # serializes duplicate clicks and group enrollment changes
-    course = svc.org_course(db, user, course_id)
-    if course.is_deleted:
-        raise HTTPException(409, "Архивный курс нельзя назначить заново")
+def _assignment_version(db, course, payload):
     version_query = db.query(CourseVersion).filter_by(
         course_id=course.id, publication_status="published"
     )
@@ -1171,6 +1174,10 @@ def assign_course(
     if not version:
         raise HTTPException(409, "Сначала опубликуйте курс")
     svc.snapshot_for(db, version.id)
+    return version
+
+
+def _assignment_rules(db, org_id, payload):
     config = svc.settings_for(db, org_id)
     if (
         payload.expected_rules_revision is not None
@@ -1191,6 +1198,23 @@ def assign_course(
             422,
             "Проверьте исключения: число попыток от 1 до 100, проходной результат от 0 до 100 и допустимый режим открытия ответов.",
         ) from None
+    return config, rules
+
+
+@router.post("/courses/{course_id}/assignments", status_code=201)
+def assign_course(
+    course_id: int,
+    payload: AssignmentInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    org_id = svc.organization(user)
+    lock_org(db, org_id)  # serializes duplicate clicks and group enrollment changes
+    course = svc.org_course(db, user, course_id)
+    if course.is_deleted:
+        raise HTTPException(409, "Архивный курс нельзя назначить заново")
+    version = _assignment_version(db, course, payload)
+    config, rules = _assignment_rules(db, org_id, payload)
     target_groups = [svc.group(db, org_id, gid) for gid in sorted(set(payload.group_ids))]
     targets = {uid: None for uid in set(payload.user_ids)}
     for g in target_groups:
@@ -1207,15 +1231,17 @@ def assign_course(
     for uid, gid in targets.items():
         row, created = svc.create_assignment(
             db,
-            org_id=org_id,
-            version_id=version.id,
-            user_id=uid,
-            actor_id=user.id,
-            rules=rules,
-            rules_revision=config.revision,
-            due_at=payload.due_at,
-            group_id=gid,
-            cycle_key=payload.cycle_key,
+            request=AssignmentRequest(
+                org_id=org_id,
+                version_id=version.id,
+                user_id=uid,
+                actor_id=user.id,
+                rules=rules,
+                rules_revision=config.revision,
+                due_at=payload.due_at,
+                group_id=gid,
+                cycle_key=payload.cycle_key,
+            ),
         )
         rows.append(row)
         created_count += int(created)
@@ -1440,7 +1466,7 @@ def progress(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    row = svc.learner_assignment(db, user, assignment_id, lock=True)
+    row = svc.learner_assignment(db, user, assignment_id, policy=AssignmentAccessPolicy(lock=True))
     svc.ensure_learning_write(db, row.organization_id)
     snapshot = svc.snapshot_for(db, row.course_version_id)
     lesson_ids = {l["id"] for m in snapshot["modules"] for l in m["lessons"]}
@@ -1474,7 +1500,7 @@ def bookmark(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    row = svc.learner_assignment(db, user, assignment_id, lock=True)
+    row = svc.learner_assignment(db, user, assignment_id, policy=AssignmentAccessPolicy(lock=True))
     snapshot = svc.snapshot_for(db, row.course_version_id)
     allowed = {f"lesson:{l['id']}" for m in snapshot["modules"] for l in m["lessons"]}
     allowed.update(a["id"] for a in svc.assessments(snapshot))
@@ -1507,8 +1533,10 @@ def save_response(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    row = svc.learner_assignment(db, user, assignment_id, lock=True)
-    response = svc.save_answer(db, user, row, assessment_id, payload)
+    row = svc.learner_assignment(db, user, assignment_id, policy=AssignmentAccessPolicy(lock=True))
+    response = svc.save_answer(
+        db, user, row, command=AnswerCommand(key=assessment_id, payload=payload)
+    )
     db.commit()
     return svc.response_dict(db, response, row)
 
@@ -1525,8 +1553,10 @@ def submit_response(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    row = svc.learner_assignment(db, user, assignment_id, lock=True)
-    response = svc.save_answer(db, user, row, assessment_id, payload, submit=True)
+    row = svc.learner_assignment(db, user, assignment_id, policy=AssignmentAccessPolicy(lock=True))
+    response = svc.save_answer(
+        db, user, row, command=AnswerCommand(key=assessment_id, payload=payload, submit=True)
+    )
     db.commit()
     return svc.response_dict(db, response, row)
 
@@ -1539,7 +1569,12 @@ def submit_response(
 def my_results(
     assignment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    row = svc.learner_assignment(db, user, assignment_id, allow_revoked=True, allow_locked=True)
+    row = svc.learner_assignment(
+        db,
+        user,
+        assignment_id,
+        policy=AssignmentAccessPolicy(allow_revoked=True, allow_locked=True),
+    )
     responses = (
         db.query(LearningResponse)
         .filter_by(assignment_id=row.id)
@@ -1999,7 +2034,17 @@ def restore_program(
     return {**program_out(row), "history_preserved": True}
 
 
-def enroll_program(db, program, user, target, cycle_key, now):
+@dataclass(frozen=True, kw_only=True)
+class EnrollmentCycle:
+    """Parameters for enroll_program, preserving its original defaults."""
+
+    cycle_key: Any
+    now: Any
+
+
+def enroll_program(db, program, user, target, *, cycle: EnrollmentCycle):
+    cycle_key = cycle.cycle_key
+    now = cycle.now
     existing = (
         db.query(LearningProgramEnrollment)
         .filter_by(program_id=program.id, user_id=target.id, cycle_key=cycle_key)
@@ -2026,15 +2071,17 @@ def enroll_program(db, program, user, target, cycle_key, now):
     for step in program.steps:
         assignment, _ = svc.create_assignment(
             db,
-            org_id=program.organization_id,
-            version_id=step["course_version_id"],
-            user_id=target.id,
-            actor_id=user.id,
-            rules=LearningRules.model_validate(config.rules).model_dump(),
-            rules_revision=config.revision,
-            due_at=now + timedelta(days=step["due_days"]) if step.get("due_days") else None,
-            cycle_key=f"program:{row.id}",
-            prerequisite_id=previous_id,
+            request=AssignmentRequest(
+                org_id=program.organization_id,
+                version_id=step["course_version_id"],
+                user_id=target.id,
+                actor_id=user.id,
+                rules=LearningRules.model_validate(config.rules).model_dump(),
+                rules_revision=config.revision,
+                due_at=now + timedelta(days=step["due_days"]) if step.get("due_days") else None,
+                cycle_key=f"program:{row.id}",
+                prerequisite_id=previous_id,
+            ),
         )
         ids.append(assignment.id)
         previous_id = assignment.id
@@ -2091,7 +2138,13 @@ def assign_program(
         raise HTTPException(404, "Программа не найдена")
     targets = [svc.member(db, org_id, uid) for uid in sorted(set(payload.user_ids))]
     rows = [
-        enroll_program(db, program, user, target, payload.cycle_key, datetime.utcnow())
+        enroll_program(
+            db,
+            program,
+            user,
+            target,
+            cycle=EnrollmentCycle(cycle_key=payload.cycle_key, now=datetime.utcnow()),
+        )
         for target in targets
     ]
     db.commit()
@@ -2164,7 +2217,13 @@ def repeat_program(
     if program.is_archived:
         raise HTTPException(409, "Программа архивирована")
     target = svc.member(db, org_id, old.user_id)
-    row = enroll_program(db, program, user, target, f"repeat:{old.id}", datetime.utcnow())
+    row = enroll_program(
+        db,
+        program,
+        user,
+        target,
+        cycle=EnrollmentCycle(cycle_key=f"repeat:{old.id}", now=datetime.utcnow()),
+    )
     db.commit()
     return enrollment_out(db, row)
 
@@ -2219,8 +2278,8 @@ def publication_approvals(
     course = svc.org_course(db, user, course_id)
     if course.is_deleted or not (
         course.owner_id == user.id
-        or svc.can_scope(db, user, "author", course_id=course.id)
-        or svc.can_scope(db, user, "reviewer", course_id=course.id)
+        or svc.can_scope(db, user, scope=LearningScope(role="author", course_id=course.id))
+        or svc.can_scope(db, user, scope=LearningScope(role="reviewer", course_id=course.id))
     ):
         raise HTTPException(404, "Курс не найден")
     modules = sorted(
@@ -2263,7 +2322,9 @@ def review_content(
     course_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     course = svc.org_course(db, user, course_id)
-    if course.is_deleted or not svc.can_scope(db, user, "reviewer", course_id=course.id):
+    if course.is_deleted or not svc.can_scope(
+        db, user, scope=LearningScope(role="reviewer", course_id=course.id)
+    ):
         raise HTTPException(403, "Нет назначения на согласование этого курса")
     from app.services.course_publication_service import CoursePublicationService
 
@@ -2281,7 +2342,9 @@ def approve_publication(
 ):
     course = svc.org_course(db, user, course_id)
     db.execute(select(Course).where(Course.id == course.id).with_for_update())
-    if course.owner_id == user.id or not svc.can_scope(db, user, "reviewer", course_id=course.id):
+    if course.owner_id == user.id or not svc.can_scope(
+        db, user, scope=LearningScope(role="reviewer", course_id=course.id)
+    ):
         raise HTTPException(403, "Согласование выполняет другой назначенный проверяющий")
     content = review_content(course_id, db, user)
     if content["content_digest"] != payload.content_digest:

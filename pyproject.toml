@@ -4,13 +4,36 @@ target-version = "py311"
 extend-exclude = ["mlcourse", "uploads"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
-# Imports register ORM models/routes; some modules intentionally bootstrap sys.path.
-ignore = ["F401", "E402", "E741"]
+select = [
+    "E4", "E7", "E9", "F", "I",
+    "B", "PLE", "ASYNC",
+    "C901", "PLR0912", "PLR0913", "PLR0915", "PLR0917",
+]
+# Some entrypoints intentionally bootstrap sys.path; legacy ORM names use l/I.
+ignore = ["E402", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 # Imported pytest fixtures are injected by name into test functions.
-"tests/**" = ["F811"]
+"tests/**" = ["F401", "F811", "C901", "PLR0912", "PLR0913", "PLR0915", "PLR0917"]
+# Fixture setup and end-to-end scenarios are measured by behavior and assertions.
+"e2e/**" = ["C901", "PLR0912", "PLR0913", "PLR0915", "PLR0917"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI factories describe request/dependency metadata at registration time.
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Path",
+    "fastapi.Header", "fastapi.Cookie", "fastapi.File", "fastapi.Form",
+    "fastapi.Security", "app.services.integration_access.require_scope",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-positional-args = 5
+max-branches = 12
+max-statements = 50
 
 [tool.ty.environment]
 python-version = "3.11"

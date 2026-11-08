@@ -17,6 +17,7 @@ from app.models.integrations import (
 from app.models.learning import LearningAssignment
 from app.models.user import User
 from app.services.integration_secrets import cipher, seal, unseal
+from app.services.notifications import NotificationEvent
 
 EXPO_URL = "https://exp.host/--/api/v2/push/send"
 EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts"
@@ -63,13 +64,15 @@ def enqueue(db, assignment, notification_type, event_key):
     )
     notification = publish(
         db,
-        user_id=assignment.user_id,
-        organization_id=assignment.organization_id,
-        event_key=f"{notification_type}:{event_key}",
-        category=notification_type,
-        resource_type="assignment",
-        resource_id=assignment.id,
-        body=description,
+        event=NotificationEvent(
+            user_id=assignment.user_id,
+            organization_id=assignment.organization_id,
+            event_key=f"{notification_type}:{event_key}",
+            category=notification_type,
+            resource_type="assignment",
+            resource_id=assignment.id,
+            body=description,
+        ),
     )
     if not configured():
         return
@@ -95,11 +98,7 @@ def enqueue(db, assignment, notification_type, event_key):
     )
 
 
-def deliver(db, row, payload):
-    if payload.get("notification_id"):
-        from app.services.notifications import fanout
-
-        return fanout(db, payload["notification_id"])
+def _deliver_receipts(db, payload):
     if payload.get("receipt_ids"):
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         access = integration_settings.EXPO_PUSH_ACCESS_TOKEN.get_secret_value()
@@ -128,6 +127,65 @@ def deliver(db, row, payload):
                 else:
                     raise RuntimeError("Expo push receipt reported a delivery error")
         return "delivered"
+
+
+def _validate_push_tickets(db, tickets, hashes):
+    for index, ticket in enumerate(tickets):
+        if ticket.get("status") == "error":
+            code = (ticket.get("details") or {}).get("error")
+            if code == "DeviceNotRegistered":
+                db.query(MobilePushDevice).filter_by(token_hash=hashes[index]).delete(
+                    synchronize_session=False
+                )
+            elif code not in {"MessageRateExceeded", "MessageTooBig"}:
+                raise RuntimeError("Expo rejected push message")
+            elif code == "MessageRateExceeded":
+                raise RuntimeError("Expo temporarily rate limited push message")
+
+
+def _assignment_messages(assignment, user, sessions, notification_type):
+    messages, hashes = [], []
+    for device, session in sessions:
+        if (
+            session.user_id != assignment.user_id
+            or session.revoked_at
+            or session.auth_version != user.auth_version
+        ):
+            continue
+        token = unseal(device.token_encrypted)
+        hashes.append(device.token_hash)
+        messages.append(
+            {
+                "to": token,
+                "title": TITLES[notification_type],
+                "body": BODY[notification_type],
+                "sound": "default",
+                "ttl": 120,
+                "data": {
+                    "type": notification_type,
+                    "assignment_id": assignment.id,
+                    "route": f"/learning/assignments/{assignment.id}",
+                },
+            }
+        )
+    return messages, hashes
+
+
+def _checked_tickets(db, result, messages, hashes):
+    tickets = result.get("data", [])
+    if not isinstance(tickets, list) or len(tickets) != len(messages):
+        raise RuntimeError("Expo returned an invalid ticket response")
+    _validate_push_tickets(db, tickets, hashes)
+    return tickets
+
+
+def deliver(db, row, payload):
+    if payload.get("notification_id"):
+        from app.services.notifications import fanout
+
+        return fanout(db, payload["notification_id"])
+    if payload.get("receipt_ids"):
+        return _deliver_receipts(db, payload)
     assignment = db.get(LearningAssignment, payload["assignment_id"])
     if not assignment or assignment.state != "active":
         return "cancelled"
@@ -164,30 +222,7 @@ def deliver(db, row, payload):
         or not user.organization.is_active
     ):
         return "cancelled"
-    messages, hashes = [], []
-    for device, session in sessions:
-        if (
-            session.user_id != assignment.user_id
-            or session.revoked_at
-            or session.auth_version != user.auth_version
-        ):
-            continue
-        token = unseal(device.token_encrypted)
-        hashes.append(device.token_hash)
-        messages.append(
-            {
-                "to": token,
-                "title": TITLES[notification_type],
-                "body": BODY[notification_type],
-                "sound": "default",
-                "ttl": 120,
-                "data": {
-                    "type": notification_type,
-                    "assignment_id": assignment.id,
-                    "route": f"/learning/assignments/{assignment.id}",
-                },
-            }
-        )
+    messages, hashes = _assignment_messages(assignment, user, sessions, notification_type)
     if not messages:
         return "cancelled"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -197,20 +232,7 @@ def deliver(db, row, payload):
     request = Request(EXPO_URL, data=json.dumps(messages).encode(), headers=headers, method="POST")
     with urlopen(request, timeout=10) as response:
         result = json.loads(response.read(1_000_000))
-    tickets = result.get("data", [])
-    if not isinstance(tickets, list) or len(tickets) != len(messages):
-        raise RuntimeError("Expo returned an invalid ticket response")
-    for index, ticket in enumerate(tickets):
-        if ticket.get("status") == "error":
-            code = (ticket.get("details") or {}).get("error")
-            if code == "DeviceNotRegistered":
-                db.query(MobilePushDevice).filter_by(token_hash=hashes[index]).delete(
-                    synchronize_session=False
-                )
-            elif code not in {"MessageRateExceeded", "MessageTooBig"}:
-                raise RuntimeError("Expo rejected push message")
-            elif code == "MessageRateExceeded":
-                raise RuntimeError("Expo temporarily rate limited push message")
+    tickets = _checked_tickets(db, result, messages, hashes)
     ticket_tokens = {
         ticket["id"]: hashes[index]
         for index, ticket in enumerate(tickets)

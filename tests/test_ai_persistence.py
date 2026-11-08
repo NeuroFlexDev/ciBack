@@ -9,7 +9,7 @@ from app.ai import memory, retrieval
 from app.core.config import settings
 from app.models.ai_state import ChatMemory, ChunkEmbedding
 from app.models.chat import Chat, ChatMessage
-from app.services.retrieval_service import RetrievalService
+from app.services.retrieval_service import RetrievalQuery, RetrievalService
 from tests.factories import make_course
 from tests.test_acl_retrieval import _document
 
@@ -119,9 +119,8 @@ def test_embeddings_reused_and_retrievable_after_store_recreation(
         db_session,
         course_id=course.id,
         owner_id=auth_user.id,
-        query="утечка",
-        limit=3,
         vector_store=retrieval.PersistentVectorStore(db_session),
+        search_query=RetrievalQuery(query="утечка", limit=3),
     )
     assert [item.chunk_id for item in result.citations] == [chunk.id]
     course.is_deleted = True
@@ -133,9 +132,8 @@ def test_embeddings_reused_and_retrievable_after_store_recreation(
             db_session,
             course_id=course.id,
             owner_id=auth_user.id,
-            query="утечка",
-            limit=3,
             vector_store=retrieval.PersistentVectorStore(db_session),
+            search_query=RetrievalQuery(query="утечка", limit=3),
         )
     assert exc.value.status_code == 404
 

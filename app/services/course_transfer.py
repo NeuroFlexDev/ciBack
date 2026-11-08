@@ -177,6 +177,114 @@ def course_markdown(content, private):
     return text.encode("utf-8")
 
 
+def _bundle_images(db, course, content, put):
+    image_paths = {}
+    from app.services.image_service import storage
+
+    for image_id in sorted(image_ids_in(content)):
+        image = db.get(CourseImage, image_id)
+        if (
+            not image
+            or image.course_id != course.id
+            or image.status != "approved"
+            or not image.storage_key
+        ):
+            raise HTTPException(
+                409, "Версия содержит недоступную иллюстрацию. Передача остановлена."
+            )
+        try:
+            data = storage().read_bytes(image.storage_key)
+        except (OSError, ValueError):
+            raise HTTPException(
+                503, "Файл иллюстрации временно недоступен; неполный пакет не выдан"
+            ) from None
+        extension = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/webp": ".webp",
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+        }.get(image.mime_type, ".bin")
+        folder = "videos/video" if image.mime_type.startswith("video/") else "images/image"
+        path = f"{folder}-{image.id}{extension}"
+        put(path, data, image.mime_type, image_id=image.id)
+        image_paths[image.id] = path
+    return image_paths
+
+
+def _bundle_sources(db, version, content, payload, put):
+    exported_sources = []
+    if payload.include_sources:
+        for source in content.get("sources", []):
+            pin = db.get(PublishedSourceFile, (version.id, source["document_id"]))
+            document = db.get(Document, source["document_id"])
+            if (
+                not pin
+                or not document
+                or document.course_id != version.course_id
+                or pin.document_version != source["version"]
+                or pin.content_hash != source["content_hash"]
+            ):
+                raise HTTPException(
+                    409,
+                    "Закреплённый источник не соответствует этой версии; передача остановлена",
+                )
+            data = checked_bytes(pin.storage_key, pin.content_hash, pin.size_bytes)
+            extension = {
+                "application/pdf": ".pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                "text/plain": ".txt",
+                "text/markdown": ".md",
+            }.get(pin.mime_type, ".bin")
+            path = f"sources/document-{pin.document_id}-v{pin.document_version}{extension}"
+            put(
+                path,
+                data,
+                pin.mime_type,
+                document_id=pin.document_id,
+                document_version=pin.document_version,
+                original_filename=pin.filename,
+            )
+            exported_sources.append({**source, "package_path": path})
+    return exported_sources
+
+
+def _transfer_manifest(course, version, payload, source_digest):
+    export_id = str(uuid4())
+    manifest = {
+        "format": "lernium-course-transfer",
+        "format_version": 1,
+        "export_id": export_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "course_id": course.id,
+        "course_version_id": version.id,
+        "revision": version.revision,
+        "published_at": version.published_at.isoformat() if version.published_at else None,
+        "snapshot_sha256": source_digest,
+        "includes_answer_keys": payload.include_answer_keys,
+        "includes_sources": payload.include_sources,
+        "files": [],
+    }
+    return manifest
+
+
+def _validate_transfer_version(db, org_id, version, published, payload):
+    source_digest = learning.content_digest(published.snapshot)
+    if source_digest != payload.snapshot_sha256:
+        raise HTTPException(409, "Состав версии изменился. Проверьте список перед передачей.")
+    # Lock course ownership while preparing/auditing; assignments and learners are
+    # not queried or exported. Old versions remain independent of today's draft.
+    course = db.execute(
+        select(Course)
+        .where(Course.id == version.course_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+    if course.organization_id != org_id:
+        raise HTTPException(404, "Курс недоступен в этой организации")
+    return source_digest, course
+
+
 def prepare_bundle(db, user, payload, *, claims, record_export=True):
     org_id = owner_scope(user)
     if not payload.confirm_transfer or (
@@ -193,39 +301,13 @@ def prepare_bundle(db, user, payload, *, claims, record_export=True):
     if not row:
         raise HTTPException(404, "Опубликованная версия не найдена")
     version, published = row
-    source_digest = learning.content_digest(published.snapshot)
-    if source_digest != payload.snapshot_sha256:
-        raise HTTPException(409, "Состав версии изменился. Проверьте список перед передачей.")
-    # Lock course ownership while preparing/auditing; assignments and learners are
-    # not queried or exported. Old versions remain independent of today's draft.
-    course = db.execute(
-        select(Course)
-        .where(Course.id == version.course_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).scalar_one()
-    if course.organization_id != org_id:
-        raise HTTPException(404, "Курс недоступен в этой организации")
+    source_digest, course = _validate_transfer_version(db, org_id, version, published, payload)
     content = (
         deepcopy(published.snapshot)
         if payload.include_answer_keys
         else learning.public_snapshot(db, SimpleNamespace(course_version_id=version.id))
     )
-    export_id = str(uuid4())
-    manifest = {
-        "format": "lernium-course-transfer",
-        "format_version": 1,
-        "export_id": export_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "course_id": course.id,
-        "course_version_id": version.id,
-        "revision": version.revision,
-        "published_at": version.published_at.isoformat() if version.published_at else None,
-        "snapshot_sha256": source_digest,
-        "includes_answer_keys": payload.include_answer_keys,
-        "includes_sources": payload.include_sources,
-        "files": [],
-    }
+    manifest = _transfer_manifest(course, version, payload, source_digest)
     archive = SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
     total_bytes = 0
     try:
@@ -250,71 +332,9 @@ def prepare_bundle(db, user, payload, *, claims, record_export=True):
                     }
                 )
 
-            image_paths = {}
-            from app.services.image_service import storage
-
-            for image_id in sorted(image_ids_in(content)):
-                image = db.get(CourseImage, image_id)
-                if (
-                    not image
-                    or image.course_id != course.id
-                    or image.status != "approved"
-                    or not image.storage_key
-                ):
-                    raise HTTPException(
-                        409, "Версия содержит недоступную иллюстрацию. Передача остановлена."
-                    )
-                try:
-                    data = storage().read_bytes(image.storage_key)
-                except (OSError, ValueError):
-                    raise HTTPException(
-                        503, "Файл иллюстрации временно недоступен; неполный пакет не выдан"
-                    ) from None
-                extension = {
-                    "image/png": ".png",
-                    "image/jpeg": ".jpg",
-                    "image/webp": ".webp",
-                    "video/mp4": ".mp4",
-                    "video/webm": ".webm",
-                }.get(image.mime_type, ".bin")
-                folder = "videos/video" if image.mime_type.startswith("video/") else "images/image"
-                path = f"{folder}-{image.id}{extension}"
-                put(path, data, image.mime_type, image_id=image.id)
-                image_paths[image.id] = path
+            image_paths = _bundle_images(db, course, content, put)
             content = rewrite_images(content, image_paths)
-            exported_sources = []
-            if payload.include_sources:
-                for source in content.get("sources", []):
-                    pin = db.get(PublishedSourceFile, (version.id, source["document_id"]))
-                    document = db.get(Document, source["document_id"])
-                    if (
-                        not pin
-                        or not document
-                        or document.course_id != course.id
-                        or pin.document_version != source["version"]
-                        or pin.content_hash != source["content_hash"]
-                    ):
-                        raise HTTPException(
-                            409,
-                            "Закреплённый источник не соответствует этой версии; передача остановлена",
-                        )
-                    data = checked_bytes(pin.storage_key, pin.content_hash, pin.size_bytes)
-                    extension = {
-                        "application/pdf": ".pdf",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-                        "text/plain": ".txt",
-                        "text/markdown": ".md",
-                    }.get(pin.mime_type, ".bin")
-                    path = f"sources/document-{pin.document_id}-v{pin.document_version}{extension}"
-                    put(
-                        path,
-                        data,
-                        pin.mime_type,
-                        document_id=pin.document_id,
-                        document_version=pin.document_version,
-                        original_filename=pin.filename,
-                    )
-                    exported_sources.append({**source, "package_path": path})
+            exported_sources = _bundle_sources(db, version, content, payload, put)
             content["sources"] = exported_sources
             put("course.json", encoded(content), "application/json")
             put("course.md", course_markdown(content, payload.include_answer_keys), "text/markdown")
@@ -349,7 +369,7 @@ def prepare_bundle(db, user, payload, *, claims, record_export=True):
                 version.id,
                 organization_id=org_id,
                 course_id=course.id,
-                export_id=export_id,
+                export_id=manifest["export_id"],
                 snapshot_sha256=source_digest,
                 manifest_sha256=sha256(manifest_bytes).hexdigest(),
                 include_sources=payload.include_sources,

@@ -8,7 +8,27 @@ from app.models.course_version import CourseVersion
 from app.models.learning import LearningAssignment, LearningProgramEnrollment
 from app.models.user import User
 from app.services.learning_service import settings_for, utc
+from app.services.mail_service import MailDeliveryOptions
 from app.services.organization_access import audit, lock_org
+
+
+def _reminder_recipient(db, row, organization):
+    person = db.get(User, row.user_id)
+    if (
+        not organization.is_active
+        or not person
+        or not person.is_active
+        or not person.email
+        or person.organization_id != row.organization_id
+        or row.state != "active"
+        or row.completed_at
+    ):
+        return None
+    if row.prerequisite_id:
+        previous = db.get(LearningAssignment, row.prerequisite_id)
+        if not previous or not previous.completed_at:
+            return None
+    return person
 
 
 def queue_due_reminders(db, *, after_id=0, limit=100, now=None):
@@ -54,21 +74,9 @@ def queue_due_reminders(db, *, after_id=0, limit=100, now=None):
     queued = 0
     for row in rows:
         db.refresh(row)
-        person = db.get(User, row.user_id)
-        if (
-            not organizations[row.organization_id].is_active
-            or not person
-            or not person.is_active
-            or not person.email
-            or person.organization_id != row.organization_id
-            or row.state != "active"
-            or row.completed_at
-        ):
+        person = _reminder_recipient(db, row, organizations[row.organization_id])
+        if person is None:
             continue
-        if row.prerequisite_id:
-            previous = db.get(LearningAssignment, row.prerequisite_id)
-            if not previous or not previous.completed_at:
-                continue
         due = utc(row.due_at)
         if due > now + timedelta(days=windows.get(row.id, 3)):
             continue
@@ -98,9 +106,11 @@ def queue_due_reminders(db, *, after_id=0, limit=100, now=None):
             person.email,
             subject,
             text,
-            expires_at=now + timedelta(days=2),
-            deduplication_key=f"learning-reminder:{row.id}:{due_key}",
-            organization_id=row.organization_id,
+            delivery=MailDeliveryOptions(
+                expires_at=now + timedelta(days=2),
+                deduplication_key=f"learning-reminder:{row.id}:{due_key}",
+                organization_id=row.organization_id,
+            ),
         )
         audit(
             db,

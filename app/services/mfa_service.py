@@ -1,3 +1,6 @@
+from app.core.security import AccessTokenClaims
+from app.services.mobile_sessions import MobileSessionOptions
+
 """RFC 6238 TOTP, account-bound challenge and single-use recovery-code state.
 
 Secrets are encrypted at rest with the separately configured data key. Successful
@@ -189,8 +192,10 @@ def token_response(user, *, primary="pwd", factor=None, extra=None):
         "access_token": create_access_token(
             user.id,
             user.auth_version,
-            amr=[primary, factor] if factor else [primary],
-            mfa_at=int(time.time()) if factor else None,
+            claims=AccessTokenClaims(
+                amr=[primary, factor] if factor else [primary],
+                mfa_at=int(time.time()) if factor else None,
+            ),
         ),
         "token_type": "bearer",
         "user": UserResponse.model_validate(user),
@@ -303,9 +308,11 @@ def complete_challenge(db, raw, code):
         result = issue(
             db,
             user,
-            amr=[challenge.primary_method, method],
-            mfa_at=int(time.time()),
-            device_name=challenge.context.get("device_name", "Mobile device"),
+            options=MobileSessionOptions(
+                amr=[challenge.primary_method, method],
+                mfa_at=int(time.time()),
+                device_name=challenge.context.get("device_name", "Mobile device"),
+            ),
         )
     else:
         result = token_response(
@@ -327,11 +334,11 @@ def start_enrollment(db, user, password, claims):
         raise HTTPException(409, "Двухэтапный вход уже подключён")
     try:
         cipher()  # Fail before returning a secret if durable encryption is unavailable.
-    except (ValueError, RuntimeError):
+    except (ValueError, RuntimeError) as _error_cause:
         raise HTTPException(
             503,
             "Защита кодов пока не настроена оператором. Подключение двухэтапного входа недоступно.",
-        )
+        ) from _error_cause
     raw = secrets.token_urlsafe(32)
     secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
     factor.pending_secret_encrypted = seal(
@@ -417,5 +424,7 @@ def require_operator_factor(db, user, claims):
 def preserve_token(user, claims):
     """Account changes revoke other sessions without upgrading an old MFA timestamp."""
     return create_access_token(
-        user.id, user.auth_version, amr=claims.get("amr", []), mfa_at=claims.get("mfa_at")
+        user.id,
+        user.auth_version,
+        claims=AccessTokenClaims(amr=claims.get("amr", []), mfa_at=claims.get("mfa_at")),
     )

@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-import app.models  # register all mappings
+import app.models  # register all mappings  # noqa: F401 -- register ORM mappings
 from app.core.config import settings
 from app.core.security import create_access_token, hash_password
 from app.database.db import SessionLocal
@@ -28,7 +28,11 @@ from app.models.test import Test as Question
 from app.models.theory import Theory
 from app.models.user import User
 from app.schemas.learning import LearningRules
-from app.services.learning_service import create_assignment, create_publication_snapshot
+from app.services.learning_service import (
+    AssignmentRequest,
+    create_assignment,
+    create_publication_snapshot,
+)
 
 ALLOWED_HOSTS = {"dev.platform.lernium.ru", "localhost", "127.0.0.1", "::1"}
 PREFIX = "_Lernium QA load "
@@ -44,13 +48,7 @@ def require_staging(url):
         raise ValueError("Refusing production environment")
 
 
-def seed(db, *, users=300, courses=80, lessons=10, run_id=None):
-    if not 2 <= users <= 300 or not 4 <= courses <= 100 or not 2 <= lessons <= 20:
-        raise ValueError("Fixture size outside reviewed bounds")
-    run_id = str(UUID(run_id)) if run_id else str(uuid4())
-    if db.query(AdminEvent).filter_by(action="qa.load_fixture_created", target_id=run_id).first():
-        raise ValueError("Run already exists; refresh its tokens instead of duplicating it")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+def _fixture_organizations(db, run_id, users, courses):
     org = Organization(
         name=PREFIX + run_id,
         seat_limit=users + 2,
@@ -61,6 +59,17 @@ def seed(db, *, users=300, courses=80, lessons=10, run_id=None):
     foreign = Organization(name=PREFIX + run_id + " isolation", generation_limit=0)
     db.add_all([org, foreign])
     db.flush()
+    return org, foreign
+
+
+def seed(db, *, users=300, courses=80, lessons=10, run_id=None):
+    if not 2 <= users <= 300 or not 4 <= courses <= 100 or not 2 <= lessons <= 20:
+        raise ValueError("Fixture size outside reviewed bounds")
+    run_id = str(UUID(run_id)) if run_id else str(uuid4())
+    if db.query(AdminEvent).filter_by(action="qa.load_fixture_created", target_id=run_id).first():
+        raise ValueError("Run already exists; refresh its tokens instead of duplicating it")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    org, foreign = _fixture_organizations(db, run_id, users, courses)
     # One random unrecorded password; sessions are independently signed, short-lived JWTs.
     password_hash = hash_password(secrets.token_urlsafe(64))
 
@@ -170,13 +179,15 @@ def seed(db, *, users=300, courses=80, lessons=10, run_id=None):
             publication = publications[(index * per_user + offset) % courses]
             assignment, _ = create_assignment(
                 db,
-                org_id=org.id,
-                version_id=publication["version_id"],
-                user_id=learner.id,
-                actor_id=owner.id,
-                rules=rules,
-                rules_revision=1,
-                cycle_key="qa:" + run_id,
+                request=AssignmentRequest(
+                    org_id=org.id,
+                    version_id=publication["version_id"],
+                    user_id=learner.id,
+                    actor_id=owner.id,
+                    rules=rules,
+                    rules_revision=1,
+                    cycle_key="qa:" + run_id,
+                ),
             )
             assignments.append({"id": assignment.id, **publication})
         sessions.append({"user_id": learner.id, "assignments": assignments})

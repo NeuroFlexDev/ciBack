@@ -47,7 +47,7 @@ class GigaChatClient(LLMClient):
             )
             r.raise_for_status()
         except Exception as e:
-            raise HTTPException(500, f"GigaChat request failed: {e}")
+            raise HTTPException(500, f"GigaChat request failed: {e}") from e
         js = r.json()
         return js["choices"][0]["message"]["content"]
 
@@ -86,9 +86,9 @@ def _get_access_token(scope: str) -> str:
         raise HTTPException(
             500,
             f"GigaChat token HTTP error: {e.response.status_code} {e.response.text}",
-        )
+        ) from e
     except Exception as e:
-        raise HTTPException(500, f"GigaChat token request failed: {e}")
+        raise HTTPException(500, f"GigaChat token request failed: {e}") from e
 
     js = r.json()
     token = js["access_token"]
@@ -105,7 +105,7 @@ def list_gigachat_models(scope: str | None = None) -> list[str]:
         r = requests.get(f"{GIGA_API_BASE}/models", headers=headers, timeout=15, verify=True)
         r.raise_for_status()
     except Exception as e:
-        raise HTTPException(500, f"Ошибка получения списка моделей GigaChat: {e}")
+        raise HTTPException(500, f"Ошибка получения списка моделей GigaChat: {e}") from e
     js = r.json()
     # Ответ может быть {"data": [...]} или просто list
     if isinstance(js, dict) and "data" in js:

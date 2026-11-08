@@ -3,6 +3,7 @@ import pytest
 from app.models.chat import ChatMessage
 from app.repositories.chat import ChatRepository
 from app.services import chat_service
+from app.services.chat_service import ChatGenerationRequest
 
 
 class DummyEngine:
@@ -30,7 +31,10 @@ def test_chat_generate_persists_messages_and_usage(db_session, auth_user, monkey
     monkeypatch.setattr(chat_service, "get_chat_engine", lambda *_: engine)
 
     result = chat_service.chat_generate(
-        chat_id=chat.id, user_id=auth_user.id, text="hello", db=db_session, engine_name="lc_giga"
+        chat_id=chat.id,
+        user_id=auth_user.id,
+        db=db_session,
+        request=ChatGenerationRequest(text="hello", engine_name="lc_giga"),
     )
 
     messages = ChatRepository.get_history(db_session, chat.id, auth_user.id)
@@ -49,7 +53,10 @@ def test_chat_generate_limits_llm_history_but_retains_all(db_session, auth_user,
     monkeypatch.setattr(chat_service.settings, "CHAT_HISTORY_MESSAGES", 20)
 
     chat_service.chat_generate(
-        chat_id=chat.id, user_id=auth_user.id, text="latest", db=db_session, engine_name="lc_giga"
+        chat_id=chat.id,
+        user_id=auth_user.id,
+        db=db_session,
+        request=ChatGenerationRequest(text="latest", engine_name="lc_giga"),
     )
 
     assert len(engine.history) == 22
@@ -67,7 +74,10 @@ def test_llm_failure_keeps_user_message(db_session, auth_user, monkeypatch):
     )
 
     response = chat_service.chat_generate(
-        chat_id=chat.id, user_id=auth_user.id, text="keep me", db=db_session, engine_name="lc_giga"
+        chat_id=chat.id,
+        user_id=auth_user.id,
+        db=db_session,
+        request=ChatGenerationRequest(text="keep me", engine_name="lc_giga"),
     )
     assert response["raw"]["degraded"]
 

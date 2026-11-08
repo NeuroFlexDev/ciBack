@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.ai import control as ai_control
 from app.ai import gateway
+from app.ai.gateway import InvocationOptions
 from app.services.external_sources import aggregated_search
 from app.services.feedback_service import get_feedback_summary
 from app.services.gigachat_service import get_gigachat_client
@@ -51,7 +53,6 @@ _JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n(.*)\r?\n```\Z", re.IGNORECA
 
 @lru_cache(maxsize=128)
 def get_cached_external_context(query: str, lang: str = "ru") -> str:
-    from app.core.config import settings
 
     if ai_control.policy()["local_only"]:
         return ""
@@ -173,42 +174,29 @@ def _json_object(raw: str) -> dict[str, Any]:
     return parsed
 
 
-def generate_from_prompt(
-    template_name: str | None = None,
-    *,
-    prompt: str | None = None,
-    engine: str = DEFAULT_ENGINE,
-    model: str | None = None,
-    expect_json: bool = True,
-    include_external_context: bool = True,
-    use_feedback: bool = True,
-    lang: str = "ru",
-    db: Session | None = None,
-    max_tokens: int = MAX_OUTPUT_TOKENS,
-    agent_role: str = "chat",
-    fallback_model: bool = False,
-    provider: str | None = None,
-    repair_feedback: str = "",
-    **kwargs: Any,
-) -> dict[str, Any]:
-    """Invoke an LLM and return a stable JSON-shaped response.
+@dataclass(frozen=True, kw_only=True)
+class PromptRequest:
+    """Parameters for generate_from_prompt, preserving its original defaults."""
 
-    Calls may provide either a Jinja ``template_name`` or a direct ``prompt``.
-    Legacy provider factories that take no arguments and newer factories that
-    accept a preferred model are both supported.
-    """
-    resolved_engine = ENGINE_ALIASES.get(engine, engine)
-    factory = _get_factory(engine, resolved_engine)
-    from app.core.config import settings
+    prompt: str | None = None
+    engine: str = DEFAULT_ENGINE
+    model: str | None = None
+    expect_json: bool = True
+    include_external_context: bool = True
+    use_feedback: bool = True
+    lang: str = "ru"
+    max_tokens: int = MAX_OUTPUT_TOKENS
+    agent_role: str = "chat"
+    fallback_model: bool = False
+    provider: str | None = None
+    repair_feedback: str = ""
 
-    use_vsellm = engine == "vsellm" or (
-        engine == DEFAULT_ENGINE and (gateway.configured() or settings.ENV != "test")
-    )
-    if ai_control.policy()["local_only"]:
-        use_vsellm = True
-    if factory is None and not use_vsellm:
-        raise HTTPException(400, f"Неподдерживаемый движок генерации: {engine}")
 
+def _render_generation_prompt(template_name, request, kwargs, db):
+    include_external_context = request.include_external_context
+    use_feedback = request.use_feedback
+    lang = request.lang
+    prompt = request.prompt
     if template_name is not None:
         if include_external_context:
             context_query = kwargs.get("course_name") or kwargs.get("lesson_title")
@@ -224,7 +212,64 @@ def generate_from_prompt(
         final_prompt = render_prompt(template_name, **kwargs)
     else:
         final_prompt = prompt
+    return final_prompt
 
+
+def _parse_factory_response(raw, expect_json, used_model):
+    if isinstance(raw, dict) and "text" not in raw:
+        result = dict(raw)
+        response_chars = len(json.dumps(result, ensure_ascii=False))
+    else:
+        raw_text = raw.get("text", "") if isinstance(raw, dict) else str(raw or "")
+        response_chars = len(raw_text)
+        if expect_json:
+            result = _json_object(raw_text)
+        else:
+            result = {"text": raw_text.strip()}
+
+    # Metadata keys are reserved for the gateway. Never trust a model-supplied
+    # value, and only expose one when the factory/client identified it.
+    result.pop("_model", None)
+    if used_model is not None:
+        result["_model"] = used_model
+    return result, response_chars
+
+
+def generate_from_prompt(
+    template_name: str | None = None,
+    *,
+    db: Session | None = None,
+    request: PromptRequest | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Invoke an LLM and return a stable JSON-shaped response.
+
+    Calls may provide either a Jinja ``template_name`` or a direct ``prompt``.
+    Legacy provider factories that take no arguments and newer factories that
+    accept a preferred model are both supported.
+    """
+    request = request or PromptRequest()
+    engine = request.engine
+    model = request.model
+    expect_json = request.expect_json
+    max_tokens = request.max_tokens
+    agent_role = request.agent_role
+    fallback_model = request.fallback_model
+    provider = request.provider
+    repair_feedback = request.repair_feedback
+    resolved_engine = ENGINE_ALIASES.get(engine, engine)
+    factory = _get_factory(engine, resolved_engine)
+    from app.core.config import settings
+
+    use_vsellm = engine == "vsellm" or (
+        engine == DEFAULT_ENGINE and (gateway.configured() or settings.ENV != "test")
+    )
+    if ai_control.policy()["local_only"]:
+        use_vsellm = True
+    if factory is None and not use_vsellm:
+        raise HTTPException(400, f"Неподдерживаемый движок генерации: {engine}")
+
+    final_prompt = _render_generation_prompt(template_name, request, kwargs, db)
     if not final_prompt:
         raise HTTPException(400, "Нужно передать template_name или prompt")
 
@@ -232,11 +277,13 @@ def generate_from_prompt(
         response = gateway.invoke_messages(
             agent_role,
             agent_messages(final_prompt, expect_json=expect_json, repair_feedback=repair_feedback),
-            model=model,
-            max_tokens=max_tokens,
-            json_mode=expect_json,
-            fallback=fallback_model,
-            **({"provider": provider} if provider else {}),
+            options=InvocationOptions(
+                model=model,
+                max_tokens=max_tokens,
+                json_mode=expect_json,
+                fallback=fallback_model,
+                **{"provider": provider} if provider else {},
+            ),
         )
         try:
             parsed = _json_object(response["text"]) if expect_json else {"text": response["text"]}
@@ -266,23 +313,7 @@ def generate_from_prompt(
     llm_client, used_model = _create_client(factory, model)
     raw = llm_client.generate(final_prompt, max_tokens=max_tokens)
 
-    if isinstance(raw, dict) and "text" not in raw:
-        result = dict(raw)
-        response_chars = len(json.dumps(result, ensure_ascii=False))
-    else:
-        raw_text = raw.get("text", "") if isinstance(raw, dict) else str(raw or "")
-        response_chars = len(raw_text)
-        if expect_json:
-            result = _json_object(raw_text)
-        else:
-            result = {"text": raw_text.strip()}
-
-    # Metadata keys are reserved for the gateway. Never trust a model-supplied
-    # value, and only expose one when the factory/client identified it.
-    result.pop("_model", None)
-    if used_model is not None:
-        result["_model"] = used_model
-
+    result, response_chars = _parse_factory_response(raw, expect_json, used_model)
     logger.info(
         "LLM request succeeded engine=%s model=%s response_chars=%d",
         resolved_engine,

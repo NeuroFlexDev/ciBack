@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from statistics import median
 
+from app.ai.routing import RouteContext
 from app.core.config import settings
 
 VERSION = 1
@@ -43,7 +44,7 @@ def features(messages: list[dict], role: str, context: dict | None = None) -> di
 
 def _solve(matrix, target):
     # Small ridge regression (three coefficients); no ML runtime or downloads.
-    data = [list(row) + [value] for row, value in zip(matrix, target)]
+    data = [list(row) + [value] for row, value in zip(matrix, target, strict=True)]
     for i in range(len(target)):
         pivot = max(range(i, len(target)), key=lambda j: abs(data[j][i]))
         data[i], data[pivot] = data[pivot], data[i]
@@ -54,7 +55,7 @@ def _solve(matrix, target):
         for j in range(len(target)):
             if j != i:
                 factor = data[j][i]
-                data[j] = [a - factor * b for a, b in zip(data[j], data[i])]
+                data[j] = [a - factor * b for a, b in zip(data[j], data[i], strict=True)]
     return [row[-1] for row in data]
 
 
@@ -126,7 +127,7 @@ def predict(
         inputs = prompt_bytes * data["input_per_byte"]
         coefficients = data.get("output_coefficients")
         outputs = (
-            sum(a * b for a, b in zip(coefficients, [1, prompt_bytes / 1000, units]))
+            sum(a * b for a, b in zip(coefficients, [1, prompt_bytes / 1000, units], strict=True))
             if coefficients
             else units * data["output_per_unit"]
         )
@@ -303,8 +304,7 @@ def estimate_course(*, source_characters: int, lessons: int) -> dict:
                 baseline_model=policy.model,
                 input_tokens=prompt_bytes,
                 output_tokens=policy.max_output_tokens,
-                available_providers=available,
-                forecast=predictions,
+                routing_context=RouteContext(available_providers=available, forecast=predictions),
             )
             prediction = predict(
                 model,

@@ -13,6 +13,7 @@ from app.services.auth_service import get_current_user
 from app.services.organization_access import audit
 
 SCOPES = {"courses:read", "members:read", "assignments:read", "assignments:write", "results:read"}
+INTEGRATION_BEARER = HTTPBearer(auto_error=False)
 
 
 def integration_enabled(db, organization_id):
@@ -62,7 +63,7 @@ class IntegrationPrincipal:
 def require_scope(scope):
     def dependency(
         request: Request,
-        credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+        credentials: HTTPAuthorizationCredentials | None = Depends(INTEGRATION_BEARER),
         db: Session = Depends(get_db),
     ):
         if not credentials or not credentials.credentials.startswith("lrn_"):
