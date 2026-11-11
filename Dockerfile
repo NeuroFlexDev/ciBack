@@ -5,7 +5,7 @@ COPY pdf_runtime/package.json pdf_runtime/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # Используем легкий Python образ
-FROM python:3.11-slim AS system_packages
+FROM python:3.15-slim AS system_packages
 
 # Указываем рабочую директорию в контейнере
 WORKDIR /app
