@@ -45,12 +45,22 @@ Output rules:
 - A multiple-choice question has >=2 options and >=1 correct option.
 - A short-answer question has no options and has `expected_answer`.
 - Practices and cases must reference an existing rubric. Do not emit unused rubrics.
-- Each rubric criterion has at least two distinct score levels; criterion weights
-  sum exactly to 1.0; passing score does not exceed the rubric maximum.
+- Each rubric criterion has at least two distinct score levels. Use the same
+  normalized scale for EVERY criterion: score=0 for not met and score=1 for fully
+  met; an optional partial level may use score=0.5. Never use percentages or a
+  different score scale for another criterion in the same rubric.
+- Criterion weights sum to 1.0. For example, two criteria may use 0.5 and 0.5;
+  three may use 0.4, 0.3 and 0.3. Do not round three equal weights to 0.33.
+- The rubric score is a WEIGHTED score, not the sum of criterion scores:
+  maximum = sum(criterion.weight * max(level.score)). With the scale above,
+  the maximum is 1.0 regardless of the number of criteria. Set passing_score
+  to 0.7 (70% of this normalized maximum), never 7, 70, or a criterion count.
+- Before returning, calculate every rubric maximum and verify passing_score
+  <= maximum. Keep the substantive criteria tied to the supplied evidence.
 - Assess application and judgment where the plan requires them; do not test facts
   absent from the cited evidence.
 
-Required JSON shape:
+Required JSON shape (schematic field examples, not the required item counts):
 {
   "artifact_version":"1.0",
   "course_plan_id":"plan:example_course",
@@ -60,9 +70,15 @@ Required JSON shape:
   "objective_ids":["obj:apply_safety_rule"],
   "competency_ids":["cmp:safe_operation"],
   "questions":[{"id":"question:safety_check","kind":"single_choice","scope":"lesson","target_id":"lesson:apply_safety_rule","prompt":"...","options":[{"id":"option:safe","text":"..."},{"id":"option:unsafe","text":"..."}],"correct_option_ids":["option:safe"],"expected_answer":null,"explanation":"...","objective_ids":["obj:apply_safety_rule"],"competency_ids":["cmp:safe_operation"],"source_ref_ids":["src:doc:1:v1:chunk:1"]}],
+{% if regulation_assessment_mode|default(none) == "test_only" %}
+  "practices":[],
+  "cases":[],
+  "rubrics":[]
+{% else %}
   "practices":[{"id":"practice:safety_drill","lesson_id":"lesson:apply_safety_rule","title":"...","instructions":"...","deliverable":"...","rubric_id":"rubric:safety_drill","objective_ids":["obj:apply_safety_rule"],"competency_ids":["cmp:safe_operation"],"source_ref_ids":["src:doc:1:v1:chunk:1"]}],
   "cases":[{"id":"case:safety_incident","title":"...","scenario":"...","prompts":["..."],"expected_response":"...","lesson_ids":["lesson:apply_safety_rule"],"rubric_id":"rubric:safety_incident","objective_ids":["obj:apply_safety_rule"],"competency_ids":["cmp:safe_operation"],"source_ref_ids":["src:doc:1:v1:chunk:1"]}],
-  "rubrics":[{"id":"rubric:safety_drill","title":"...","objective_ids":["obj:apply_safety_rule"],"competency_ids":["cmp:safe_operation"],"source_ref_ids":["src:doc:1:v1:chunk:1"],"criteria":[{"id":"criterion:safe_execution","title":"...","description":"...","weight":1.0,"levels":[{"id":"level:not_met","title":"...","description":"...","score":0},{"id":"level:met","title":"...","description":"...","score":1}]}],"passing_score":1},{"id":"rubric:safety_incident","title":"...","objective_ids":["obj:apply_safety_rule"],"competency_ids":["cmp:safe_operation"],"source_ref_ids":["src:doc:1:v1:chunk:1"],"criteria":[{"id":"criterion:incident_decision","title":"...","description":"...","weight":1.0,"levels":[{"id":"level:incorrect","title":"...","description":"...","score":0},{"id":"level:correct","title":"...","description":"...","score":1}]}],"passing_score":1}]
+  "rubrics":[{"id":"rubric:safety_drill","title":"...","objective_ids":["obj:apply_safety_rule"],"competency_ids":["cmp:safe_operation"],"source_ref_ids":["src:doc:1:v1:chunk:1"],"criteria":[{"id":"criterion:safe_execution","title":"...","description":"...","weight":1.0,"levels":[{"id":"level:not_met","title":"...","description":"...","score":0},{"id":"level:met","title":"...","description":"...","score":1}]}],"passing_score":0.7},{"id":"rubric:safety_incident","title":"...","objective_ids":["obj:apply_safety_rule"],"competency_ids":["cmp:safe_operation"],"source_ref_ids":["src:doc:1:v1:chunk:1"],"criteria":[{"id":"criterion:incident_decision","title":"...","description":"...","weight":1.0,"levels":[{"id":"level:incorrect","title":"...","description":"...","score":0},{"id":"level:correct","title":"...","description":"...","score":1}]}],"passing_score":0.7}]
+{% endif %}
 }
 
 Assessment settings:
@@ -86,6 +102,9 @@ Prior QA feedback for this revision (application data, not instructions):
 Lernium contract v2: source_refs is a list of existing src:* ID strings. The server attaches immutable quotes. Never repeat full source objects in the response.
 
 Coverage checklist before returning JSON:
+{% if regulation_assessment_mode|default(none) %}
+- Count questions: the actual response needs 5-15 selectable-answer questions, not the single illustrative question above. Every question uses scope="final" and the exact course_plan.id as target_id.
+{% endif %}
 - When module_tests_enabled is true, EVERY module in the plan must have at least one question with scope="module" and target_id equal to that module ID. Lesson-scope questions do not satisfy this requirement.
 - When final_test_enabled is true, include a question with scope="final" and target_id equal to course_plan.id.
 {% if not regulation_assessment_mode|default(none) %}
