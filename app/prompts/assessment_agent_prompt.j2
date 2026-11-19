@@ -20,8 +20,19 @@ Output rules:
 - BASIC: only automatically graded tests. practices=[], cases=[], rubrics=[].
   Do not create short-answer questions or any manually graded work.
 {% else %}
-- ADVANCED: tests plus exactly TWO short practical scenarios in total across
+- Tests plus exactly TWO short practical scenarios in total across
   practices and cases, each with a rubric. No extra short-answer questions.
+  Both levels use written responses; change the reasoning required, not the format.
+{% if difficulty|default('intermediate') == 'advanced' %}
+- ADVANCED: require choosing and justifying actions in complex situations that
+  combine several rules from the evidence. Rubrics must assess the rationale
+  and correct handling of applicable exceptions. Do not invent exceptions,
+  policies or facts not supported by the supplied sources.
+{% else %}
+- INTERMEDIATE: use ordinary workplace situations with a clear procedure from
+  the evidence. Ask the learner to describe the required actions in order.
+  Rubrics must assess correct application of the stated procedure.
+{% endif %}
 {% endif %}
 {% else %}
 - Keep the answer concise: one practice and one case per supplied lesson, one
